@@ -1,0 +1,98 @@
+import sqlite3
+import os
+
+DATABASE_PATH = os.getenv("DATABASE_PATH", "/data/stockpulse.db" if os.path.isdir("/data") else "./stockpulse.db")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS stocks (
+  id INTEGER PRIMARY KEY,
+  ticker TEXT UNIQUE NOT NULL,
+  name TEXT,
+  market TEXT,
+  exchange TEXT,
+  currency TEXT,
+  added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS portfolio (
+  id INTEGER PRIMARY KEY,
+  ticker TEXT NOT NULL,
+  shares REAL NOT NULL,
+  buy_price REAL NOT NULL,
+  buy_date DATE,
+  notes TEXT,
+  FOREIGN KEY (ticker) REFERENCES stocks(ticker)
+);
+
+CREATE TABLE IF NOT EXISTS watchlist (
+  id INTEGER PRIMARY KEY,
+  ticker TEXT NOT NULL,
+  added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT,
+  FOREIGN KEY (ticker) REFERENCES stocks(ticker)
+);
+
+CREATE TABLE IF NOT EXISTS trust_scores (
+  ticker TEXT PRIMARY KEY,
+  total_score INTEGER,
+  business_score INTEGER,
+  smart_money_score INTEGER,
+  momentum_score INTEGER,
+  grade TEXT,
+  auto_disqualified BOOLEAN DEFAULT FALSE,
+  disqualify_reason TEXT,
+  calculated_at TIMESTAMP,
+  FOREIGN KEY (ticker) REFERENCES stocks(ticker)
+);
+
+CREATE TABLE IF NOT EXISTS signals (
+  id INTEGER PRIMARY KEY,
+  ticker TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  confidence REAL,
+  plain_english TEXT,
+  recommendation TEXT,
+  stop_loss_pct REAL,
+  time_horizon_days INTEGER,
+  fired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TIMESTAMP,
+  outcome TEXT,
+  FOREIGN KEY (ticker) REFERENCES stocks(ticker)
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY,
+  ticker TEXT,
+  alert_type TEXT,
+  message TEXT,
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS price_cache (
+  ticker TEXT PRIMARY KEY,
+  price REAL,
+  change_pct REAL,
+  volume REAL,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS market_cache (
+  key TEXT PRIMARY KEY,
+  value REAL,
+  updated_at TIMESTAMP
+);
+"""
+
+
+def get_connection():
+    conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_connection()
+    conn.executescript(SCHEMA)
+    conn.commit()
+    conn.close()
