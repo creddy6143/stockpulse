@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker } from "./api/client";
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600;700&display=swap');
@@ -176,6 +176,22 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
 .modal-submit{width:100%;padding:13px;border:none;border-radius:12px;background:linear-gradient(135deg,var(--indigo),var(--sky));color:#fff;font-family:var(--dm);font-size:14px;font-weight:700;cursor:pointer;margin-top:4px}
 .modal-submit:disabled{opacity:.5;cursor:not-allowed}
 .modal-err{font-size:11px;color:var(--rose);margin-bottom:10px;padding:8px 12px;background:var(--rose2);border-radius:8px;border:1px solid #fca5a5}
+.ac-wrap{position:relative;margin-bottom:12px}
+.ac-inp{width:100%;background:var(--white);border:1.5px solid var(--t4);border-radius:10px;padding:11px 13px;font-family:var(--dm);font-size:14px;color:var(--t1);outline:none;box-sizing:border-box}
+.ac-inp:focus{border-color:var(--sky)}
+.ac-drop{position:absolute;left:0;right:0;top:100%;background:var(--white);border:1.5px solid var(--sky);border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.12);z-index:20;overflow:hidden;margin-top:3px}
+.ac-item{padding:9px 13px;cursor:pointer;border-bottom:1px solid rgba(15,23,42,.05);transition:background .12s}
+.ac-item:last-child{border-bottom:none}
+.ac-item:hover{background:rgba(91,114,248,.05)}
+.ac-ticker{font-family:var(--syne);font-weight:700;font-size:12px;color:var(--t1)}
+.ac-name{font-size:10px;color:var(--t3);margin-top:1px}
+.score-modal{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:250;display:flex;align-items:center;justify-content:center;padding:20px;max-width:400px;margin:0 auto}
+.score-box{background:var(--white);border-radius:18px;padding:20px;width:100%;box-shadow:0 20px 60px rgba(15,23,42,.2)}
+.score-pillar{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.score-pillar-label{font-family:var(--dm);font-size:12px;color:var(--t2);flex:1}
+.score-pillar-bar{flex:2;height:6px;background:rgba(15,23,42,.06);border-radius:3px;overflow:hidden}
+.score-pillar-fill{height:100%;border-radius:3px;transition:width .4s ease}
+.score-pillar-val{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);width:36px;text-align:right}
 `;
 
 // ── UTILITIES ────────────────────────────────────────
@@ -192,6 +208,13 @@ const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".
 const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : "$";
 const actionColor = a => a==="EXIT"||a==="WAIT"?"var(--rose)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber)":a==="BUY"||a==="STRONG BUY"?"var(--emerald)":"var(--indigo)";
 const actionBg = a => a==="EXIT"||a==="WAIT"?"var(--rose2)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber2)":a==="BUY"||a==="STRONG BUY"?"var(--emerald2)":"#eef2ff";
+const toSEK = (price, ticker, fxRates) => {
+  if (!fxRates || !price || typeof price !== "number") return null;
+  const sekRate = fxRates.SEK || 10.4;
+  if (isINR(ticker)) return price / (fxRates.INR || 83) * sekRate;
+  if (isEUR(ticker)) return price / (fxRates.EUR || 0.93) * sekRate;
+  return price * sekRate;
+};
 
 // ── MAPPING HELPERS ──────────────────────────────────
 const getRecFromGroup = (group, trust, autoDisq) => {
@@ -357,6 +380,68 @@ const Ring = ({score,col,size=56}) => {
     </div>
   );
 };
+
+// ── SCORE DETAIL MINI OVERLAY ────────────────────────
+function ScoreDetail({ticker, trust, grade, onClose}) {
+  const [d, setD] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const c = tc(trust);
+
+  useEffect(() => {
+    fetch(`/api/stock/${encodeURIComponent(ticker)}/trust`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { setD(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [ticker]);
+
+  const b = d?.business_score ?? null;
+  const s = d?.smart_money_score ?? null;
+  const m = d?.momentum_score ?? null;
+
+  return (
+    <div className="score-modal" onClick={onClose}>
+      <div className="score-box" onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+          <div>
+            <div style={{fontFamily:"var(--syne)",fontWeight:800,fontSize:18,color:c}}>{trust}/100</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginTop:2}}>{grade} · {ticker}</div>
+          </div>
+          <button onClick={onClose} style={{background:"var(--card2)",border:"none",borderRadius:8,padding:"5px 10px",fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",cursor:"pointer"}}>Close</button>
+        </div>
+        {loading ? (
+          <div style={{textAlign:"center",padding:"16px 0",fontFamily:"var(--mono)",fontSize:11,color:"var(--t3)"}}>Loading…</div>
+        ) : (
+          <>
+            <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Score Breakdown</div>
+            {[
+              {label:"Business Quality", val:b, max:40, col:"#5b72f8", desc:"Revenue, earnings, profitability"},
+              {label:"Smart Money", val:s, max:35, col:"#7c3aed", desc:"Insider buying, institutional flow"},
+              {label:"Momentum", val:m, max:25, col:"#0ea5e9", desc:"Analyst ratings, price action"},
+            ].map(p=>(
+              <div key={p.label} style={{marginBottom:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <div>
+                    <div style={{fontFamily:"var(--dm)",fontSize:12,fontWeight:600,color:"var(--t1)"}}>{p.label}</div>
+                    <div style={{fontSize:9,color:"var(--t3)"}}>{p.desc}</div>
+                  </div>
+                  <span style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:p.col}}>{p.val!=null?`${p.val}/${p.max}`:"—"}</span>
+                </div>
+                <div style={{height:6,background:"rgba(15,23,42,.06)",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${p.val!=null?Math.round(p.val/p.max*100):0}%`,background:p.col,borderRadius:3,transition:"width .4s ease"}}/>
+                </div>
+              </div>
+            ))}
+            {d?.auto_disqualified && (
+              <div style={{marginTop:8,padding:"8px 12px",background:"var(--rose2)",borderRadius:8,border:"1px solid #fca5a5",fontSize:11,color:"var(--rose)",lineHeight:1.5}}>
+                ⚠ {d.disqualify_reason}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── STOCK DETAIL OVERLAY ────────────────────────────
 function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
@@ -1056,15 +1141,19 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
 }
 
 // ── COMPACT TABLE ROW (portfolio) ────────────────────
-function CompactRow({s, dot, onDetail, onRemove}) {
+function CompactRow({s, dot, onDetail, onRemove, fxRates}) {
   const [open, setOpen] = useState(false);
+  const [showScore, setShowScore] = useState(false);
   const c = tc(s.trust);
-  const pnl = (s.price - s.buy) * s.shares;
+  const pnlPct = s.pnl_pct || ((s.price - s.buy) / s.buy * 100);
+  const pnlPos = pnlPct >= 0;
   const recColor = s.rec==="SELL"?"var(--rose)":s.rec==="BUY"?"var(--emerald)":"var(--amber)";
   const recBg = s.rec==="SELL"?"var(--rose2)":s.rec==="BUY"?"var(--emerald2)":"var(--amber2)";
   const recLabel = s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec;
+  const sekPrice = toSEK(s.price, s.ticker, fxRates);
   return (
     <>
+      {showScore && <ScoreDetail ticker={s.ticker} trust={s.trust} grade={tg(s.trust)} onClose={()=>setShowScore(false)}/>}
       <div onClick={()=>setOpen(o=>!o)}
         style={{display:"grid",gridTemplateColumns:"1.9fr 1.5fr .7fr .9fr",
           alignItems:"center",padding:"7px 12px",borderBottom:"1px solid rgba(15,23,42,.04)",
@@ -1075,20 +1164,31 @@ function CompactRow({s, dot, onDetail, onRemove}) {
             <span style={{fontSize:10}}>{s.flag}</span>
             <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12,color:s.premarket?"var(--rose)":"var(--t1)"}}>{s.ticker}</span>
             <span style={{fontFamily:"var(--mono)",fontSize:8,color:s.change>=0?"var(--emerald)":"var(--rose)"}}>
-              {s.change>=0?"▲":"▼"}{Math.abs(s.change).toFixed(0)}%
+              {s.change>=0?"▲":"▼"}{Math.abs(s.change).toFixed(1)}%
             </span>
             {s.premarket&&<span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"#fff",background:"var(--rose)",padding:"1px 5px",borderRadius:3,animation:"pr 1.2s infinite"}}>PRE-MKT</span>}
           </div>
-          <div style={{fontSize:9,color:"var(--t3)",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:1}}>
+            <span style={{fontSize:9,color:"var(--t3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:90}}>{s.name}</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{s.shares} units</span>
+          </div>
         </div>
         <div>
-          <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--t1)"}}>{isINR(s.ticker)?"₹":"$"}{typeof s.price==="number"?s.price.toFixed(0):s.price}</span>
-          <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnl>=0?"var(--emerald)":"var(--rose)",marginLeft:4}}>
-            {pnl>=0?"+":"-"}${Math.abs(pnl).toFixed(0)}
-          </span>
+          <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+            <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--t1)"}}>{cu(s.ticker)}{typeof s.price==="number"?s.price.toFixed(2):s.price}</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnlPos?"var(--emerald)":"var(--rose)"}}>
+              {pnlPos?"+":""}{pnlPct.toFixed(1)}%
+            </span>
+          </div>
+          {sekPrice!=null && (
+            <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
+              kr{Math.round(sekPrice).toLocaleString()}
+            </div>
+          )}
         </div>
         <div style={{textAlign:"center"}}>
-          <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:c}}>{s.trust}</span>
+          <span onClick={e=>{e.stopPropagation();setShowScore(true);}} title="Tap for score breakdown"
+            style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:c,cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>{s.trust}</span>
         </div>
         <div style={{textAlign:"right"}}>
           <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:recColor,background:recBg,padding:"3px 5px",borderRadius:4}}>{recLabel}</span>
@@ -1163,7 +1263,7 @@ function CompactWatchRow({s, dot, onRemove}) {
 }
 
 
-function PivotSection({title, accentColor, slices}) {
+function PivotSection({title, accentColor, slices, fxRates}) {
   const ac = accentColor||"var(--indigo)";
   const [active, setActive] = useState(0);
   const slice = slices[active];
@@ -1204,7 +1304,7 @@ function PivotSection({title, accentColor, slices}) {
         ? <div style={{padding:"12px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:"var(--t3)"}}>No stocks in this category</div>
         : slice.items.map(s=>slice.isWatch
             ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove}/>
-            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove}/>
+            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} fxRates={fxRates}/>
           )
       }
     </div>
@@ -1220,6 +1320,29 @@ function AddModal({onClose, onAdded}) {
   const [buyDate, setBuyDate] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [sugLoading, setSugLoading] = useState(false);
+  const [showSug, setShowSug] = useState(false);
+
+  useEffect(() => {
+    if (ticker.length < 2) { setSuggestions([]); setShowSug(false); return; }
+    const timer = setTimeout(async () => {
+      setSugLoading(true);
+      try {
+        const res = await searchTicker(ticker);
+        setSuggestions(res || []);
+        setShowSug((res||[]).length > 0);
+      } catch {}
+      setSugLoading(false);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [ticker]);
+
+  const pickSuggestion = (s) => {
+    setTicker(s.ticker);
+    setSuggestions([]);
+    setShowSug(false);
+  };
 
   const submit = async () => {
     const t = ticker.trim().toUpperCase();
@@ -1256,18 +1379,34 @@ function AddModal({onClose, onAdded}) {
           <button className={`modal-seg-btn${type==="watchlist"?" on":""}`} onClick={()=>setType("watchlist")}>👁 Watchlist</button>
         </div>
 
-        {/* Ticker */}
-        <div className="modal-label">Ticker Symbol</div>
-        <input className="modal-inp" placeholder="e.g. AAPL, RELIANCE.NS, ASML.AS"
-          value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())}
-          onKeyDown={e=>e.key==="Enter"&&submit()}/>
+        {/* Ticker with autocomplete */}
+        <div className="modal-label">Ticker Symbol {sugLoading&&<span style={{color:"var(--t3)",fontWeight:400}}>— searching…</span>}</div>
+        <div className="ac-wrap">
+          <input className="ac-inp" placeholder="e.g. NVDA, RELIANCE.NS, ASML.AS"
+            value={ticker}
+            onChange={e=>{setTicker(e.target.value.toUpperCase());setErr("");}}
+            onKeyDown={e=>e.key==="Enter"&&submit()}
+            onBlur={()=>setTimeout(()=>setShowSug(false),150)}
+            onFocus={()=>suggestions.length>0&&setShowSug(true)}
+            autoComplete="off"/>
+          {showSug && suggestions.length > 0 && (
+            <div className="ac-drop">
+              {suggestions.slice(0,6).map(s=>(
+                <div key={s.ticker} className="ac-item" onMouseDown={()=>pickSuggestion(s)}>
+                  <div className="ac-ticker">{s.ticker}</div>
+                  <div className="ac-name">{s.name}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Portfolio-only fields */}
         {type==="portfolio" && (
           <>
             <div className="modal-row">
               <div>
-                <div className="modal-label">Shares</div>
+                <div className="modal-label">Shares / Units</div>
                 <input className="modal-inp" type="number" placeholder="100"
                   value={shares} onChange={e=>setShares(e.target.value)}/>
               </div>
@@ -1293,7 +1432,7 @@ function AddModal({onClose, onAdded}) {
 }
 
 // ── STOCKS SCREEN ────────────────────────────────────
-function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd}) {
+function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd, fxRates}) {
   const [f, setF] = useState("All");
   const [showAdd, setShowAdd] = useState(false);
   const U=urgent||[], W=watch||[], G=good||[], WR=wlReady||[], WW=wlWatch||[], WA=wlAvoid||[];
@@ -1334,12 +1473,12 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
           <button key={p} className={`pill${f===p?" on":""}`} onClick={()=>setF(p)}>{p}</button>
         ))}
       </div>
-      {f==="All"&&(<><PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/><PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/></>)}
-      {f==="My Stocks"&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/>}
+      {f==="All"&&(<><PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} fxRates={fxRates}/><PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/></>)}
+      {f==="My Stocks"&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} fxRates={fxRates}/>}
       {f==="Watchlist"&&<PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/>}
       {["🇺🇸 US","🇪🇺 Europe","🇮🇳 India"].includes(f)&&(
         <>
-          {(fU.length+fW.length+fG.length)>0&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/>}
+          {(fU.length+fW.length+fG.length)>0&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} fxRates={fxRates}/>}
           {(fWR.length+fWW.length+fWA.length)>0&&<PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/>}
           {(fU.length+fW.length+fG.length)===0&&(fWR.length+fWW.length+fWA.length)===0&&(
             <div style={{textAlign:"center",padding:"40px 20px"}}>
@@ -1565,6 +1704,7 @@ export default function App() {
   const [accuracy, setAccuracy] = useState("—");
   const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[]});
   const [earnings, setEarnings] = useState([]);
+  const [fxRates, setFxRates] = useState({SEK:10.4, EUR:0.93, INR:83});
 
   const refreshData = () => {
     Promise.allSettled([getPortfolio(), getWatchlist()]).then(([pR, wR]) => {
@@ -1574,6 +1714,12 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Fetch FX rates for SEK conversion
+    fetch("https://api.frankfurter.app/latest?from=USD&to=SEK,EUR,INR")
+      .then(r=>r.json())
+      .then(d=>{ if(d.rates) setFxRates(d.rates); })
+      .catch(()=>{});
+
     Promise.allSettled([
       getPortfolio(), getWatchlist(), getMarket(),
       getAlerts(), getPicks(), getDisqualified(), getAccuracy(),
@@ -1620,7 +1766,7 @@ export default function App() {
 
   const screens = [
     <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
-    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData}/>,
+    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} fxRates={fxRates}/>,
     <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy}/>,
     <StrategyScreen strategyData={strategyData}/>,
   ];
