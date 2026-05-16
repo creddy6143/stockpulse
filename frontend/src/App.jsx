@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getEarnings } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist } from "./api/client";
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600;700&display=swap');
@@ -162,6 +162,20 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
 .disq-wrap{background:var(--white);border-radius:var(--r);box-shadow:var(--shadowsm);overflow:hidden}
 .disq-item{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;background:rgba(225,29,72,.015);border-bottom:1px solid rgba(225,29,72,.07)}
 .disq-item:last-child{border-bottom:none}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:300;display:flex;flex-direction:column;justify-content:flex-end;backdrop-filter:blur(4px);max-width:400px;margin:0 auto}
+.modal-box{background:var(--bg);border-radius:22px 22px 0 0;padding:20px 18px 36px;animation:slideUp .3s cubic-bezier(.32,.72,0,1)}
+.modal-title{font-family:var(--syne);font-weight:800;font-size:17px;color:var(--t1);margin-bottom:4px}
+.modal-sub{font-size:12px;color:var(--t3);margin-bottom:18px}
+.modal-label{font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}
+.modal-inp{width:100%;background:var(--white);border:1.5px solid var(--t4);border-radius:10px;padding:11px 13px;font-family:var(--dm);font-size:14px;color:var(--t1);outline:none;margin-bottom:12px;box-sizing:border-box}
+.modal-inp:focus{border-color:var(--sky)}
+.modal-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.modal-seg{display:flex;background:var(--card2);border-radius:10px;padding:3px;gap:3px;margin-bottom:14px}
+.modal-seg-btn{flex:1;padding:8px;border:none;border-radius:8px;font-family:var(--dm);font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;background:transparent;color:var(--t3)}
+.modal-seg-btn.on{background:var(--white);color:var(--indigo);box-shadow:var(--shadowsm)}
+.modal-submit{width:100%;padding:13px;border:none;border-radius:12px;background:linear-gradient(135deg,var(--indigo),var(--sky));color:#fff;font-family:var(--dm);font-size:14px;font-weight:700;cursor:pointer;margin-top:4px}
+.modal-submit:disabled{opacity:.5;cursor:not-allowed}
+.modal-err{font-size:11px;color:var(--rose);margin-bottom:10px;padding:8px 12px;background:var(--rose2);border-radius:8px;border:1px solid #fca5a5}
 `;
 
 // ── UTILITIES ────────────────────────────────────────
@@ -1039,7 +1053,7 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
 }
 
 // ── COMPACT TABLE ROW (portfolio) ────────────────────
-function CompactRow({s, dot, onDetail}) {
+function CompactRow({s, dot, onDetail, onRemove}) {
   const [open, setOpen] = useState(false);
   const c = tc(s.trust);
   const pnl = (s.price - s.buy) * s.shares;
@@ -1088,8 +1102,8 @@ function CompactRow({s, dot, onDetail}) {
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
             {s.rec==="SELL"
-              ?<button style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Exit Position</button>
-              :<button style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set Alert</button>
+              ?<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
+              :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
             }
           </div>
         </div>
@@ -1098,7 +1112,7 @@ function CompactRow({s, dot, onDetail}) {
   );
 }
 
-function CompactWatchRow({s, dot}) {
+function CompactWatchRow({s, dot, onRemove}) {
   const [open, setOpen] = useState(false);
   const c = tc(s.trust);
   const cc = dot;
@@ -1186,31 +1200,122 @@ function PivotSection({title, accentColor, slices}) {
       {slice.items.length===0
         ? <div style={{padding:"12px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:"var(--t3)"}}>No stocks in this category</div>
         : slice.items.map(s=>slice.isWatch
-            ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color}/>
-            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail}/>
+            ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove}/>
+            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove}/>
           )
       }
     </div>
   );
 }
 
+// ── ADD MODAL ────────────────────────────────────────
+function AddModal({onClose, onAdded}) {
+  const [type, setType] = useState("portfolio");
+  const [ticker, setTicker] = useState("");
+  const [shares, setShares] = useState("");
+  const [buyPrice, setBuyPrice] = useState("");
+  const [buyDate, setBuyDate] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    const t = ticker.trim().toUpperCase();
+    if (!t) return setErr("Enter a ticker symbol.");
+    if (type === "portfolio") {
+      if (!shares || isNaN(shares) || +shares <= 0) return setErr("Enter a valid number of shares.");
+      if (!buyPrice || isNaN(buyPrice) || +buyPrice <= 0) return setErr("Enter a valid buy price.");
+    }
+    setErr(""); setLoading(true);
+    try {
+      if (type === "portfolio") {
+        await addPosition(t, +shares, +buyPrice, buyDate || null, null);
+      } else {
+        await addToWatchlist(t, null);
+      }
+      onAdded();
+      onClose();
+    } catch(e) {
+      setErr("Failed to add. Check the ticker and try again.");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 16px"}}/>
+        <div className="modal-title">Add Stock</div>
+        <div className="modal-sub">Add to your portfolio or watchlist</div>
+
+        {/* Portfolio / Watchlist toggle */}
+        <div className="modal-seg">
+          <button className={`modal-seg-btn${type==="portfolio"?" on":""}`} onClick={()=>setType("portfolio")}>📊 My Portfolio</button>
+          <button className={`modal-seg-btn${type==="watchlist"?" on":""}`} onClick={()=>setType("watchlist")}>👁 Watchlist</button>
+        </div>
+
+        {/* Ticker */}
+        <div className="modal-label">Ticker Symbol</div>
+        <input className="modal-inp" placeholder="e.g. AAPL, RELIANCE.NS, ASML.AS"
+          value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())}
+          onKeyDown={e=>e.key==="Enter"&&submit()}/>
+
+        {/* Portfolio-only fields */}
+        {type==="portfolio" && (
+          <>
+            <div className="modal-row">
+              <div>
+                <div className="modal-label">Shares</div>
+                <input className="modal-inp" type="number" placeholder="100"
+                  value={shares} onChange={e=>setShares(e.target.value)}/>
+              </div>
+              <div>
+                <div className="modal-label">Buy Price</div>
+                <input className="modal-inp" type="number" placeholder="45.50"
+                  value={buyPrice} onChange={e=>setBuyPrice(e.target.value)}/>
+              </div>
+            </div>
+            <div className="modal-label">Buy Date (optional)</div>
+            <input className="modal-inp" type="date"
+              value={buyDate} onChange={e=>setBuyDate(e.target.value)}/>
+          </>
+        )}
+
+        {err && <div className="modal-err">{err}</div>}
+        <button className="modal-submit" onClick={submit} disabled={loading}>
+          {loading ? "Adding…" : type==="portfolio" ? "Add to Portfolio" : "Add to Watchlist"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── STOCKS SCREEN ────────────────────────────────────
-function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail}) {
+function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd}) {
   const [f, setF] = useState("All");
+  const [showAdd, setShowAdd] = useState(false);
   const U=urgent||[], W=watch||[], G=good||[], WR=wlReady||[], WW=wlWatch||[], WA=wlAvoid||[];
+
+  const handleRemove = async (s) => {
+    if (!window.confirm(`Remove ${s.ticker} from your portfolio?`)) return;
+    try { await deletePosition(s.id); onAdd && onAdd(); } catch(e) {}
+  };
+  const handleRemoveWL = async (s) => {
+    if (!window.confirm(`Remove ${s.ticker} from watchlist?`)) return;
+    try { await removeFromWatchlist(s.ticker); onAdd && onAdd(); } catch(e) {}
+  };
   const byC = arr => f==="🇺🇸 US"?arr.filter(s=>s.flag==="🇺🇸"):f==="🇪🇺 Europe"?arr.filter(s=>s.flag==="🇪🇺"):f==="🇮🇳 India"?arr.filter(s=>s.flag==="🇮🇳"):arr;
   const fU=byC(U), fW=byC(W), fG=byC(G);
   const fWR=byC(WR), fWW=byC(WW), fWA=byC(WA);
 
   const myStocksSlices = [
-    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail},
-    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail},
-    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail},
+    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail, onRemove:handleRemove},
+    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail, onRemove:handleRemove},
+    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail, onRemove:handleRemove},
   ];
   const watchlistSlices = [
-    {label:"Ready",   color:"var(--emerald)", items:fWR, isWatch:true},
-    {label:"Waiting", color:"var(--amber)",   items:fWW, isWatch:true},
-    {label:"Avoid",   color:"var(--rose)",    items:fWA, isWatch:true},
+    {label:"Ready",   color:"var(--emerald)", items:fWR, isWatch:true, onRemove:handleRemoveWL},
+    {label:"Waiting", color:"var(--amber)",   items:fWW, isWatch:true, onRemove:handleRemoveWL},
+    {label:"Avoid",   color:"var(--rose)",    items:fWA, isWatch:true, onRemove:handleRemoveWL},
   ];
 
   return (
@@ -1218,8 +1323,9 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail}
       <div className="search-wrap">
         <span style={{fontSize:14,color:"var(--t3)",flexShrink:0}}>🔍</span>
         <input className="si-inp" placeholder="Search US, EU or India ticker…"/>
-        <button className="si-add">+ Add</button>
+        <button className="si-add" onClick={()=>setShowAdd(true)}>+ Add</button>
       </div>
+      {showAdd && <AddModal onClose={()=>setShowAdd(false)} onAdded={onAdd}/>}
       <div className="pills">
         {["All","My Stocks","Watchlist","🇺🇸 US","🇪🇺 Europe","🇮🇳 India"].map(p=>(
           <button key={p} className={`pill${f===p?" on":""}`} onClick={()=>setF(p)}>{p}</button>
@@ -1457,6 +1563,13 @@ export default function App() {
   const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[]});
   const [earnings, setEarnings] = useState([]);
 
+  const refreshData = () => {
+    Promise.allSettled([getPortfolio(), getWatchlist()]).then(([pR, wR]) => {
+      if(pR.status==="fulfilled") setPortfolio(pR.value||{positions:[],summary:{}});
+      if(wR.status==="fulfilled") setWatchlistRaw(wR.value||[]);
+    });
+  };
+
   useEffect(() => {
     Promise.allSettled([
       getPortfolio(), getWatchlist(), getMarket(),
@@ -1504,7 +1617,7 @@ export default function App() {
 
   const screens = [
     <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
-    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel}/>,
+    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData}/>,
     <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy}/>,
     <StrategyScreen strategyData={strategyData}/>,
   ];
