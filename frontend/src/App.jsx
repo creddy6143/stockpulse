@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getEarnings } from "./api/client";
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600;700&display=swap');
@@ -163,100 +164,136 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
 .disq-item:last-child{border-bottom:none}
 `;
 
-// ── DATA ─────────────────────────────────────────────
-
-const URGENT = [
-  {ticker:"TNXP",flag:"🇺🇸",price:13.50,change:-71.2,name:"Tonix Pharma",buy:46,shares:107,rec:"SELL",rcls:"rr-s",trust:18,verdict:"8 reverse splits. Auto-disqualified. Exit on any pre-market pop this morning.",earn:"TODAY ⚡"},
-  {ticker:"XGN",flag:"🇺🇸",price:3.39,change:+13.0,name:"Exagen Inc",buy:10.50,shares:50,rec:"SELL",rcls:"rr-s",trust:8,
-   verdict:"⚡ PRE-MARKET POP ACTIVE — Board resigned Apr 23. Earnings today. This is the exit window StockPulse flagged. Exit now before open.",
-   earn:"TODAY ⚡ Q1",premarket:true,premktPrice:3.39,premktChg:+13.0,lastClose:3.00},
-];
-const WATCH = [
-  {ticker:"GRRR",flag:"🇺🇸",price:13.06,change:-68.1,name:"Gorilla Technology",buy:41,shares:100,rec:"HOLD",rcls:"rr-h",trust:68,verdict:"AI contracts executing. Macro-driven fall, not company-specific. Hold through June 17 earnings.",earn:"Jun 17"},
-  {ticker:"INSM",flag:"🇺🇸",price:103.0,change:-10.4,name:"Insmed Inc",buy:115,shares:10,rec:"HOLD",rcls:"rr-h",trust:61,verdict:"Small position, low stress. Watch BofA Conference May 12 for narrative reset.",earn:"Aug 4"},
-  {ticker:"CVNA",flag:"🇺🇸",price:198.4,change:+2.1,name:"Carvana Co",buy:90,shares:15,rec:"HOLD",rcls:"rr-h",trust:64,verdict:"Turnaround confirmed. GAAP profitable. Monitor 2026 debt maturity.",earn:"Jul 29"},
-  {ticker:"RELIANCE",flag:"🇮🇳",price:2847,change:+1.1,name:"Reliance Industries",buy:2400,shares:5,rec:"HOLD",rcls:"rr-b",trust:76,verdict:"FII buying 3 consecutive days. Promoter 50.3%, zero pledge. Long-term compounder.",earn:"Jul 22"},
-];
-const GOOD = [
-  {ticker:"NVDA",flag:"🇺🇸",price:875.2,change:+3.2,name:"NVIDIA Corp",buy:420,shares:5,rec:"BUY",rcls:"rr-b",trust:89,verdict:"AI supercycle intact. Revenue +122% YoY. Hold with trailing stop. Watch concentration at 31% of portfolio.",earn:"Aug 21"},
-  {ticker:"AXON",flag:"🇺🇸",price:298.4,change:+1.8,name:"Axon Enterprise",buy:245,shares:8,rec:"BUY",rcls:"rr-b",trust:87,verdict:"CEO bought $1.2M own money. Revenue +44% YoY. Guidance raised 12%.",earn:"Aug 6"},
-  {ticker:"PLTR",flag:"🇺🇸",price:23.60,change:+0.9,name:"Palantir",buy:18,shares:50,rec:"BUY",rcls:"rr-b",trust:79,verdict:"AIP platform accelerating. Government + commercial both growing.",earn:"Aug 4"},
-  {ticker:"MSFT",flag:"🇺🇸",price:418.3,change:+0.8,name:"Microsoft Corp",buy:380,shares:3,rec:"HOLD",rcls:"rr-h",trust:82,verdict:"Azure AI growth re-accelerating. Copilot monetisation early stage.",earn:"Jul 30"},
-  {ticker:"ASML",flag:"🇪🇺",price:876.4,change:+1.4,name:"ASML Holding",buy:820,shares:2,rec:"BUY",rcls:"rr-b",trust:84,verdict:"Monopoly on EUV lithography. AI chip demand drives long equipment cycle.",earn:"Jul 16"},
-  {ticker:"HDFCBANK",flag:"🇮🇳",price:1623,change:+0.4,name:"HDFC Bank",buy:1400,shares:10,rec:"BUY",rcls:"rr-b",trust:71,verdict:"DII + FII both buying. NIM stable, asset quality strong.",earn:"Jul 19"},
-];
-const WL_READY = [
-  {ticker:"AXON",flag:"🇺🇸",price:298.4,change:+1.8,name:"Axon Enterprise",trust:87,signal:"Entry zone now",reason:"CEO bought $1.2M. Price at ideal entry. Don't wait too long.",entry:"$285-$310",potential:"+45-70%"},
-  {ticker:"HDFCBANK",flag:"🇮🇳",price:1623,change:+0.4,name:"HDFC Bank",trust:71,signal:"Good entry here",reason:"FII buying 3 days. Promoter holding stable. Long-term compounder at fair value.",entry:"₹1,580-1,650",potential:"+25-35%"},
-];
-const WL_WATCH = [
-  {ticker:"NVDA",flag:"🇺🇸",price:875.2,change:+3.2,name:"NVIDIA Corp",trust:89,signal:"Wait for pullback",reason:"Exceptional fundamentals but up 40% in 6 weeks. Wait for better entry.",entry:"$760-$800",potential:"+20-30%"},
-  {ticker:"ASML",flag:"🇪🇺",price:876.4,change:+1.4,name:"ASML Holding",trust:84,signal:"Wait for earnings",reason:"Results Jul 16 will confirm the AI chip thesis. Watch and decide after.",entry:"€820-€850",potential:"+25-40%"},
-];
-const WL_AVOID = [
-  {ticker:"TSLA",flag:"🇺🇸",price:172.3,change:-2.1,name:"Tesla Inc",trust:48,signal:"Not yet",reason:"3 consecutive delivery misses. Price still too high for declining growth. Wait below $130.",entry:"Wait <$130",potential:"Unknown"},
-];
-const SIGNALS = [
-  {icon:"💥",ticker:"INOD",conf:"HIGH",cc:"ch",text:"Earnings came in 3× better than expected. Investors who bet against it are being forced to buy — pushing price up fast.",time:"2m ago"},
-  {icon:"🚀",ticker:"RKLB",conf:"MED-HIGH",cc:"cm",text:"Price jumped on a major NASA contract win. Still rising with strong volume — the move has more room to go.",time:"18m ago"},
-  {icon:"🇮🇳",ticker:"RELIANCE.NS",conf:"HIGH",cc:"ch",text:"Large overseas investors have been buying heavily for 3 days in a row. A strong vote of confidence.",time:"Market open"},
-];
-const PICKS = [
-  {ticker:"AXON",name:"Axon Enterprise",trust:87,grade:"STRONG",col:"#5b72f8",grad:"linear-gradient(90deg,#5b72f8,#0ea5e9)",rec:"STRONG BUY",rcls:"rr-sb",b:36,bm:40,s:32,sm:35,m:19,mm:25,
-   sigs:["CEO bought $1.2M own money (open market, unscheduled)","Vanguard + ARK + Fidelity all freshly added Q1 2026","Revenue +44% YoY — growth rate accelerating","Guidance raised 12% above analyst consensus","Short interest declining 3 consecutive months"],
-   potential:"+45-70%",entry:"$285-$310",risk:"LOW-MED",horizon:"12 months"},
-  {ticker:"PLTR",name:"Palantir Technologies",trust:79,grade:"STRONG",col:"#059669",grad:"linear-gradient(90deg,#059669,#0ea5e9)",rec:"BUY",rcls:"rr-b",b:30,bm:40,s:28,sm:35,m:21,mm:25,
-   sigs:["Government AI contracts accelerating sharply","Commercial revenue +55% YoY — broadening fast","AIP platform creating strong competitive moat","Institutional buying increasing Q1 2026"],
-   potential:"+30-45%",entry:"$22-$25",risk:"MEDIUM",horizon:"9 months"},
-];
-const DISQ = [
-  {ticker:"XGN",score:8,reason:"Board resignation 18 days before earnings. 2 consecutive guidance cuts. Matches pre-collapse signals."},
-  {ticker:"TNXP",score:18,reason:"8 reverse splits. 9th authorized up to 1:250. $99M annual burn vs $13M revenue."},
-  {ticker:"NKLA",score:7,reason:"CEO + CFO resigned. SEC fraud conviction. Filed Chapter 11 bankruptcy Feb 2025."},
-];
-const STRATEGY = {
-  myStocks:[
-    {ticker:"TNXP",flag:"🇺🇸",label:"Exit Required",icon:"🚨",action:"EXIT",col:"var(--rose)",summary:"Auto-disqualified. Earnings today. Exit on any pop.",playbook:"This stock has been disqualified by our safety check. 8 reverse splits — chronic dilution. Holding through earnings today is high risk. Exit at market open or on any pre-market strength."},
-    {ticker:"XGN",flag:"🇺🇸",label:"Exit Required",icon:"🚨",action:"EXIT",col:"var(--rose)",summary:"Board resigned 18 days before earnings. Exit immediately.",playbook:"Board resignation close to earnings is a severe warning. Historical data: 91% of similar cases led to decline within 30 days. Do not hold through earnings today. Exit at open."},
-    {ticker:"GRRR",flag:"🇺🇸",label:"Crash Decision",icon:"📉",action:"HOLD",col:"var(--amber)",summary:"Down 68% but business still intact. Market noise, not failure.",playbook:"Trust Score 68 — fundamentals intact. Revenue executing on contracts. The fall is macro-driven, not company-specific. Hold tight. If it falls below $8.50, reassess. Do not add more until June 17 earnings."},
-    {ticker:"INSM",flag:"🇺🇸",label:"Small Position",icon:"⚖️",action:"WATCH",col:"var(--indigo)",summary:"10 shares only. Low stress. Watch BofA Conference May 12.",playbook:"At 10 shares your exposure is minimal — let it run without stress. Watch the BofA Healthcare Conference May 12 for a catalyst. Only add if narrative strengthens."},
-    {ticker:"NVDA",flag:"🇺🇸",label:"Concentration Risk",icon:"⚠️",action:"TRIM",col:"var(--amber)",summary:"31% of portfolio in one stock. Consider trimming to 18-20%.",playbook:"NVDA is now 31% of your portfolio. One bad earnings report moves your entire portfolio significantly. Consider selling 30-40% to bring it back to 18-20%. You keep most of the upside while reducing risk."},
-  ],
-  watchlist:[
-    {ticker:"AXON",flag:"🇺🇸",label:"Pullback Trap",icon:"👁",action:"DECIDE",col:"var(--violet)",summary:"Watched 68 days. Up 24% since you added it. Decide now.",playbook:"You have been waiting for a pullback that hasn't come. Fundamentals are stronger now than when you added it. Options: Buy 50% now + 50% on any 8-12% dip. Set alert at $270. Or remove it — accept you missed this move."},
-    {ticker:"HDFCBANK",flag:"🇮🇳",label:"Ready to Buy",icon:"🟢",action:"BUY",col:"var(--emerald)",summary:"FII buying 3 consecutive days. Quality Indian bank at fair value.",playbook:"Entry conditions aligned. Large overseas investors buying 3 days running. Promoter holding stable. Long-term compounder at fair value. Entry zone ₹1,580-1,650. Stop loss at ₹1,450."},
-    {ticker:"NVDA",flag:"🇺🇸",label:"ATH Anxiety",icon:"🏔️",action:"DECIDE",col:"var(--violet)",summary:"Hesitating because it's at all-time highs. Fundamentals still strong.",playbook:"ATH anxiety is common but misleading for quality stocks. NVDA beat earnings 7 consecutive quarters. Caution: you already own NVDA at 31% of portfolio — adding more increases concentration risk."},
-  ],
-  smartPicks:[
-    {ticker:"AXON",flag:"🇺🇸",label:"Strong Entry Now",icon:"🎯",action:"STRONG BUY",col:"var(--indigo)",summary:"Trust 87. CEO bought $1.2M. Revenue accelerating. Entry zone active.",playbook:"All three pillars aligned. CEO open market purchase is the strongest single signal. Entry $285-310. Suggested position 8-10% of portfolio. Trailing stop 15% from peak."},
-    {ticker:"PLTR",flag:"🇺🇸",label:"Good Entry",icon:"✅",action:"BUY",col:"var(--emerald)",summary:"Trust 79. AI government contracts accelerating. Buy below $25.",playbook:"AIP platform creating real moat. Commercial revenue +55% YoY. Position 5-7% of portfolio. Entry below $25. Trailing stop 20%."},
-    {ticker:"TSLA",flag:"🇺🇸",label:"Don't Buy Yet",icon:"🔴",action:"WAIT",col:"var(--rose)",summary:"Trust 48. 3 missed quarters. Still expensive for declining growth.",playbook:"Three consecutive delivery misses. Gross margin declining. Trust Score 48 is below our threshold. Wait for: fundamentals to improve OR price to fall below $130."},
-  ],
-};
-
-// ── DETAIL DATA ─────────────────────────────────────
-const DETAIL_DATA = {
-  TNXP:{perf:{"1W":-3,"1M":-18,"3M":-52,"6M":-71,"1Y":-89},w52Lo:8.90,w52Hi:312.50,aTarget:8,aLow:5,aHigh:12,aBuy:0,aHold:1,aSell:4,metrics:[{l:"Reverse Splits",v:"8×",s:"Chronic dilution"},{l:"Cash Burn",v:"$99M/yr",s:"vs $13M revenue"},{l:"Trust Score",v:"18/100",s:"Auto-disqualified"},{l:"Earnings",v:"TODAY",s:"Do not hold"}],verdict:"Auto-disqualified. Exit immediately — do not hold through earnings today."},
-  XGN:{perf:{"1W":-8,"1M":-31,"3M":-58,"6M":-71,"1Y":-82},w52Lo:2.10,w52Hi:18.40,aTarget:9,aLow:6,aHigh:14,aBuy:0,aHold:1,aSell:3,metrics:[{l:"Board Status",v:"Resigned",s:"18 days ago"},{l:"Guidance Cuts",v:"2× in row",s:"Consecutive"},{l:"Trust Score",v:"8/100",s:"Auto-disqualified"},{l:"Earnings",v:"TODAY",s:"Exit now"}],verdict:"Board resignation 18 days before earnings. Exit at market open. 91% of similar cases declined further within 30 days."},
-  GRRR:{perf:{"1W":-2,"1M":-12,"3M":-38,"6M":-52,"1Y":-68},w52Lo:9.80,w52Hi:48.90,aTarget:40,aLow:25,aHigh:65,aBuy:4,aHold:2,aSell:1,metrics:[{l:"Pipeline",v:"$1.4B",s:"Executing"},{l:"Revenue Growth",v:"+31%",s:"YoY"},{l:"Gross Margin",v:"62%",s:"Software"},{l:"Cash Runway",v:"18 mo",s:"Safe"}],verdict:"Business fundamentals intact. The fall is macro-driven. Hold through June 17 earnings — that is when the thesis gets confirmed."},
-  INSM:{perf:{"1W":-2,"1M":-8,"3M":-14,"6M":-10,"1Y":+32},w52Lo:68.20,w52Hi:148.30,aTarget:218,aLow:160,aHigh:280,aBuy:12,aHold:3,aSell:1,metrics:[{l:"Pipeline",v:"Phase 3",s:"TPIP-1 trial"},{l:"Revenue",v:"+28%",s:"YoY"},{l:"Cash",v:"$1.2B",s:"Runway secure"},{l:"Analyst Target",v:"$218",s:"+112% upside"}],verdict:"Biotech in Phase 3. Significant analyst upside. Small 10-share position means low stress. Watch BofA Conference May 12."},
-  CVNA:{perf:{"1W":+2,"1M":+8,"3M":+18,"6M":+42,"1Y":+98},w52Lo:48.20,w52Hi:248.90,aTarget:260,aLow:180,aHigh:340,aBuy:8,aHold:4,aSell:2,metrics:[{l:"Profitability",v:"GAAP+",s:"Now profitable"},{l:"Revenue",v:"+20%",s:"YoY growth"},{l:"Gross Margin",v:"18%",s:"Expanding"},{l:"Debt Status",v:"Restructured",s:"Manageable"}],verdict:"Turnaround confirmed and GAAP profitable. Monitor 2026 debt maturity. Kitchen sink recovery intact."},
-  NVDA:{perf:{"1W":+3,"1M":+18,"3M":+42,"6M":+68,"1Y":+213},w52Lo:409.30,w52Hi:974.00,aTarget:1050,aLow:820,aHigh:1280,aBuy:38,aHold:5,aSell:1,metrics:[{l:"Revenue Growth",v:"+122%",s:"YoY"},{l:"Gross Margin",v:"78.4%",s:"Best in class"},{l:"P/E Ratio",v:"65×",s:"Growth premium"},{l:"Insider",v:"Buying",s:"Last 90 days"}],verdict:"AI supercycle is real and accelerating. Hold with trailing stop. Concentration risk — now 31% of portfolio, consider trimming to 18-20%."},
-  AXON:{perf:{"1W":+2,"1M":+8,"3M":+24,"6M":+38,"1Y":+72},w52Lo:198.40,w52Hi:312.80,aTarget:380,aLow:290,aHigh:480,aBuy:14,aHold:3,aSell:0,metrics:[{l:"Revenue Growth",v:"+44%",s:"Accelerating"},{l:"Gross Margin",v:"61%",s:"Improving"},{l:"CEO Purchase",v:"$1.2M",s:"Open market"},{l:"Short Interest",v:"Declining",s:"3 months"}],verdict:"All three pillars aligned. CEO bought $1.2M own money — strongest single signal. Entry zone $285-310 active now."},
-  PLTR:{perf:{"1W":+1,"1M":+7,"3M":+18,"6M":+34,"1Y":+88},w52Lo:14.20,w52Hi:28.90,aTarget:32,aLow:22,aHigh:45,aBuy:11,aHold:6,aSell:2,metrics:[{l:"Commercial Rev",v:"+55%",s:"YoY growth"},{l:"Govt Contracts",v:"Accelerating",s:"2026 pace"},{l:"Gross Margin",v:"82%",s:"Software"},{l:"Profitability",v:"GAAP+",s:"Profitable"}],verdict:"AIP platform creating real moat in government AI. Commercial revenue growing 55% YoY. Buy below $25."},
-  MSFT:{perf:{"1W":+1,"1M":+4,"3M":+13,"6M":+18,"1Y":+29},w52Lo:362.90,w52Hi:468.30,aTarget:490,aLow:420,aHigh:560,aBuy:42,aHold:8,aSell:0,metrics:[{l:"Azure Growth",v:"+29%",s:"Re-accelerating"},{l:"Gross Margin",v:"71%",s:"Stable"},{l:"Copilot",v:"Growing",s:"Early stage"},{l:"Free Cash Flow",v:"$68B",s:"Annual"}],verdict:"Azure AI growth re-accelerating with Copilot. World-class business at reasonable valuation. Hold with confidence."},
-  ASML:{perf:{"1W":+1,"1M":+7,"3M":+14,"6M":+23,"1Y":+34},w52Lo:742.80,w52Hi:1012.40,aTarget:1100,aLow:900,aHigh:1300,aBuy:28,aHold:4,aSell:1,metrics:[{l:"Market Position",v:"Monopoly",s:"Only EUV supplier"},{l:"Order Backlog",v:"€39B",s:"Multi-year"},{l:"Gross Margin",v:"51%",s:"Strong"},{l:"Revenue Growth",v:"+28%",s:"AI demand"}],verdict:"Monopoly on EUV lithography. Every advanced chip needs ASML machines. Results July 16 will confirm thesis."},
-  RELIANCE:{perf:{"1W":+1,"1M":+4,"3M":+9,"6M":+12,"1Y":+18},w52Lo:2220,w52Hi:3217,aTarget:3400,aLow:2900,aHigh:3900,aBuy:22,aHold:6,aSell:2,metrics:[{l:"Revenue Growth",v:"+11%",s:"YoY"},{l:"Promoter Holding",v:"50.3%",s:"Zero pledge"},{l:"FII Activity",v:"Buying",s:"3 days"},{l:"Debt/Equity",v:"0.42×",s:"Manageable"}],verdict:"India's largest company. Jio and Retail both growing. FII buying 3 consecutive days. Long-term compounder at fair value."},
-  HDFCBANK:{perf:{"1W":0,"1M":+4,"3M":+7,"6M":+11,"1Y":+17},w52Lo:1408,w52Hi:1882,aTarget:2100,aLow:1800,aHigh:2400,aBuy:28,aHold:5,aSell:1,metrics:[{l:"NIM",v:"4.1%",s:"Net interest"},{l:"Asset Quality",v:"Strong",s:"NPAs declining"},{l:"FII + DII",v:"Both buying",s:"Aligned"},{l:"Loan Growth",v:"+15%",s:"YoY"}],verdict:"India's most trusted private bank. DII and FII both accumulating. Long-term compounder at fair value. Entry zone ₹1,580-1,650."},
-};
-
 // ── UTILITIES ────────────────────────────────────────
+const getFlag = (market, ticker) => {
+  const t = ticker || "";
+  if (market === "IN" || t.endsWith(".NS") || t.endsWith(".BO")) return "🇮🇳";
+  if (market === "EU" || t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA")) return "🇪🇺";
+  return "🇺🇸";
+};
 const tc = s => s>=75?"#5b72f8":s>=60?"#d97706":s>=40?"#f59e0b":"#e11d48";
 const tg = s => s>=75?"Strong":s>=60?"Moderate":s>=40?"Weak":"Blocked";
-const isINR = t => ["RELIANCE","HDFCBANK","INFY","TCS"].includes(t);
-const cu = t => isINR(t)?"₹":"$";
+const isINR = t => t && (t.endsWith(".NS") || t.endsWith(".BO"));
+const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA"));
+const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : "$";
 const actionColor = a => a==="EXIT"||a==="WAIT"?"var(--rose)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber)":a==="BUY"||a==="STRONG BUY"?"var(--emerald)":"var(--indigo)";
 const actionBg = a => a==="EXIT"||a==="WAIT"?"var(--rose2)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber2)":a==="BUY"||a==="STRONG BUY"?"var(--emerald2)":"#eef2ff";
+
+// ── MAPPING HELPERS ──────────────────────────────────
+const getRecFromGroup = (group, trust, autoDisq) => {
+  if (autoDisq || group === "urgent") return {rec:"SELL", rcls:"rr-s"};
+  if (group === "watch") return {rec:"HOLD", rcls:"rr-h"};
+  if (trust >= 75) return {rec:"BUY", rcls:"rr-b"};
+  return {rec:"HOLD", rcls:"rr-h"};
+};
+
+const mapPosition = (pos, earningsByTicker) => {
+  const flag = getFlag(pos.market, pos.ticker);
+  const {rec, rcls} = getRecFromGroup(pos.group, pos.trust_score, pos.auto_disqualified);
+  const pnlPct = pos.pnl_pct || 0;
+  let verdict = pos.disqualify_reason || "";
+  if (!verdict) {
+    if (pnlPct < -30) verdict = `Down ${Math.abs(pnlPct).toFixed(0)}% from entry. Trust score ${pos.trust_score}/100. Monitor fundamentals.`;
+    else if (pnlPct > 30) verdict = `Up ${pnlPct.toFixed(0)}% from entry. Consider a trailing stop to protect gains.`;
+    else verdict = `Trust score ${pos.trust_score}/100 — ${pos.grade}. Hold and monitor.`;
+  }
+  return {
+    ticker: pos.ticker, flag, price: pos.current_price, change: pos.change_pct,
+    name: pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
+    rec, rcls, trust: pos.trust_score, verdict,
+    earn: (earningsByTicker || {})[pos.ticker] || "—",
+    auto_disqualified: pos.auto_disqualified,
+  };
+};
+
+const mapWatchlistItem = item => ({
+  ticker: item.ticker, flag: getFlag(item.market, item.ticker),
+  price: item.current_price, change: item.change_pct,
+  name: item.name || item.ticker, trust: item.trust_score,
+  signal: item.signal || "Still watching", reason: item.signal || "Still watching",
+  entry: "—", potential: "—",
+});
+
+const mapAlert = alert => {
+  const t = alert.alert_type || "signal";
+  const icons = {urgent:"🚨", signal:"🚀", earnings:"📅", watchlist_entry:"👁"};
+  const confs = {urgent:"URGENT", signal:"HIGH", earnings:"INFO", watchlist_entry:"MED"};
+  const ccs  = {urgent:"ch", signal:"ch", earnings:"cm", watchlist_entry:"cm"};
+  const created = alert.created_at ? new Date(alert.created_at) : new Date();
+  const diffMin = Math.round((Date.now() - created.getTime()) / 60000);
+  const time = diffMin < 1 ? "just now" : diffMin < 60 ? `${diffMin}m ago` : diffMin < 1440 ? `${Math.round(diffMin/60)}h ago` : "Earlier";
+  return {icon: icons[t]||"💡", ticker: alert.ticker||"—", conf: confs[t]||"SIGNAL", cc: ccs[t]||"cm", text: alert.message||"", time};
+};
+
+const fmtEarnDate = dateStr => {
+  if (!dateStr) return "—";
+  try { return new Date(dateStr+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
+  catch { return dateStr; }
+};
+
+const mapEarnings = e => {
+  const today = new Date().toISOString().split("T")[0];
+  const isToday = e.next_earnings_date === today;
+  return {
+    ticker: e.ticker, flag: getFlag(null, e.ticker), name: e.name || e.ticker,
+    date: isToday ? "Today" : fmtEarnDate(e.next_earnings_date),
+    time: "Pre-market", status: isToday ? "pending" : "upcoming",
+    inPortfolio: e.in_portfolio, shares: e.shares||0,
+    buyPrice: e.buy_price||0, currentPrice: e.current_price||0,
+    preMarketChg: null, epsEst: e.eps_estimate||null, revEst: null,
+    note: isToday ? "Earnings today — monitor results and act accordingly."
+      : `Results expected ${fmtEarnDate(e.next_earnings_date)}. Review your position before this date.`,
+    history: [], isUrgent: false,
+  };
+};
+
+const mapPick = pick => {
+  const trust = pick.trust || {};
+  const total = trust.total_score || 0;
+  const verdict = pick.verdict || {};
+  const rawRec = (verdict.recommendation || "hold").toLowerCase();
+  const rec = rawRec === "strong_buy" ? "STRONG BUY" : rawRec === "buy" ? "BUY" : rawRec === "sell" ? "SELL" : "HOLD";
+  const rcls = rec === "STRONG BUY" ? "rr-sb" : rec === "BUY" ? "rr-b" : rec === "SELL" ? "rr-s" : "rr-h";
+  const col = total >= 90 ? "#059669" : "#5b72f8";
+  const price = pick.price || 0;
+  const curr = cu(pick.ticker);
+  const sigs = [verdict.verdict, verdict.key_risk ? `Risk: ${verdict.key_risk}` : null, verdict.stop_loss_explanation].filter(Boolean);
+  return {
+    ticker: pick.ticker, name: pick.name||pick.ticker, trust: total,
+    grade: (trust.grade||"Strong").toUpperCase(), col, grad:`linear-gradient(90deg,${col},#0ea5e9)`,
+    rec, rcls, b: trust.business_score||0, bm:40, s: trust.smart_money_score||0, sm:35, m: trust.momentum_score||0, mm:25,
+    sigs: sigs.length ? sigs : ["Strong fundamentals across all three pillars."],
+    potential: `+${Math.round((total-60)*1.2+15)}%`,
+    entry: price > 0 ? `${curr}${(price*0.97).toFixed(0)}-${curr}${(price*1.03).toFixed(0)}` : "—",
+    risk: total >= 80 ? "LOW-MED" : "MEDIUM", horizon: verdict.time_horizon || "12 months",
+  };
+};
+
+const mapDisq = d => ({ticker: d.ticker, score: d.trust_score||0, reason: d.reason||"Auto-disqualified by safety check."});
+const mapStrategy = item => ({...item, col: item.color || "var(--indigo)"});
+
+const buildDetailData = resp => {
+  if (!resp) return null;
+  const f = resp.fundamentals || {}, a = resp.analyst || {}, t = resp.trust || {}, v = resp.verdict || {};
+  const price = (resp.price_data || {}).price || 0;
+  const metrics = [];
+  if (f.revenue_growth != null) metrics.push({l:"Revenue Growth", v:`${(f.revenue_growth*100).toFixed(0)}%`, s:"YoY"});
+  if (f.gross_margins) metrics.push({l:"Gross Margin", v:`${(f.gross_margins*100).toFixed(0)}%`, s:f.gross_margins>0.5?"Strong":"Moderate"});
+  if (f.pe_ratio) metrics.push({l:"P/E Ratio", v:`${f.pe_ratio}×`, s:f.pe_ratio>50?"Growth":"Value"});
+  if (f.cash_runway_months) metrics.push({l:"Cash Runway", v:`${f.cash_runway_months} mo`, s:f.cash_runway_months<6?"At risk":"Safe"});
+  if (f.debt_to_equity != null) metrics.push({l:"Debt/Equity", v:`${f.debt_to_equity}×`, s:f.debt_to_equity<1?"Conservative":"Leveraged"});
+  if (t.total_score) metrics.push({l:"Trust Score", v:`${t.total_score}/100`, s:t.grade||"—"});
+  if (f.next_earnings_date) metrics.push({l:"Next Earnings", v:fmtEarnDate(f.next_earnings_date), s:"Upcoming"});
+  while (metrics.length < 4) metrics.push({l:"—", v:"—", s:"—"});
+  return {
+    perf: resp.history || {"1W":0,"1M":0,"3M":0,"6M":0,"1Y":0},
+    w52Lo: f.w52_low || price*0.7, w52Hi: f.w52_high || price*1.3,
+    aTarget: a.target_price||null, aLow: a.target_low||null, aHigh: a.target_high||null,
+    aBuy: a.buy_count||0, aHold: a.hold_count||0, aSell: a.sell_count||0,
+    metrics: metrics.slice(0,4),
+    verdict: v.verdict || t.disqualify_reason || `Trust score ${t.total_score}/100 — ${t.grade}.`,
+  };
+};
 
 const genChart = (endPrice, perf, pts) => {
   const startPrice = endPrice / (1 + perf/100);
@@ -307,23 +344,32 @@ const Ring = ({score,col,size=56}) => {
 // ── STOCK DETAIL OVERLAY ────────────────────────────
 function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
   const [tf,setTf] = useState("3M");
+  const [d, setD] = useState(null);
+  const [dLoading, setDLoading] = useState(true);
   const tfs = ["1W","1M","3M","6M","1Y"];
-  const d = DETAIL_DATA[ticker] || DETAIL_DATA["GRRR"];
+
+  useEffect(() => {
+    setDLoading(true);
+    fetch(`/api/stock/${ticker}/detail`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { setD(buildDetailData(data)); setDLoading(false); })
+      .catch(() => setDLoading(false));
+  }, [ticker]);
+
   const c = tc(trust);
-  const inr = isINR(ticker);
-  const curr = inr?"₹":"$";
-  const perf = d.perf[tf];
+  const curr = cu(ticker);
+  const perf = d ? (d.perf[tf] || 0) : 0;
   const perfPos = perf >= 0;
-  const upside = (((d.aTarget-price)/price)*100).toFixed(0);
-  const aRange = d.aHigh - d.aLow;
-  const aPos = Math.min(100,Math.max(0,((price-d.aLow)/aRange*100))).toFixed(0);
-  const aTPos = Math.min(100,Math.max(0,((d.aTarget-d.aLow)/aRange*100))).toFixed(0);
-  const rRange = d.w52Hi - d.w52Lo;
-  const rPos = Math.min(100,Math.max(0,((price-d.w52Lo)/rRange*100))).toFixed(0);
   const pts = tf==="1W"?7:tf==="1M"?22:tf==="3M"?65:tf==="6M"?130:252;
-  const chartData = genChart(price, perf, pts);
-  const chartMin = Math.min(...chartData.map(p=>p.price))*.995;
-  const chartMax = Math.max(...chartData.map(p=>p.price))*1.005;
+  const chartData = d ? genChart(price, perf, pts) : [];
+  const chartMin = chartData.length ? Math.min(...chartData.map(p=>p.price))*.995 : price*0.9;
+  const chartMax = chartData.length ? Math.max(...chartData.map(p=>p.price))*1.005 : price*1.1;
+  const upside = d && d.aTarget && price ? (((d.aTarget-price)/price)*100).toFixed(0) : null;
+  const aRange = d && d.aHigh && d.aLow ? (d.aHigh-d.aLow)||1 : 1;
+  const aPos = d && d.aLow != null ? Math.min(100,Math.max(0,((price-d.aLow)/aRange*100))).toFixed(0) : 50;
+  const aTPos = d && d.aTarget != null && d.aLow != null ? Math.min(100,Math.max(0,((d.aTarget-d.aLow)/aRange*100))).toFixed(0) : 70;
+  const rRange = d && d.w52Hi && d.w52Lo ? (d.w52Hi-d.w52Lo)||1 : 1;
+  const rPos = d && d.w52Lo != null ? Math.min(100,Math.max(0,((price-d.w52Lo)/rRange*100))).toFixed(0) : 50;
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end",backdropFilter:"blur(4px)",maxWidth:400,margin:"0 auto"}} onClick={onClose}>
@@ -363,24 +409,29 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
         </div>
 
         {/* Chart */}
-        <div style={{background:"var(--white)",paddingTop:14}}>
-          <ResponsiveContainer width="100%" height={150}>
-            <AreaChart data={chartData} margin={{top:4,right:0,left:0,bottom:0}}>
-              <defs>
-                <linearGradient id="dg" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={perfPos?"#5b72f8":"#e11d48"} stopOpacity={.15}/>
-                  <stop offset="95%" stopColor={perfPos?"#5b72f8":"#e11d48"} stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="date" hide/>
-              <YAxis domain={[chartMin,chartMax]} hide/>
-              <Tooltip content={<Tip/>} cursor={{stroke:"rgba(91,114,248,.2)",strokeWidth:1}}/>
-              <Area type="monotone" dataKey="price" stroke={perfPos?"#5b72f8":"#e11d48"} strokeWidth={2} fill="url(#dg)" dot={false} activeDot={{r:4,fill:perfPos?"#5b72f8":"#e11d48",strokeWidth:0}}/>
-            </AreaChart>
-          </ResponsiveContainer>
+        {dLoading && <div style={{padding:"40px",textAlign:"center",fontFamily:"var(--mono)",fontSize:11,color:"var(--t3)"}}>Loading analysis...</div>}
+        {!dLoading && <div style={{background:"var(--white)",paddingTop:14}}>
+          {chartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={150}>
+              <AreaChart data={chartData} margin={{top:4,right:0,left:0,bottom:0}}>
+                <defs>
+                  <linearGradient id="dg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={perfPos?"#5b72f8":"#e11d48"} stopOpacity={.15}/>
+                    <stop offset="95%" stopColor={perfPos?"#5b72f8":"#e11d48"} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="date" hide/>
+                <YAxis domain={[chartMin,chartMax]} hide/>
+                <Tooltip content={<Tip/>} cursor={{stroke:"rgba(91,114,248,.2)",strokeWidth:1}}/>
+                <Area type="monotone" dataKey="price" stroke={perfPos?"#5b72f8":"#e11d48"} strokeWidth={2} fill="url(#dg)" dot={false} activeDot={{r:4,fill:perfPos?"#5b72f8":"#e11d48",strokeWidth:0}}/>
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{height:150,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--t3)",fontSize:11,fontFamily:"var(--mono)"}}>No chart data</div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",padding:"0 16px 14px",borderBottom:"1px solid var(--t4)"}}>
             {tfs.map(t=>{
-              const v=d.perf[t]; const act=t===tf;
+              const v=d ? (d.perf[t]||0) : 0; const act=t===tf;
               return (
                 <div key={t} style={{textAlign:"center",cursor:"pointer",opacity:act?1:.6}} onClick={()=>setTf(t)}>
                   <div style={{fontFamily:"var(--mono)",fontSize:8,color:act?"var(--indigo)":"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{t}</div>
@@ -389,13 +440,13 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
               );
             })}
           </div>
-        </div>
+        </div>}
 
         {/* Body */}
         <div style={{padding:"14px 16px 40px"}}>
 
           {/* 52-week */}
-          <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,marginBottom:10,border:"1px solid rgba(91,114,248,.06)"}}>
+          {d && <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,marginBottom:10,border:"1px solid rgba(91,114,248,.06)"}}>
             <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:12}}>📊 52-Week Range</div>
             <div style={{height:6,background:"var(--t4)",borderRadius:3,position:"relative",margin:"8px 0"}}>
               <div style={{position:"absolute",top:0,left:0,height:"100%",width:`${rPos}%`,background:"linear-gradient(90deg,var(--indigo),var(--sky))",borderRadius:3}}/>
@@ -404,7 +455,7 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
             <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
               <div>
                 <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>52W Low</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--rose)",marginTop:2}}>{curr}{d.w52Lo.toLocaleString()}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--rose)",marginTop:2}}>{curr}{(d.w52Lo||0).toLocaleString()}</div>
               </div>
               <div style={{textAlign:"center"}}>
                 <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>Current</div>
@@ -412,10 +463,10 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
               </div>
               <div style={{textAlign:"right"}}>
                 <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>52W High</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--emerald)",marginTop:2}}>{curr}{d.w52Hi.toLocaleString()}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--emerald)",marginTop:2}}>{curr}{(d.w52Hi||0).toLocaleString()}</div>
               </div>
             </div>
-          </div>
+          </div>}
 
           {/* AI */}
           <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,marginBottom:10,border:"1px solid rgba(91,114,248,.06)"}}>
@@ -427,29 +478,31 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
                 <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>3 pillars · Updated today</div>
               </div>
             </div>
-            <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.65,padding:"10px 12px",background:"var(--card2)",borderRadius:8,borderLeft:"3px solid var(--indigo)"}}>{d.verdict}</div>
+            <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.65,padding:"10px 12px",background:"var(--card2)",borderRadius:8,borderLeft:"3px solid var(--indigo)"}}>{d ? d.verdict : "Loading..."}</div>
           </div>
 
-          {/* Forecast */}
-          <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,marginBottom:10,border:"1px solid rgba(91,114,248,.06)"}}>
+          {/* Forecast — only if analyst data available */}
+          {d && d.aTarget && <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,marginBottom:10,border:"1px solid rgba(91,114,248,.06)"}}>
             <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:12}}>🎯 12-Month Analyst Forecast</div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
               <div>
                 <div style={{fontFamily:"var(--mono)",fontSize:24,fontWeight:700,color:"var(--indigo)",letterSpacing:-1,lineHeight:1}}>{curr}{d.aTarget.toLocaleString()}</div>
                 <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>Consensus price target</div>
               </div>
-              <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"5px 12px",borderRadius:20,border:"1px solid #a7f3d0"}}>+{upside}% upside</div>
+              {upside && <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"5px 12px",borderRadius:20,border:"1px solid #a7f3d0"}}>{upside >= 0 ? "+" : ""}{upside}% upside</div>}
             </div>
-            <div style={{height:8,background:"var(--t4)",borderRadius:4,position:"relative",margin:"6px 0 8px"}}>
-              <div style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",background:"linear-gradient(90deg,rgba(91,114,248,.1),rgba(91,114,248,.2))",borderRadius:4}}/>
-              <div style={{position:"absolute",top:"50%",left:`${aPos}%`,transform:"translate(-50%,-50%)",width:14,height:14,background:"var(--t1)",border:"2px solid #fff",borderRadius:"50%"}}/>
-              <div style={{position:"absolute",top:"50%",left:`${aTPos}%`,transform:"translate(-50%,-50%)",width:16,height:16,background:"var(--indigo)",border:"2.5px solid #fff",borderRadius:"50%",boxShadow:"0 2px 8px rgba(91,114,248,.4)"}}/>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
-              <div><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Low</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aLow.toLocaleString()}</div></div>
-              <div style={{textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",fontWeight:600}}>Now</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--indigo)"}}>{curr}{price.toLocaleString()}</div></div>
-              <div style={{textAlign:"right"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>High</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aHigh.toLocaleString()}</div></div>
-            </div>
+            {d.aLow && d.aHigh && <>
+              <div style={{height:8,background:"var(--t4)",borderRadius:4,position:"relative",margin:"6px 0 8px"}}>
+                <div style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",background:"linear-gradient(90deg,rgba(91,114,248,.1),rgba(91,114,248,.2))",borderRadius:4}}/>
+                <div style={{position:"absolute",top:"50%",left:`${aPos}%`,transform:"translate(-50%,-50%)",width:14,height:14,background:"var(--t1)",border:"2px solid #fff",borderRadius:"50%"}}/>
+                <div style={{position:"absolute",top:"50%",left:`${aTPos}%`,transform:"translate(-50%,-50%)",width:16,height:16,background:"var(--indigo)",border:"2.5px solid #fff",borderRadius:"50%",boxShadow:"0 2px 8px rgba(91,114,248,.4)"}}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
+                <div><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Low</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aLow.toLocaleString()}</div></div>
+                <div style={{textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",fontWeight:600}}>Now</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--indigo)"}}>{curr}{price.toLocaleString()}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>High</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aHigh.toLocaleString()}</div></div>
+              </div>
+            </>}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
               {[{n:d.aBuy,l:"Buy",c:"var(--emerald)"},{n:d.aHold,l:"Hold",c:"var(--amber)"},{n:d.aSell,l:"Sell",c:"var(--rose)"}].map((a,i)=>(
                 <div key={i} style={{background:"var(--card2)",borderRadius:9,padding:10,textAlign:"center"}}>
@@ -459,10 +512,10 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
               ))}
             </div>
             <div style={{fontSize:10,color:"var(--t3)",lineHeight:1.5,textAlign:"center",padding:"8px 12px",background:"var(--card2)",borderRadius:8,fontStyle:"italic"}}>Analyst targets are estimates, not guarantees. One input among many.</div>
-          </div>
+          </div>}
 
           {/* Metrics */}
-          <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,border:"1px solid rgba(91,114,248,.06)"}}>
+          {d && <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,border:"1px solid rgba(91,114,248,.06)"}}>
             <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:12}}>📈 Key Metrics</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
               {d.metrics.map((m,i)=>(
@@ -473,7 +526,7 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
                 </div>
               ))}
             </div>
-          </div>
+          </div>}
 
         </div>
       </div>
@@ -626,29 +679,7 @@ function WatchGroup({type,icon,title,dot,items,isOpen,onToggle}) {
   );
 }
 
-// ── EARNINGS DATA ────────────────────────────────────
-const EARNINGS=[
-  {ticker:"XGN",flag:"🇺🇸",name:"Exagen Inc",date:"Today",time:"Pre-market",status:"pending",
-   inPortfolio:true,shares:50,buyPrice:10.50,currentPrice:3.39,preMarketChg:+13.0,
-   epsEst:-0.19,revEst:17.0,note:"Board resigned Apr 23. Pre-market +13%. Results due before open. This is the exit window.",
-   history:[{q:"Q4 2025",epsEst:-0.20,epsAct:-0.20,beat:false},{q:"Q3 2025",epsEst:-0.22,epsAct:-0.21,beat:true}]},
-  {ticker:"TNXP",flag:"🇺🇸",name:"Tonix Pharma",date:"Today",time:"Pre-market",status:"pending",
-   inPortfolio:true,shares:107,buyPrice:46,currentPrice:13.50,preMarketChg:-3.1,
-   epsEst:-0.85,revEst:2.1,note:"Auto-disqualified. 8 reverse splits. Do not hold through results.",
-   history:[{q:"Q4 2025",epsEst:-0.90,epsAct:-0.95,beat:false},{q:"Q3 2025",epsEst:-0.88,epsAct:-0.91,beat:false}]},
-  {ticker:"GRRR",flag:"🇺🇸",name:"Gorilla Technology",date:"Jun 17",time:"After market",status:"upcoming",
-   inPortfolio:true,shares:100,buyPrice:41,currentPrice:13.06,preMarketChg:null,
-   epsEst:-0.12,revEst:8.4,note:"Thesis confirmation quarter. Watch contract execution and pipeline commentary.",
-   history:[{q:"Q4 2025",epsEst:-0.14,epsAct:-0.11,beat:true},{q:"Q3 2025",epsEst:-0.16,epsAct:-0.13,beat:true}]},
-  {ticker:"NVDA",flag:"🇺🇸",name:"NVIDIA Corp",date:"Aug 21",time:"After market",status:"upcoming",
-   inPortfolio:true,shares:5,buyPrice:420,currentPrice:875.2,preMarketChg:null,
-   epsEst:6.72,revEst:43.2,note:"Blackwell ramp commentary is the key number. Watch data centre guidance raise.",
-   history:[{q:"Q4 2025",epsEst:5.45,epsAct:5.78,beat:true},{q:"Q3 2025",epsEst:4.20,epsAct:4.45,beat:true}]},
-  {ticker:"ASML",flag:"🇪🇺",name:"ASML Holding",date:"Jul 16",time:"Pre-market",status:"upcoming",
-   inPortfolio:true,shares:2,buyPrice:820,currentPrice:876.4,preMarketChg:null,
-   epsEst:4.85,revEst:7.8,note:"EUV order backlog update is the number to watch. AI chip demand drives orders.",
-   history:[{q:"Q4 2025",epsEst:4.20,epsAct:4.38,beat:true},{q:"Q3 2025",epsEst:3.90,epsAct:4.01,beat:true}]},
-];
+// Earnings data now comes from API props — no hardcoded data
 
 function EarningsCard({e,onTap}) {
   const isToday=e.date==="Today";
@@ -687,13 +718,13 @@ function EarningsDetail({e,onBack,onClose}) {
   const pnl=e.inPortfolio?(e.currentPrice-e.buyPrice)*e.shares:null;
   const isToday=e.date==="Today";
   const hasPop=e.preMarketChg&&e.preMarketChg>8;
-  const action=e.ticker==="XGN"&&hasPop
-    ?{label:"Exit on pre-market pop",color:"var(--rose)",bg:"var(--rose2)",detail:"Pre-market +13% is your exit window. Board resigned April 23. StockPulse flagged this moment. Exit at open or on any pre-market strength."}
-    :e.ticker==="TNXP"
-    ?{label:"Exit immediately",color:"var(--rose)",bg:"var(--rose2)",detail:"Auto-disqualified. 8 reverse splits. Do not hold through results regardless of outcome."}
-    :e.ticker==="GRRR"
-    ?{label:"Hold — watch guidance",color:"var(--amber)",bg:"var(--amber2)",detail:"If revenue beats AND contract commentary is positive — thesis confirmed. Hold. If guidance cut — reassess."}
-    :{label:"Hold through earnings",color:"var(--emerald)",bg:"var(--emerald2)",detail:"High trust stock. Strong beat history. Hold with confidence through this report."};
+  const action=e.isUrgent
+    ?{label:"Exit immediately",color:"var(--rose)",bg:"var(--rose2)",detail:"Auto-disqualified stock. Exit regardless of earnings result. The safety check flagged this company — do not hold through results."}
+    :hasPop&&isToday
+    ?{label:"Exit on pre-market pop",color:"var(--rose)",bg:"var(--rose2)",detail:"Pre-market pop is your exit window. Elevated risk today. Consider exiting at or before market open."}
+    :isToday
+    ?{label:"Hold — watch results",color:"var(--amber)",bg:"var(--amber2)",detail:"Earnings today. Monitor results carefully. Have a clear plan: set a stop loss if results disappoint."}
+    :{label:"Hold through earnings",color:"var(--emerald)",bg:"var(--emerald2)",detail:"High trust stock with upcoming earnings. Hold with confidence. Review guidance commentary after results."};
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:201,
       display:"flex",flexDirection:"column",justifyContent:"flex-end",
@@ -791,10 +822,11 @@ function EarningsDetail({e,onBack,onClose}) {
   );
 }
 
-function EarningsIntel({onClose}) {
+function EarningsIntel({earnings, onClose}) {
   const [sel,setSel]=useState(null);
-  const today=EARNINGS.filter(e=>e.date==="Today");
-  const upcoming=EARNINGS.filter(e=>e.date!=="Today");
+  const list = earnings || [];
+  const today=list.filter(e=>e.date==="Today");
+  const upcoming=list.filter(e=>e.date!=="Today");
   if(sel)return <EarningsDetail e={sel} onBack={()=>setSel(null)} onClose={onClose}/>;
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:200,
@@ -839,25 +871,26 @@ function EarningsIntel({onClose}) {
 }
 
 // ── PORTFOLIO ARC ────────────────────────────────────
-function PortfolioArc() {
-  const all = [...URGENT,...WATCH,...GOOD];
-  const val = all.reduce((s,p)=>s+(typeof p.price==='number'?p.price*p.shares:0),0);
-  const invested = all.reduce((s,p)=>s+p.buy*p.shares,0);
-  const pnl = val-invested;
+function PortfolioArc({positions, summary}) {
+  const s = summary || {};
+  const val = s.total_value || 0;
+  const invested = s.total_invested || 0;
+  const pnl = s.total_pnl || 0;
+  const pnlPct = invested > 0 ? (pnl / invested * 100) : 0;
   const size=120, stroke=10, r=size/2-stroke;
-  const c=2*Math.PI*r, f=Math.min(val/invested,1)*c;
+  const circ=2*Math.PI*r, f=Math.min(invested > 0 ? val/invested : 0, 1)*circ;
   return (
     <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",padding:"13px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:14}}>
       <div style={{position:"relative",width:size,height:size,flexShrink:0}}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
           <defs><linearGradient id="ag" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#5b72f8"/><stop offset="100%" stopColor="#0ea5e9"/></linearGradient></defs>
           <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(91,114,248,.1)" strokeWidth={stroke} strokeLinecap="round"/>
-          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="url(#ag)" strokeWidth={stroke} strokeLinecap="round" strokeDasharray={`${f} ${c}`} transform={`rotate(-90 ${size/2} ${size/2})`} style={{filter:"drop-shadow(0 0 8px rgba(91,114,248,.3))"}}/>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="url(#ag)" strokeWidth={stroke} strokeLinecap="round" strokeDasharray={`${f} ${circ}`} transform={`rotate(-90 ${size/2} ${size/2})`} style={{filter:"drop-shadow(0 0 8px rgba(91,114,248,.3))"}}/>
         </svg>
         <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
           <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5}}>Value</div>
-          <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:700,color:"var(--t1)",letterSpacing:-1,lineHeight:1}}>${(val/1000).toFixed(1)}k</div>
-          <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--rose)",marginTop:2}}>▼{Math.abs((pnl/invested*100)).toFixed(0)}%</div>
+          <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:700,color:"var(--t1)",letterSpacing:-1,lineHeight:1}}>{val >= 1000 ? `$${(val/1000).toFixed(1)}k` : `$${val.toFixed(0)}`}</div>
+          <div style={{fontFamily:"var(--mono)",fontSize:10,color:pnl>=0?"var(--emerald)":"var(--rose)",marginTop:2}}>{pnl>=0?"▲":"▼"}{Math.abs(pnlPct).toFixed(0)}%</div>
         </div>
       </div>
       <div style={{flex:1}}>
@@ -878,7 +911,7 @@ function PortfolioArc() {
           <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5}}>Positions</span>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             {(() => {
-              const all = [...URGENT,...WATCH,...GOOD];
+              const all = positions || [];
               const us = all.filter(s=>s.flag==="🇺🇸").length;
               const eu = all.filter(s=>s.flag==="🇪🇺").length;
               const ind = all.filter(s=>s.flag==="🇮🇳").length;
@@ -896,12 +929,23 @@ function PortfolioArc() {
 }
 
 // ── HOME SCREEN ──────────────────────────────────────
-function HomeScreen({onEarnings}) {
+function HomeScreen({positions, summary, signals, earnings, market, onEarnings}) {
   const [sigOpen,setSigOpen] = useState(null);
-  const todayEarnings = EARNINGS.filter(e=>e.date==="Today");
+  const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
+  const vix = market?.vix?.price || 0;
+  const vixLabel = vix >= 25 ? "🔴 Alert" : vix >= 15 ? "🟡 Choppy" : "🟢 Calm";
+  const vixColor = vix >= 25 ? "var(--rose)" : vix >= 15 ? "var(--amber)" : "var(--emerald)";
+  const vixSub = vix >= 25 ? "High fear — caution advised" : vix >= 15 ? "Some volatility — selective" : "Below 15 — signals reliable";
+  const indices = [
+    {flag:"🇺🇸", name:"S&P 500",    d:market?.sp500},
+    {flag:"🇺🇸", name:"Nasdaq",     d:market?.nasdaq},
+    {flag:"🇪🇺", name:"DAX",        d:market?.dax},
+    {flag:"🇮🇳", name:"India (NSE)",d:market?.nifty},
+  ];
+  const sigList = signals && signals.length > 0 ? signals : [];
   return (
     <div className="pad" style={{paddingTop:12}}>
-      <PortfolioArc/>
+      <PortfolioArc positions={positions} summary={summary}/>
 
       {/* Earnings Watch card */}
       <div onClick={onEarnings} style={{background:"var(--white)",borderRadius:12,
@@ -939,7 +983,9 @@ function HomeScreen({onEarnings}) {
           <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>Today's Signals</span>
           <span style={{fontSize:11,color:"var(--indigo)",fontWeight:500,cursor:"pointer"}}>See all →</span>
         </div>
-        {SIGNALS.map((s,i)=>{
+        {sigList.length === 0
+          ? <div style={{padding:"12px 14px",fontSize:11,color:"var(--t3)"}}>No signals yet — loading…</div>
+          : sigList.map((s,i)=>{
           const open = sigOpen===i;
           return (
             <div key={i} className="sig-card">
@@ -968,24 +1014,24 @@ function HomeScreen({onEarnings}) {
         <div className="mkt-card g">
           <div className="mk-label">Fear Index (VIX)</div>
           <div style={{display:"flex",alignItems:"baseline",gap:6}}>
-            <div className="mk-val" style={{color:"var(--emerald)"}}>14.2</div>
-            <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--emerald)",fontWeight:600}}>🟢 Calm</span>
+            <div className="mk-val" style={{color:vixColor}}>{vix > 0 ? vix.toFixed(1) : "—"}</div>
+            <span style={{fontFamily:"var(--mono)",fontSize:10,color:vixColor,fontWeight:600}}>{vix > 0 ? vixLabel : ""}</span>
           </div>
-          <div className="mk-sub">Below 15 — signals reliable</div>
+          <div className="mk-sub">{vix > 0 ? vixSub : "Loading…"}</div>
         </div>
         <div className="mkt-card b">
           <div className="mk-label">Markets Today</div>
-          {[
-            {flag:"🇺🇸",name:"S&P 500",val:"+0.8%",up:true},
-            {flag:"🇺🇸",name:"Nasdaq",val:"+1.2%",up:true},
-            {flag:"🇪🇺",name:"DAX",val:"+0.4%",up:true},
-            {flag:"🇮🇳",name:"India (NSE)",val:"+1.1%",up:true},
-          ].map((m,i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4}}>
-              <span style={{fontSize:10,color:"var(--t2)"}}>{m.flag} {m.name}</span>
-              <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:m.up?"var(--emerald)":"var(--rose)"}}>{m.val}</span>
-            </div>
-          ))}
+          {indices.map((m,i)=>{
+            const chg = m.d?.change_pct;
+            const up = chg != null ? chg >= 0 : true;
+            const val = chg != null ? `${up?"+":""}${chg.toFixed(1)}%` : "—";
+            return (
+              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4}}>
+                <span style={{fontSize:10,color:"var(--t2)"}}>{m.flag} {m.name}</span>
+                <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:up?"var(--emerald)":"var(--rose)"}}>{val}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -1149,11 +1195,12 @@ function PivotSection({title, accentColor, slices}) {
 }
 
 // ── STOCKS SCREEN ────────────────────────────────────
-function StocksScreen({onDetail}) {
+function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail}) {
   const [f, setF] = useState("All");
+  const U=urgent||[], W=watch||[], G=good||[], WR=wlReady||[], WW=wlWatch||[], WA=wlAvoid||[];
   const byC = arr => f==="🇺🇸 US"?arr.filter(s=>s.flag==="🇺🇸"):f==="🇪🇺 Europe"?arr.filter(s=>s.flag==="🇪🇺"):f==="🇮🇳 India"?arr.filter(s=>s.flag==="🇮🇳"):arr;
-  const fU=byC(URGENT), fW=byC(WATCH), fG=byC(GOOD);
-  const fWR=byC(WL_READY), fWW=byC(WL_WATCH), fWA=byC(WL_AVOID);
+  const fU=byC(U), fW=byC(W), fG=byC(G);
+  const fWR=byC(WR), fWW=byC(WW), fWA=byC(WA);
 
   const myStocksSlices = [
     {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail},
@@ -1201,8 +1248,11 @@ function StocksScreen({onDetail}) {
 
 
 // ── SMART PICKS ──────────────────────────────────────
-function SmartPicksScreen() {
+function SmartPicksScreen({picks, disq, accuracy}) {
   const [exp,setExp] = useState(null);
+  const PICKS = picks || [];
+  const DISQ = disq || [];
+  const acc = accuracy || "—";
   return (
     <div className="pad" style={{paddingTop:12}}>
 
@@ -1210,7 +1260,7 @@ function SmartPicksScreen() {
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
         <div style={{display:"flex",alignItems:"center",gap:7}}>
           <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,color:"var(--t1)"}}>Smart Picks</span>
-          <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--emerald)",background:"var(--emerald2)",border:"1px solid #a7f3d0",padding:"2px 7px",borderRadius:8,fontWeight:600}}>71% · 90d</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--emerald)",background:"var(--emerald2)",border:"1px solid #a7f3d0",padding:"2px 7px",borderRadius:8,fontWeight:600}}>{acc} · 90d</span>
         </div>
         <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{PICKS.length} active</span>
       </div>
@@ -1328,13 +1378,14 @@ function SmartPicksScreen() {
 }
 
 // ── STRATEGY SCREEN ──────────────────────────────────
-function StrategyScreen() {
+function StrategyScreen({strategyData}) {
   const [tab,setTab] = useState(0);
   const [exp,setExp] = useState(null);
+  const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[]};
   const tabs = ["My Stocks","Watchlist","Smart Picks"];
-  const lists = [STRATEGY.myStocks, STRATEGY.watchlist, STRATEGY.smartPicks];
+  const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy)];
   const items = lists[tab];
-  const total = STRATEGY.myStocks.length+STRATEGY.watchlist.length+STRATEGY.smartPicks.length;
+  const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length;
   return (
     <div className="pad" style={{paddingTop:14}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -1394,17 +1445,74 @@ export default function App() {
   const [tab,setTab] = useState(0);
   const [sel,setSel] = useState(null);
   const [showEarnings,setShowEarnings] = useState(false);
+
+  // ── Real data state ──
+  const [portfolio, setPortfolio] = useState({positions:[], summary:{}});
+  const [watchlistRaw, setWatchlistRaw] = useState([]);
+  const [market, setMarket] = useState(null);
+  const [alerts, setAlerts] = useState([]);
+  const [picks, setPicks] = useState([]);
+  const [disq, setDisq] = useState([]);
+  const [accuracy, setAccuracy] = useState("—");
+  const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[]});
+  const [earnings, setEarnings] = useState([]);
+
+  useEffect(() => {
+    Promise.allSettled([
+      getPortfolio(), getWatchlist(), getMarket(),
+      getAlerts(), getPicks(), getDisqualified(), getAccuracy(),
+      getStrategy(), getEarnings(),
+    ]).then(([pR,wR,mR,aR,piR,dR,acR,stR,eR]) => {
+      if(pR.status==="fulfilled") setPortfolio(pR.value||{positions:[],summary:{}});
+      if(wR.status==="fulfilled") setWatchlistRaw(wR.value||[]);
+      if(mR.status==="fulfilled") setMarket(mR.value);
+      if(aR.status==="fulfilled") setAlerts(aR.value||[]);
+      if(piR.status==="fulfilled") setPicks((piR.value||[]).map(mapPick));
+      if(dR.status==="fulfilled") setDisq((dR.value||[]).map(mapDisq));
+      if(acR.status==="fulfilled") setAccuracy(acR.value?.accuracy_pct!=null?`${acR.value.accuracy_pct}%`:"—");
+      if(stR.status==="fulfilled") setStrategyData(stR.value||{myStocks:[],watchlist:[],smartPicks:[]});
+      if(eR.status==="fulfilled") setEarnings((eR.value||[]).map(mapEarnings));
+    });
+  }, []);
+
+  // ── Derived data ──
+  const earningsByTicker = Object.fromEntries(earnings.map(e=>[e.ticker, e.date]));
+  const positions = portfolio.positions || [];
+  const urgent = positions.filter(p=>p.group==="urgent").map(p=>mapPosition(p, earningsByTicker));
+  const watch  = positions.filter(p=>p.group==="watch").map(p=>mapPosition(p, earningsByTicker));
+  const good   = positions.filter(p=>p.group==="good").map(p=>mapPosition(p, earningsByTicker));
+  const allPositions = [...urgent, ...watch, ...good];
+
+  const wlReady = watchlistRaw.filter(w=>w.wl_group==="ready").map(mapWatchlistItem);
+  const wlWatch = watchlistRaw.filter(w=>w.wl_group==="watching").map(mapWatchlistItem);
+  const wlAvoid = watchlistRaw.filter(w=>w.wl_group==="avoid").map(mapWatchlistItem);
+
+  const signals = (alerts||[]).slice(0,5).map(mapAlert);
+
+  // ── Market status ──
+  const vix = market?.vix?.price || 0;
+  const mktLabel = vix >= 25 ? "Market Alert" : vix >= 15 ? "Market Choppy" : "Market Calm";
+  const mktDotColor = vix >= 25 ? "#ef4444" : vix >= 15 ? "#f59e0b" : "#4ade80";
+
+  // ── Alert banner ──
+  const urgentStock = urgent.find(p=>p.auto_disqualified);
+  const unreadCount = (alerts||[]).filter(a=>!a.is_read).length;
+
+  // ── Badges ──
+  const stratTotal = (strategyData.myStocks||[]).length+(strategyData.watchlist||[]).length+(strategyData.smartPicks||[]).length;
+  const urgentCount = urgent.length;
+
   const screens = [
-    <HomeScreen onEarnings={()=>setShowEarnings(true)}/>,
-    <StocksScreen onDetail={setSel}/>,
-    <SmartPicksScreen/>,
-    <StrategyScreen/>,
+    <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
+    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel}/>,
+    <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy}/>,
+    <StrategyScreen strategyData={strategyData}/>,
   ];
-  const tabs = [
-    {icon:"🏠",label:"Home",badge:2},
+  const tabDefs = [
+    {icon:"🏠",label:"Home",badge:urgentCount},
     {icon:"📊",label:"Stocks",badge:0},
     {icon:"🎯",label:"Picks",badge:0},
-    {icon:"🧭",label:"Strategy",badge:11},
+    {icon:"🧭",label:"Strategy",badge:stratTotal},
   ];
   return (
     <div className="app">
@@ -1423,26 +1531,28 @@ export default function App() {
           </div>
           <div className="hdr-right">
             <div className="mpill">
-              <div className="mpdot"/>
-              <span className="mptext">Market Calm</span>
+              <div className="mpdot" style={{background:mktDotColor}}/>
+              <span className="mptext">{mktLabel}</span>
             </div>
-            <div className="bell">🔔<div className="bell-b">4</div></div>
+            <div className="bell">🔔{unreadCount>0&&<div className="bell-b">{unreadCount}</div>}</div>
           </div>
         </div>
       </div>
-      <div className="alert-banner">
-        <div className="ab-left">
-          <div className="ab-pulse"/>
-          <div>
-            <div className="ab-title">⚡ XGN pre-market +13% — Exit window open NOW</div>
-            <div className="ab-sub">Board resigned · Earnings today · This is the moment</div>
+      {urgentStock&&(
+        <div className="alert-banner">
+          <div className="ab-left">
+            <div className="ab-pulse"/>
+            <div>
+              <div className="ab-title">⚡ {urgentStock.ticker} — Exit position now</div>
+              <div className="ab-sub">{(urgentStock.verdict||"").substring(0,60)}</div>
+            </div>
           </div>
+          <button className="ab-btn">Exit {urgentStock.ticker}</button>
         </div>
-        <button className="ab-btn">Exit XGN</button>
-      </div>
+      )}
       <div className="tabs-wrap">
         <div className="tabs">
-          {tabs.map((t,i)=>(
+          {tabDefs.map((t,i)=>(
             <button key={i} className={`tab${tab===i?" active":""}`} onClick={()=>setTab(i)}>
               <div className="tab-ink"/>
               <span className="tab-icon">{t.icon}</span>
@@ -1457,13 +1567,13 @@ export default function App() {
           ticker={sel.ticker}
           name={sel.name}
           flag={sel.flag||"🇺🇸"}
-          price={typeof sel.price==="number"?sel.price:2847}
-          trust={sel.trust}
+          price={typeof sel.price==="number"?sel.price:0}
+          trust={sel.trust||50}
           rec={sel.rec||"HOLD"}
           onClose={()=>setSel(null)}
         />
       )}
-      {showEarnings&&<EarningsIntel onClose={()=>setShowEarnings(false)}/>}
+      {showEarnings&&<EarningsIntel earnings={earnings} onClose={()=>setShowEarnings(false)}/>}
     </div>
   );
 }

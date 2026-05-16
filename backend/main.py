@@ -17,7 +17,7 @@ from datetime import datetime
 
 from database.models import init_db
 from database import db
-from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data
+from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data, get_stock_history
 from data.india import get_india_signals, is_indian_stock
 from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.patterns import detect_all_patterns
@@ -174,6 +174,34 @@ def stock_trust(ticker: str):
 @app.get("/api/stock/{ticker}/signals")
 def stock_signals(ticker: str):
     return db.get_signals(ticker.upper())
+
+
+@app.get("/api/stock/{ticker}/detail")
+def stock_detail_full(ticker: str):
+    """Full detail for StockDetail overlay: history, 52W, analyst, verdict, fundamentals."""
+    ticker = ticker.upper()
+    price_data = get_stock_price(ticker)
+    fundamentals = get_fundamentals(ticker)
+    trust = get_trust_score_with_fallback(ticker, price_data)
+    analyst = get_analyst_data(ticker)
+    patterns = detect_all_patterns(ticker, trust["total_score"], price_data, fundamentals)
+    verdict = get_verdict(ticker, trust["total_score"], patterns, price_data, fundamentals)
+    history = get_stock_history(ticker)
+
+    india_signals = {}
+    if is_indian_stock(ticker):
+        india_signals = get_india_signals(ticker)
+
+    return {
+        "ticker": ticker,
+        "price_data": price_data,
+        "fundamentals": fundamentals,
+        "trust": trust,
+        "analyst": analyst,
+        "verdict": verdict,
+        "history": history,
+        "india_signals": india_signals,
+    }
 
 
 @app.get("/api/stock/{ticker}/verdict")

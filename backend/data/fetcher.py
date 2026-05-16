@@ -178,6 +178,8 @@ def get_fundamentals(ticker: str) -> dict:
             "earnings_history": earnings_history,
             "next_earnings_date": next_earnings,
             "gaap_profitable": profit_margins > 0,
+            "w52_high": info.get("fiftyTwoWeekHigh"),
+            "w52_low": info.get("fiftyTwoWeekLow"),
         }
         cache_set(key, result)
         return result
@@ -280,9 +282,70 @@ def get_analyst_data(ticker: str) -> dict:
             "target_high": info.get("targetHighPrice"),
             "target_low": info.get("targetLowPrice"),
             "buy_count": info.get("numberOfAnalystOpinions", 0),
+            "hold_count": 0,
+            "sell_count": 0,
             "recommendation": info.get("recommendationKey", "hold"),
+        }
+        # Try to get buy/hold/sell breakdown from recommendations
+        try:
+            recs = t.recommendations
+            if recs is not None and not recs.empty:
+                recent = recs.tail(1)
+                buy = 0
+                hold = 0
+                sell = 0
+                for col in recent.columns:
+                    val = int(recent[col].iloc[0] or 0)
+                    cl = col.lower()
+                    if "strong_buy" in cl or "strongbuy" in cl or cl == "buy":
+                        buy += val
+                    elif "hold" in cl or "neutral" in cl:
+                        hold += val
+                    elif "sell" in cl or "underperform" in cl or "underweight" in cl:
+                        sell += val
+                if buy + hold + sell > 0:
+                    result["buy_count"] = buy
+                    result["hold_count"] = hold
+                    result["sell_count"] = sell
+        except Exception:
+            pass
+        cache_set(key, result)
+        return result
+    except Exception:
+        return {"target_price": None, "recommendation": "hold",
+                "buy_count": 0, "hold_count": 0, "sell_count": 0}
+
+
+# ── STOCK HISTORY ─────────────────────────────────────────────────────────────
+
+def get_stock_history(ticker: str) -> dict:
+    """Returns performance % for 1W, 1M, 3M, 6M, 1Y timeframes."""
+    key = f"history:{ticker}"
+    cached = cache_get(key)
+    if cached:
+        return cached
+
+    try:
+        t = yf.Ticker(ticker)
+        hist = t.history(period="1y")
+        if hist.empty or len(hist) < 5:
+            return {"1W": 0, "1M": 0, "3M": 0, "6M": 0, "1Y": 0}
+
+        current = float(hist['Close'].iloc[-1])
+
+        def pct(days):
+            idx = max(0, len(hist) - days)
+            past = float(hist['Close'].iloc[idx])
+            return round((current - past) / past * 100, 1) if past else 0
+
+        result = {
+            "1W": pct(5),
+            "1M": pct(22),
+            "3M": pct(65),
+            "6M": pct(130),
+            "1Y": pct(min(252, len(hist) - 1)),
         }
         cache_set(key, result)
         return result
     except Exception:
-        return {"target_price": None, "recommendation": "hold"}
+        return {"1W": 0, "1M": 0, "3M": 0, "6M": 0, "1Y": 0}

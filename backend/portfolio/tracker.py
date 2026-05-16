@@ -122,6 +122,7 @@ def get_watchlist_with_signals() -> list:
             "wl_group": wl_group,
             "signal": signal,
             "added_at": item.get("added_at"),
+            "market": item.get("market", "US"),
         })
 
     return result
