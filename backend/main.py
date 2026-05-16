@@ -43,7 +43,6 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     init_db()
-    _seed_demo_data()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
