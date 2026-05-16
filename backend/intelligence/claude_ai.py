@@ -54,7 +54,7 @@ Earnings Surprise: {fundamentals.get('earnings_surprise_pct', 0) or 0:.0f}%
 Give a plain English verdict following the system rules."""
 
         msg = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-6",
             max_tokens=500,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
@@ -92,7 +92,7 @@ should do RIGHT NOW. No jargon. Specific to their situation.
 Include a specific stop loss or exit condition."""
 
         msg = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-6",
             max_tokens=300,
             system=STRATEGY_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
