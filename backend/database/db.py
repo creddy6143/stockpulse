@@ -258,3 +258,13 @@ def get_market_value(key):
     row = conn.execute("SELECT * FROM market_cache WHERE key=?", (key,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def clear_all_data():
+    conn = get_connection()
+    conn.execute("DELETE FROM portfolio")
+    conn.execute("DELETE FROM watchlist")
+    conn.execute("DELETE FROM signals")
+    conn.execute("DELETE FROM alerts")
+    conn.commit()
+    conn.close()

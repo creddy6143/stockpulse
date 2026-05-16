@@ -349,3 +349,22 @@ def get_stock_history(ticker: str) -> dict:
         return result
     except Exception:
         return {"1W": 0, "1M": 0, "3M": 0, "6M": 0, "1Y": 0}
+
+
+def search_ticker(query: str) -> list:
+    """Search for tickers by name or symbol using Finnhub."""
+    key = f"search:{query.lower()[:20]}"
+    cached = cache_get(key)
+    if cached is not None:
+        return cached
+    fh = _finnhub()
+    if fh:
+        try:
+            res = fh.symbol_search(query)
+            items = res.get("result", [])[:8]
+            result = [{"ticker": r.get("symbol",""), "name": r.get("description","")} for r in items if r.get("symbol")]
+            cache_set(key, result)
+            return result
+        except Exception:
+            pass
+    return []

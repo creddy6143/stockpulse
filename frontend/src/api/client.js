@@ -87,3 +87,5 @@ export const getHealth = () => request('/api/health');
 // ── EARNINGS ─────────────────────────────────────────────────────────────────
 
 export const getEarnings = () => request('/api/earnings');
+export const searchTicker = (q) => request(`/api/search?q=${encodeURIComponent(q)}`);
+export const clearAllPortfolio = () => request('/api/portfolio/all', { method: 'DELETE' });

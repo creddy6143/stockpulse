@@ -212,9 +212,12 @@ const mapPosition = (pos, earningsByTicker) => {
     else verdict = `Trust score ${pos.trust_score}/100 — ${pos.grade}. Hold and monitor.`;
   }
   return {
-    ticker: pos.ticker, flag, price: pos.current_price, change: pos.change_pct,
+    id: pos.id, ticker: pos.ticker, flag, price: pos.current_price, change: pos.change_pct,
     name: pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
-    rec, rcls, trust: pos.trust_score, verdict,
+    rec, rcls, trust: pos.trust_score, grade: pos.grade,
+    pnl: pos.pnl || 0, pnl_pct: pos.pnl_pct || 0,
+    currency: pos.currency || "USD", market: pos.market || "US",
+    verdict,
     earn: (earningsByTicker || {})[pos.ticker] || "—",
     auto_disqualified: pos.auto_disqualified,
   };

@@ -53,6 +53,17 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
+# ── SEARCH ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+def search_stocks(q: str = ""):
+    """Search tickers by name or symbol."""
+    if len(q.strip()) < 2:
+        return []
+    from data.fetcher import search_ticker
+    return search_ticker(q.strip())
+
+
 # ── MARKET ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/market")
@@ -104,6 +115,13 @@ def update_portfolio(pos_id: int, req: UpdatePositionRequest):
 def delete_portfolio(pos_id: int):
     db.delete_position(pos_id)
     return {"status": "deleted"}
+
+
+@app.delete("/api/portfolio/all")
+def clear_all_portfolio():
+    """Remove all portfolio positions and watchlist entries."""
+    db.clear_all_data()
+    return {"status": "cleared"}
 
 
 # ── WATCHLIST ────────────────────────────────────────────────────────────────
@@ -431,7 +449,9 @@ def _detect_wl_situation(item: dict, market_data: dict) -> Optional[dict]:
 
 
 def _seed_demo_data():
-    """Seeds demo portfolio data if database is empty."""
+    """Seeds demo portfolio data only when SEED_DEMO_DATA=true env var is set."""
+    if os.getenv("SEED_DEMO_DATA", "").lower() != "true":
+        return
     existing = db.get_portfolio()
     if existing:
         return
