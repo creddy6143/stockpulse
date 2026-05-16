@@ -149,15 +149,17 @@ def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 500) ->
     if not key:
         return None
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=system_prompt,
-        )
-        response = model.generate_content(
-            user_prompt,
-            generation_config={"max_output_tokens": max_tokens, "temperature": 0.3},
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=max_tokens,
+                temperature=0.3,
+            ),
         )
         return response.text.strip()
     except Exception:
