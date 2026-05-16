@@ -1,4 +1,13 @@
-"""Data fetcher — uses Yahoo Finance v8 chart API directly (bypasses rate limiting)."""
+"""Data fetcher.
+
+Primary sources (no Yahoo Finance dependency):
+  - Stock prices:   Finnhub quote()
+  - Forex rates:    Frankfurter.app (ECB rates, free, no key)
+  - Market indices: Finnhub ETF proxies (SPY, QQQ, EWG, INDA, VXX)
+
+Fallback:
+  - Yahoo Finance v8 chart API (works on fresh IPs; used for non-US tickers)
+"""
 import os
 import requests
 import finnhub
@@ -8,12 +17,11 @@ from .cache import cache_get, cache_set
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 _fh_client = None
 
-# Mimic a real browser to avoid Yahoo Finance 429s on v8 chart endpoint
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json",
     "Accept-Language": "en-US,en;q=0.9",
@@ -28,20 +36,16 @@ def _finnhub():
 
 
 def _yf_chart(symbol: str) -> dict:
-    """Fetch price meta from Yahoo Finance v8 chart API.
-    Works reliably even when yfinance .info hits 429 rate limits.
-    Returns the 'meta' dict from the chart response, or {} on failure.
-    """
+    """Yahoo Finance v8 chart API fallback — works on Railway's fresh IP."""
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        f"?range=1d&interval=5m"
+        "?range=1d&interval=5m"
     )
     try:
         r = requests.get(url, headers=_HEADERS, timeout=10)
         if r.status_code != 200:
             return {}
-        data = r.json()
-        results = data.get("chart", {}).get("result")
+        results = r.json().get("chart", {}).get("result")
         if not results:
             return {}
         return results[0].get("meta", {})
@@ -49,12 +53,29 @@ def _yf_chart(symbol: str) -> dict:
         return {}
 
 
+def _is_us_stock(ticker: str) -> bool:
+    return "." not in ticker
+
+
+def _finnhub_symbol(ticker: str) -> str | None:
+    """Convert ticker to Finnhub-compatible symbol."""
+    if _is_us_stock(ticker):
+        return ticker
+    if ticker.endswith(".NS"):
+        return "NSE:" + ticker[:-3]
+    if ticker.endswith(".BO"):
+        return "BSE:" + ticker[:-3]
+    # European stocks — strip suffix and try (works for many)
+    return ticker.rsplit(".", 1)[0]
+
+
 # ── EXCHANGE RATES ────────────────────────────────────────────────────────────
 
 def get_exchange_rates() -> dict:
-    """Returns live SEK per 1 unit of each major currency.
-    INRSEK is derived from USDSEK / USDINR (INRSEK=X returns 404 on Yahoo).
-    Cached 15 minutes. Falls back to sensible defaults if live fetch fails.
+    """Live SEK per 1 unit of each currency.
+    Primary: Frankfurter.app (ECB-based, free, no key, no rate limiting).
+    Fallback: hardcoded sensible defaults.
+    Cached 15 minutes.
     """
     key = "exchange_rates"
     cached = cache_get(key)
@@ -63,25 +84,26 @@ def get_exchange_rates() -> dict:
 
     rates = {"USDSEK": 10.4, "EURSEK": 11.2, "INRSEK": 0.124, "GBPSEK": 13.2}
 
-    for rate_key, symbol in [
-        ("USDSEK", "USDSEK=X"),
-        ("EURSEK", "EURSEK=X"),
-        ("GBPSEK", "GBPSEK=X"),
-    ]:
-        try:
-            meta = _yf_chart(symbol)
-            price = float(meta.get("regularMarketPrice") or 0)
-            if price > 0:
-                rates[rate_key] = round(price, 6)
-        except Exception:
-            pass
-
-    # INRSEK=X returns 404 on Yahoo — derive from USDINR=X
     try:
-        meta = _yf_chart("USDINR=X")
-        usdinr = float(meta.get("regularMarketPrice") or 0)
-        if usdinr > 0:
-            rates["INRSEK"] = round(rates["USDSEK"] / usdinr, 6)
+        r = requests.get(
+            "https://api.frankfurter.app/latest?from=USD&to=SEK,EUR,GBP,INR",
+            timeout=8,
+        )
+        if r.status_code == 200:
+            data = r.json().get("rates", {})
+            usd_to_sek = float(data.get("SEK", rates["USDSEK"]))
+            usd_to_inr = float(data.get("INR", 0))
+            usd_to_eur = float(data.get("EUR", 0))
+            usd_to_gbp = float(data.get("GBP", 0))
+
+            rates["USDSEK"] = round(usd_to_sek, 4)
+            if usd_to_inr > 0:
+                rates["INRSEK"] = round(usd_to_sek / usd_to_inr, 6)
+            # EUR and GBP per SEK: EUR→SEK = SEK/USD ÷ EUR/USD
+            if usd_to_eur > 0:
+                rates["EURSEK"] = round(usd_to_sek / usd_to_eur, 4)
+            if usd_to_gbp > 0:
+                rates["GBPSEK"] = round(usd_to_sek / usd_to_gbp, 4)
     except Exception:
         pass
 
@@ -92,83 +114,121 @@ def get_exchange_rates() -> dict:
 # ── PRICE DATA ────────────────────────────────────────────────────────────────
 
 def get_stock_price(ticker: str) -> dict:
-    """Returns current price, change %, volume for a ticker."""
+    """Returns current price, change %, volume for a ticker.
+    Primary: Finnhub quote().
+    Fallback: Yahoo Finance v8 chart.
+    """
     key = f"price:{ticker}"
     cached = cache_get(key)
     if cached:
         return cached
 
+    fh = _finnhub()
+    fh_sym = _finnhub_symbol(ticker)
+
+    # Primary: Finnhub
+    if fh and fh_sym:
+        try:
+            q = fh.quote(fh_sym)
+            price = float(q.get("c") or 0)
+            if price > 0:
+                prev = float(q.get("pc") or price)
+                change_pct = float(q.get("dp") or 0)
+                result = {
+                    "ticker": ticker,
+                    "price": round(price, 4),
+                    "change_pct": round(change_pct, 2),
+                    "volume": 0,
+                    "prev_close": round(prev, 4),
+                    "currency": _detect_currency(ticker),
+                    "name": ticker,
+                    "market_cap": None,
+                    "sector": None,
+                    "industry": None,
+                }
+                cache_set(key, result)
+                return result
+        except Exception:
+            pass
+
+    # Fallback: Yahoo v8 chart
     try:
         meta = _yf_chart(ticker)
-        if not meta:
-            return {"ticker": ticker, "price": 0, "change_pct": 0, "volume": 0}
+        if meta:
+            price = float(meta.get("regularMarketPrice") or 0)
+            prev = float(meta.get("chartPreviousClose") or meta.get("previousClose") or price)
+            change_pct = ((price - prev) / prev * 100) if prev else 0
+            if price > 0:
+                result = {
+                    "ticker": ticker,
+                    "price": round(price, 4),
+                    "change_pct": round(change_pct, 2),
+                    "volume": int(meta.get("regularMarketVolume") or 0),
+                    "prev_close": round(prev, 4),
+                    "currency": meta.get("currency") or _detect_currency(ticker),
+                    "name": meta.get("shortName") or meta.get("longName") or ticker,
+                    "market_cap": None,
+                    "sector": None,
+                    "industry": None,
+                }
+                cache_set(key, result)
+                return result
+    except Exception:
+        pass
 
-        price = float(meta.get("regularMarketPrice") or 0)
-        prev = float(
-            meta.get("chartPreviousClose")
-            or meta.get("previousClose")
-            or price
-        )
-        change_pct = ((price - prev) / prev * 100) if prev else 0
+    return {"ticker": ticker, "price": 0, "change_pct": 0, "volume": 0}
 
-        result = {
-            "ticker": ticker,
-            "price": round(price, 4),
-            "change_pct": round(change_pct, 2),
-            "volume": int(meta.get("regularMarketVolume") or 0),
-            "prev_close": round(prev, 4),
-            "currency": meta.get("currency", "USD"),
-            "name": meta.get("shortName") or meta.get("longName") or ticker,
-            "market_cap": None,
-            "sector": None,
-            "industry": None,
-        }
-        if price > 0:
-            cache_set(key, result)
-        return result
-    except Exception as e:
-        return {
-            "ticker": ticker, "price": 0, "change_pct": 0,
-            "volume": 0, "error": str(e),
-        }
+
+def _detect_currency(ticker: str) -> str:
+    if ticker.endswith(".NS") or ticker.endswith(".BO"):
+        return "INR"
+    if ticker.endswith(".ST"):
+        return "SEK"
+    if any(ticker.endswith(s) for s in (".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR")):
+        return "EUR"
+    if ticker.endswith(".L"):
+        return "GBP"
+    return "USD"
 
 
 def get_market_data() -> dict:
-    """Returns VIX + 4 major market indices."""
+    """Returns VIX proxy + 4 major market indices via Finnhub ETF proxies.
+    VIX: VXX (VIX futures ETF) — VXX/1.5 ≈ actual VIX level.
+    S&P 500: SPY, Nasdaq: QQQ, DAX: EWG, Nifty: INDA.
+    """
     key = "market_data"
     cached = cache_get(key)
     if cached:
         return cached
 
-    indices = {
-        "vix":    "^VIX",
-        "sp500":  "^GSPC",
-        "nasdaq": "^IXIC",
-        "dax":    "^GDAXI",
-        "nifty":  "^NSEI",
-    }
+    fh = _finnhub()
+    # ETF proxies: (internal key, Finnhub symbol, divisor for display)
+    proxies = [
+        ("vix",    "VXX",  1.5),   # VXX/1.5 ≈ VIX level
+        ("sp500",  "SPY",  1.0),
+        ("nasdaq", "QQQ",  1.0),
+        ("dax",    "EWG",  1.0),
+        ("nifty",  "INDA", 1.0),
+    ]
     result = {}
-    for name, sym in indices.items():
+    for name, sym, divisor in proxies:
         try:
-            meta = _yf_chart(sym)
-            price = float(meta.get("regularMarketPrice") or 0)
-            prev = float(
-                meta.get("chartPreviousClose")
-                or meta.get("previousClose")
-                or price
-            )
-            chg = ((price - prev) / prev * 100) if prev else 0
-            result[name] = {"price": round(price, 2), "change_pct": round(chg, 2)}
+            q = fh.quote(sym) if fh else {}
+            price = float(q.get("c") or 0)
+            change_pct = float(q.get("dp") or 0)
+            display_price = round(price / divisor, 2) if price else 0
+            result[name] = {"price": display_price, "change_pct": round(change_pct, 2)}
         except Exception:
             result[name] = {"price": 0, "change_pct": 0}
 
-    vix_price = result.get("vix", {}).get("price", 15)
-    if vix_price < 15:
-        status = {"label": "Market Calm", "dot": "calm", "color": "green"}
-    elif vix_price < 25:
+    # Market status based on derived VIX level (VXX / 1.5)
+    vix_level = result.get("vix", {}).get("price", 15)
+    if vix_level < 15:
+        status = {"label": "Market Calm",   "dot": "calm",   "color": "green"}
+    elif vix_level < 25:
         status = {"label": "Market Choppy", "dot": "choppy", "color": "amber"}
     else:
-        status = {"label": "Market Alert", "dot": "alert", "color": "rose"}
+        status = {"label": "Market Alert",  "dot": "alert",  "color": "rose"}
 
     result["status"] = status
     cache_set(key, result)
@@ -178,9 +238,7 @@ def get_market_data() -> dict:
 # ── FUNDAMENTALS ──────────────────────────────────────────────────────────────
 
 def get_fundamentals(ticker: str) -> dict:
-    """Returns revenue growth, earnings, profitability signals.
-    Uses Finnhub company_basic_financials as primary source.
-    """
+    """Revenue growth, earnings, profitability from Finnhub company_basic_financials."""
     key = f"fundamentals:{ticker}"
     cached = cache_get(key)
     if cached:
@@ -188,13 +246,13 @@ def get_fundamentals(ticker: str) -> dict:
 
     result = {
         "ticker": ticker,
-        "revenue_growth": 0,
-        "earnings_growth": 0,
-        "profit_margins": 0,
-        "gross_margins": 0,
+        "revenue_growth": 0.0,
+        "earnings_growth": 0.0,
+        "profit_margins": 0.0,
+        "gross_margins": 0.0,
         "pe_ratio": None,
         "forward_pe": None,
-        "debt_to_equity": 0,
+        "debt_to_equity": 0.0,
         "current_ratio": None,
         "free_cashflow": 0,
         "total_cash": 0,
@@ -210,71 +268,69 @@ def get_fundamentals(ticker: str) -> dict:
     }
 
     fh = _finnhub()
-    # Clean ticker for Finnhub (no exchange suffixes)
-    clean = ticker.replace(".NS", "").replace(".BO", "").replace(".ST", "")
-    clean = clean.replace(".AS", "").replace(".DE", "").replace(".L", "")
+    if not fh:
+        return result
 
-    if fh:
+    # Strip exchange suffix for Finnhub
+    clean = ticker
+    for suffix in (".NS", ".BO", ".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
+        clean = clean.replace(suffix, "")
+
+    try:
+        bf = fh.company_basic_financials(clean, "all")
+        m = (bf or {}).get("metric", {})
+        if m:
+            # Finnhub returns these values in PERCENTAGE form (e.g. 65.47 means 65.47%)
+            rev = float(m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y") or 0)
+            result["revenue_growth"] = round(rev / 100, 4)
+
+            margin = float(m.get("netProfitMarginTTM") or 0)
+            result["profit_margins"] = round(margin / 100, 4)
+            result["gaap_profitable"] = margin > 0
+
+            gross = float(m.get("grossMarginTTM") or 0)
+            result["gross_margins"] = round(gross / 100, 4)
+
+            pe = m.get("peNormalizedAnnual") or m.get("peTTM")
+            result["pe_ratio"] = round(float(pe), 2) if pe else None
+
+            curr = m.get("currentRatioAnnual")
+            result["current_ratio"] = round(float(curr), 2) if curr else None
+
+            mktcap = m.get("marketCapitalization")
+            result["market_cap"] = int(float(mktcap) * 1_000_000) if mktcap else 0
+
+            result["w52_high"] = float(m["52WeekHigh"]) if m.get("52WeekHigh") else None
+            result["w52_low"]  = float(m["52WeekLow"])  if m.get("52WeekLow")  else None
+    except Exception:
+        pass
+
+    # Earnings history + surprise (US & EU only)
+    if not ticker.endswith((".NS", ".BO")):
         try:
-            bf = fh.company_basic_financials(clean, "all")
-            metric = bf.get("metric", {}) if bf else {}
-            if metric:
-                # Revenue growth — Finnhub returns in % form (e.g. 122 = 122%)
-                rev = metric.get("revenueGrowthTTMYoy") or metric.get("revenueGrowth5Y") or 0
-                result["revenue_growth"] = round(float(rev) / 100, 4)
-
-                # Profit margins in % form
-                margin = metric.get("netProfitMarginTTM") or 0
-                result["profit_margins"] = round(float(margin) / 100, 4)
-                result["gaap_profitable"] = result["profit_margins"] > 0
-
-                gross = metric.get("grossMarginTTM") or 0
-                result["gross_margins"] = round(float(gross) / 100, 4)
-
-                pe = metric.get("peNormalizedAnnual") or metric.get("peTTM")
-                result["pe_ratio"] = round(float(pe), 2) if pe else None
-
-                curr_ratio = metric.get("currentRatioAnnual")
-                result["current_ratio"] = round(float(curr_ratio), 2) if curr_ratio else None
-
-                mktcap = metric.get("marketCapitalization")
-                result["market_cap"] = int(float(mktcap) * 1_000_000) if mktcap else 0
-
-                w52h = metric.get("52WeekHigh")
-                w52l = metric.get("52WeekLow")
-                result["w52_high"] = float(w52h) if w52h else None
-                result["w52_low"] = float(w52l) if w52l else None
+            eq = fh.company_earnings(clean, limit=8)
+            if eq:
+                result["earnings_history"] = eq[:4]
+                last = eq[0]
+                est = last.get("estimate")
+                act = last.get("actual")
+                if est and act is not None and est != 0:
+                    result["earnings_surprise_pct"] = round(
+                        (act - est) / abs(est) * 100, 1
+                    )
         except Exception:
             pass
 
-        # Earnings surprise + history (US & EU only)
-        if not ticker.endswith((".NS", ".BO")):
-            try:
-                eq = fh.company_earnings(clean, limit=8)
-                if eq:
-                    result["earnings_history"] = eq[:4]
-                    last = eq[0]
-                    est = last.get("estimate")
-                    act = last.get("actual")
-                    if est and act is not None and est != 0:
-                        result["earnings_surprise_pct"] = round(
-                            (act - est) / abs(est) * 100, 1
-                        )
-            except Exception:
-                pass
-
-            # Next earnings date
-            try:
-                today_str = datetime.now().strftime("%Y-%m-%d")
-                ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-                cal = fh.earnings_calendar(
-                    symbol=clean, from_=today_str, to=ninety_str
-                )
-                cal_list = (cal or {}).get("earningsCalendar", [])
-                if cal_list:
-                    result["next_earnings_date"] = cal_list[0].get("date")
-            except Exception:
-                pass
+        # Next earnings date
+        try:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+            cal = fh.earnings_calendar(symbol=clean, from_=today_str, to=ninety_str)
+            cal_list = (cal or {}).get("earningsCalendar", [])
+            if cal_list:
+                result["next_earnings_date"] = cal_list[0].get("date")
+        except Exception:
+            pass
 
     cache_set(key, result)
     return result
@@ -283,7 +339,7 @@ def get_fundamentals(ticker: str) -> dict:
 # ── INSIDER / INSTITUTIONAL ───────────────────────────────────────────────────
 
 def get_insider_data(ticker: str) -> dict:
-    """Returns insider buy/sell signals and institutional data (Finnhub only)."""
+    """Insider buy/sell signals and institutional data from Finnhub."""
     key = f"insider:{ticker}"
     cached = cache_get(key)
     if cached:
@@ -302,10 +358,10 @@ def get_insider_data(ticker: str) -> dict:
         cache_set(key, result)
         return result
 
-    clean = ticker.replace(".ST", "").replace(".AS", "").replace(".DE", "")
-    clean = clean.replace(".L", "").replace(".NS", "").replace(".BO", "")
+    clean = ticker
+    for suffix in (".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
+        clean = clean.replace(suffix, "")
 
-    # Insider transactions (last 90 days)
     try:
         cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
         today = datetime.now().strftime("%Y-%m-%d")
@@ -325,17 +381,15 @@ def get_insider_data(ticker: str) -> dict:
     except Exception:
         pass
 
-    # Short interest from Finnhub basic financials
     try:
         bf = fh.company_basic_financials(clean, "all")
-        metric = (bf or {}).get("metric", {})
-        short_pct = metric.get("shortInterestSharesOutstanding")
+        m = (bf or {}).get("metric", {})
+        short_pct = m.get("shortInterestSharesOutstanding")
         if short_pct:
             result["short_interest_pct"] = round(float(short_pct) * 100, 1)
     except Exception:
         pass
 
-    # Institutional ownership from Finnhub
     try:
         own = fh.ownership(clean, limit=10)
         holders = (own or {}).get("ownership", [])
@@ -352,7 +406,7 @@ def get_insider_data(ticker: str) -> dict:
 # ── NEWS ──────────────────────────────────────────────────────────────────────
 
 def get_news(ticker: str, days: int = 7) -> list:
-    """Returns recent news headlines for a ticker."""
+    """Recent news headlines from Finnhub."""
     key = f"news:{ticker}:{days}"
     cached = cache_get(key)
     if cached:
@@ -377,19 +431,15 @@ def get_news(ticker: str, days: int = 7) -> list:
 # ── ANALYST DATA ──────────────────────────────────────────────────────────────
 
 def get_analyst_data(ticker: str) -> dict:
-    """Returns analyst ratings and price target from Finnhub."""
+    """Analyst ratings and price target from Finnhub."""
     key = f"analyst:{ticker}"
     cached = cache_get(key)
     if cached:
         return cached
 
     result = {
-        "target_price": None,
-        "target_high": None,
-        "target_low": None,
-        "buy_count": 0,
-        "hold_count": 0,
-        "sell_count": 0,
+        "target_price": None, "target_high": None, "target_low": None,
+        "buy_count": 0, "hold_count": 0, "sell_count": 0,
         "recommendation": "hold",
     }
 
@@ -398,15 +448,16 @@ def get_analyst_data(ticker: str) -> dict:
         cache_set(key, result)
         return result
 
-    clean = ticker.replace(".ST", "").replace(".AS", "").replace(".DE", "")
-    clean = clean.replace(".L", "")
+    clean = ticker
+    for suffix in (".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
+        clean = clean.replace(suffix, "")
 
     try:
         pt = fh.price_target(clean)
         if pt:
             result["target_price"] = pt.get("targetMean")
-            result["target_high"] = pt.get("targetHigh")
-            result["target_low"] = pt.get("targetLow")
+            result["target_high"]  = pt.get("targetHigh")
+            result["target_low"]   = pt.get("targetLow")
     except Exception:
         pass
 
@@ -414,12 +465,10 @@ def get_analyst_data(ticker: str) -> dict:
         recs = fh.recommendation_trends(clean)
         if recs and len(recs) > 0:
             latest = recs[0]
-            buy = (latest.get("strongBuy") or 0) + (latest.get("buy") or 0)
+            buy  = (latest.get("strongBuy") or 0) + (latest.get("buy") or 0)
             hold = latest.get("hold") or 0
             sell = (latest.get("strongSell") or 0) + (latest.get("sell") or 0)
-            result["buy_count"] = buy
-            result["hold_count"] = hold
-            result["sell_count"] = sell
+            result.update({"buy_count": buy, "hold_count": hold, "sell_count": sell})
             total = buy + hold + sell
             if total > 0:
                 if buy / total > 0.60:
@@ -436,7 +485,7 @@ def get_analyst_data(ticker: str) -> dict:
 # ── STOCK HISTORY ─────────────────────────────────────────────────────────────
 
 def get_stock_history(ticker: str) -> dict:
-    """Returns performance % for 1W, 1M, 3M, 6M, 1Y timeframes."""
+    """Performance % for 1W, 1M, 3M, 6M, 1Y via Yahoo v8 chart (1y range)."""
     key = f"history:{ticker}"
     cached = cache_get(key)
     if cached:
@@ -446,19 +495,17 @@ def get_stock_history(ticker: str) -> dict:
     try:
         url = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-            f"?range=1y&interval=1d"
+            "?range=1y&interval=1d"
         )
         r = requests.get(url, headers=_HEADERS, timeout=15)
         if r.status_code != 200:
             return empty
-        data = r.json()
-        results = data.get("chart", {}).get("result")
+        results = r.json().get("chart", {}).get("result")
         if not results:
             return empty
 
         closes = (
-            results[0]
-            .get("indicators", {})
+            results[0].get("indicators", {})
             .get("quote", [{}])[0]
             .get("close", [])
         )
@@ -474,11 +521,8 @@ def get_stock_history(ticker: str) -> dict:
             return round((current - past) / past * 100, 1) if past else 0
 
         result = {
-            "1W": pct(5),
-            "1M": pct(22),
-            "3M": pct(65),
-            "6M": pct(130),
-            "1Y": pct(min(252, len(closes) - 1)),
+            "1W": pct(5), "1M": pct(22), "3M": pct(65),
+            "6M": pct(130), "1Y": pct(min(252, len(closes) - 1)),
         }
         cache_set(key, result)
         return result
@@ -486,8 +530,10 @@ def get_stock_history(ticker: str) -> dict:
         return empty
 
 
+# ── TICKER SEARCH ─────────────────────────────────────────────────────────────
+
 def search_ticker(query: str) -> list:
-    """Search for tickers by name or symbol. Yahoo Finance first, Finnhub as supplement."""
+    """Search for tickers. Yahoo Finance search first, Finnhub as supplement."""
     key = f"search:{query.lower()[:20]}"
     cached = cache_get(key)
     if cached is not None:
@@ -495,22 +541,16 @@ def search_ticker(query: str) -> list:
 
     result = []
 
-    # Primary: Yahoo Finance search API (no auth required)
     try:
         url = "https://query2.finance.yahoo.com/v1/finance/search"
-        params = {
-            "q": query, "quotesCount": 8,
-            "newsCount": 0, "enableFuzzyQuery": True,
-        }
+        params = {"q": query, "quotesCount": 8, "newsCount": 0, "enableFuzzyQuery": True}
         r = requests.get(url, params=params, headers=_HEADERS, timeout=5)
         if r.status_code == 200:
             quotes = r.json().get("quotes", [])
             result = [
                 {
                     "ticker": q.get("symbol", ""),
-                    "name": (
-                        q.get("shortname") or q.get("longname") or q.get("symbol", "")
-                    ),
+                    "name": q.get("shortname") or q.get("longname") or q.get("symbol", ""),
                 }
                 for q in quotes
                 if q.get("symbol") and q.get("quoteType") in ("EQUITY", "ETF")
@@ -518,7 +558,6 @@ def search_ticker(query: str) -> list:
     except Exception:
         pass
 
-    # Supplement: Finnhub symbol search
     if len(result) < 4:
         fh = _finnhub()
         if fh:
@@ -528,10 +567,7 @@ def search_ticker(query: str) -> list:
                 for item in (res or {}).get("result", [])[:8]:
                     sym = item.get("symbol", "")
                     if sym and sym not in existing:
-                        result.append({
-                            "ticker": sym,
-                            "name": item.get("description", ""),
-                        })
+                        result.append({"ticker": sym, "name": item.get("description", "")})
                         existing.add(sym)
                 result = result[:8]
             except Exception:
