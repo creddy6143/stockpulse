@@ -352,19 +352,50 @@ def get_stock_history(ticker: str) -> dict:
 
 
 def search_ticker(query: str) -> list:
-    """Search for tickers by name or symbol using Finnhub."""
+    """Search for tickers by name or symbol. Yahoo Finance first, Finnhub as supplement."""
+    import requests as req
     key = f"search:{query.lower()[:20]}"
     cached = cache_get(key)
-    if cached is not None:
+    if cached is not None:  # only returned when non-empty (see below)
         return cached
-    fh = _finnhub()
-    if fh:
-        try:
-            res = fh.symbol_search(query)
-            items = res.get("result", [])[:8]
-            result = [{"ticker": r.get("symbol",""), "name": r.get("description","")} for r in items if r.get("symbol")]
-            cache_set(key, result)
-            return result
-        except Exception:
-            pass
-    return []
+
+    result = []
+
+    # ── Primary: Yahoo Finance (no API key, searches by name AND symbol) ──────
+    try:
+        url = "https://query2.finance.yahoo.com/v1/finance/search"
+        params = {"q": query, "quotesCount": 8, "newsCount": 0, "enableFuzzyQuery": True}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = req.get(url, params=params, headers=headers, timeout=5)
+        if r.status_code == 200:
+            quotes = r.json().get("quotes", [])
+            result = [
+                {
+                    "ticker": q.get("symbol", ""),
+                    "name": q.get("shortname") or q.get("longname") or q.get("symbol", ""),
+                }
+                for q in quotes
+                if q.get("symbol") and q.get("quoteType") in ("EQUITY", "ETF")
+            ][:8]
+    except Exception:
+        pass
+
+    # ── Supplement: Finnhub (adds results if we have few from Yahoo) ──────────
+    if len(result) < 4:
+        fh = _finnhub()
+        if fh:
+            try:
+                res = fh.symbol_search(query)
+                existing = {r["ticker"] for r in result}
+                for item in res.get("result", [])[:8]:
+                    sym = item.get("symbol", "")
+                    if sym and sym not in existing:
+                        result.append({"ticker": sym, "name": item.get("description", "")})
+                        existing.add(sym)
+                result = result[:8]
+            except Exception:
+                pass
+
+    if result:  # never cache empty results — retry on next keystroke
+        cache_set(key, result)
+    return result
