@@ -52,6 +52,13 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
+@app.delete("/api/reset")
+def reset_all_data():
+    """Clear all portfolio, watchlist, signals and alerts."""
+    db.clear_all_data()
+    return {"status": "cleared"}
+
+
 # ── SEARCH ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/search")
