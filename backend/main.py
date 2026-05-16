@@ -61,6 +61,13 @@ def reset_all_data():
 
 # ── SEARCH ───────────────────────────────────────────────────────────────────
 
+@app.get("/api/rates")
+def exchange_rates():
+    """Live exchange rates: SEK per 1 USD/EUR/INR. Cached 15 min."""
+    from data.fetcher import get_exchange_rates
+    return get_exchange_rates()
+
+
 @app.get("/api/search")
 def search_stocks(q: str = ""):
     """Search tickers by name or symbol."""
@@ -105,7 +112,8 @@ def add_portfolio(req: AddPositionRequest):
     ticker = req.ticker.upper()
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
-    currency = "INR" if is_indian_stock(ticker) else "USD" if not ticker.endswith(".DE") else "EUR"
+    from portfolio.tracker import _detect_currency
+    currency = _detect_currency(ticker)
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes)
     return {"status": "added", "ticker": ticker}
@@ -147,7 +155,8 @@ def add_watchlist(req: WatchlistRequest):
     ticker = req.ticker.upper()
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
-    currency = "INR" if is_indian_stock(ticker) else "USD"
+    from portfolio.tracker import _detect_currency
+    currency = _detect_currency(ticker)
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_to_watchlist(ticker, req.notes)
     return {"status": "added", "ticker": ticker}
@@ -400,7 +409,7 @@ def earnings():
 def _detect_market(ticker: str) -> str:
     if ticker.endswith(".NS") or ticker.endswith(".BO"):
         return "IN"
-    if ticker.endswith(".DE") or ticker.endswith(".AS") or ticker.endswith(".PA"):
+    if any(ticker.endswith(s) for s in [".DE", ".AS", ".PA", ".ST", ".F", ".MI", ".L", ".MC", ".BR"]):
         return "EU"
     return "US"
 

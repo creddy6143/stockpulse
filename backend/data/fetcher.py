@@ -16,6 +16,39 @@ def _finnhub():
     return _fh_client
 
 
+# ── EXCHANGE RATES ───────────────────────────────────────────────────────────
+
+def get_exchange_rates() -> dict:
+    """Returns live exchange rates: SEK per 1 unit of each currency.
+    Uses yfinance tickers: USDSEK=X, EURSEK=X, INRSEK=X.
+    Cached for 15 minutes. Falls back to sensible defaults.
+    """
+    key = "exchange_rates"
+    cached = cache_get(key)
+    if cached:
+        return cached
+
+    rates = {"USDSEK": 10.4, "EURSEK": 11.2, "INRSEK": 0.124, "GBPSEK": 13.2}
+
+    pairs = [
+        ("USDSEK", "USDSEK=X"),
+        ("EURSEK", "EURSEK=X"),
+        ("INRSEK", "INRSEK=X"),
+    ]
+    for rate_key, symbol in pairs:
+        try:
+            t = yf.Ticker(symbol)
+            info = t.info
+            price = info.get("regularMarketPrice") or info.get("previousClose") or 0
+            if price and float(price) > 0:
+                rates[rate_key] = round(float(price), 6)
+        except Exception:
+            pass
+
+    cache_set(key, rates)
+    return rates
+
+
 # ── PRICE DATA ───────────────────────────────────────────────────────────────
 
 def get_stock_price(ticker: str) -> dict:

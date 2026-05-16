@@ -198,7 +198,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
 const getFlag = (market, ticker) => {
   const t = ticker || "";
   if (market === "IN" || t.endsWith(".NS") || t.endsWith(".BO")) return "🇮🇳";
-  if (market === "EU" || t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA")) return "🇪🇺";
+  if (market === "EU" || t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".ST") || t.endsWith(".L") || t.endsWith(".F") || t.endsWith(".MI")) return "🇪🇺";
   return "🇺🇸";
 };
 const tc = s => s>=75?"#5b72f8":s>=60?"#d97706":s>=40?"#f59e0b":"#e11d48";
@@ -208,12 +208,17 @@ const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".
 const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : "$";
 const actionColor = a => a==="EXIT"||a==="WAIT"?"var(--rose)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber)":a==="BUY"||a==="STRONG BUY"?"var(--emerald)":"var(--indigo)";
 const actionBg = a => a==="EXIT"||a==="WAIT"?"var(--rose2)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber2)":a==="BUY"||a==="STRONG BUY"?"var(--emerald2)":"#eef2ff";
-const toSEK = (price, ticker, fxRates) => {
-  if (!fxRates || !price || typeof price !== "number") return null;
-  const sekRate = fxRates.SEK || 10.4;
-  if (isINR(ticker)) return price / (fxRates.INR || 83) * sekRate;
-  if (isEUR(ticker)) return price / (fxRates.EUR || 0.93) * sekRate;
-  return price * sekRate;
+// Swedish number format: 27 681 kr (space thousands separator)
+const fmtSEK = (n) => {
+  const abs = Math.round(Math.abs(n));
+  // Use sv-SE locale for correct space thousands separator
+  return abs.toLocaleString("sv-SE") + "\u00a0kr";
+};
+const fmtSEKCompact = (n) => {
+  const abs = Math.abs(n);
+  if (abs >= 1000000) return (abs/1000000).toFixed(2).replace(".",",") + "\u00a0Mkr";
+  if (abs >= 1000) return Math.round(abs/1000) + "\u00a0tkr";
+  return Math.round(abs).toLocaleString("sv-SE") + "\u00a0kr";
 };
 
 // ── MAPPING HELPERS ──────────────────────────────────
@@ -239,6 +244,9 @@ const mapPosition = (pos, earningsByTicker) => {
     name: pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
     rec, rcls, trust: pos.trust_score, grade: pos.grade,
     pnl: pos.pnl || 0, pnl_pct: pos.pnl_pct || 0,
+    value_sek: pos.value_sek || 0,
+    invested_sek: pos.invested_sek || 0,
+    pnl_sek: pos.pnl_sek || 0,
     currency: pos.currency || "USD", market: pos.market || "US",
     verdict,
     earn: (earningsByTicker || {})[pos.ticker] || "—",
@@ -828,22 +836,15 @@ function EarningsIntel({earnings, onClose}) {
 }
 
 // ── PORTFOLIO ARC ────────────────────────────────────
-function PortfolioArc({positions, summary, fxRates}) {
+function PortfolioArc({positions, summary}) {
   const s = summary || {};
-  const val = s.total_value || 0;
-  const invested = s.total_invested || 0;
-  const pnl = s.total_pnl || 0;
-  const pnlPct = invested > 0 ? (pnl / invested * 100) : 0;
-  const sekRate = (fxRates && fxRates.SEK) || 10.4;
-  const valSEK = val * sekRate;
-  const investedSEK = invested * sekRate;
-  const pnlSEK = pnl * sekRate;
-  const fmtSEK = (n) => {
-    const abs = Math.abs(n);
-    return abs >= 1000000 ? `kr${(abs/1000000).toFixed(2)}M` : abs >= 1000 ? `kr${Math.round(abs/1000)}k` : `kr${Math.round(abs)}`;
-  };
+  // Use backend-calculated SEK values directly
+  const valSEK = s.total_value_sek || 0;
+  const investedSEK = s.total_invested_sek || 0;
+  const pnlSEK = s.total_pnl_sek || 0;
+  const pnlPct = s.total_pnl_pct || 0;
   const size=120, stroke=10, r=size/2-stroke;
-  const circ=2*Math.PI*r, f=Math.min(invested > 0 ? val/invested : 0, 1)*circ;
+  const circ=2*Math.PI*r, f=Math.min(investedSEK > 0 ? valSEK/investedSEK : 0, 1)*circ;
   return (
     <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",padding:"13px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:14}}>
       <div style={{position:"relative",width:size,height:size,flexShrink:0}}>
@@ -854,8 +855,8 @@ function PortfolioArc({positions, summary, fxRates}) {
         </svg>
         <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
           <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5}}>Value</div>
-          <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--t1)",letterSpacing:-1,lineHeight:1}}>{fmtSEK(valSEK)}</div>
-          <div style={{fontFamily:"var(--mono)",fontSize:10,color:pnl>=0?"var(--emerald)":"var(--rose)",marginTop:2}}>{pnl>=0?"▲":"▼"}{Math.abs(pnlPct).toFixed(0)}%</div>
+          <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--t1)",letterSpacing:-1,lineHeight:1}}>{fmtSEKCompact(valSEK)}</div>
+          <div style={{fontFamily:"var(--mono)",fontSize:10,color:pnlSEK>=0?"var(--emerald)":"var(--rose)",marginTop:2}}>{pnlSEK>=0?"▲":"▼"}{Math.abs(pnlPct).toFixed(1)}%</div>
         </div>
       </div>
       <div style={{flex:1}}>
@@ -864,8 +865,8 @@ function PortfolioArc({positions, summary, fxRates}) {
           <span style={{fontSize:11,color:"var(--indigo)",fontWeight:500,cursor:"pointer"}}>View all →</span>
         </div>
         {[
-          {l:"Invested",v:fmtSEK(investedSEK),c:"var(--t2)"},
-          {l:"Total P&L",v:`${pnlSEK>=0?"+":"-"}${fmtSEK(pnlSEK)}`,c:pnl>=0?"var(--emerald)":"var(--rose)"},
+          {l:"Invested",v:fmtSEKCompact(investedSEK),c:"var(--t2)"},
+          {l:"Total P&L",v:`${pnlSEK>=0?"+":"-"}${fmtSEKCompact(pnlSEK)}`,c:pnlSEK>=0?"var(--emerald)":"var(--rose)"},
         ].map((s,i)=>(
           <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:5,borderTop:i>0?"1px solid rgba(15,23,42,.04)":"none"}}>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5}}>{s.l}</span>
@@ -894,7 +895,7 @@ function PortfolioArc({positions, summary, fxRates}) {
 }
 
 // ── HOME SCREEN ──────────────────────────────────────
-function HomeScreen({positions, summary, signals, earnings, market, onEarnings, fxRates}) {
+function HomeScreen({positions, summary, signals, earnings, market, onEarnings}) {
   const [sigOpen,setSigOpen] = useState(null);
   const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
   const vix = market?.vix?.price || 0;
@@ -910,7 +911,7 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings, 
   const sigList = signals && signals.length > 0 ? signals : [];
   return (
     <div className="pad" style={{paddingTop:12}}>
-      <PortfolioArc positions={positions} summary={summary} fxRates={fxRates}/>
+      <PortfolioArc positions={positions} summary={summary}/>
 
       {/* Earnings Watch card */}
       <div onClick={onEarnings} style={{background:"var(--white)",borderRadius:12,
@@ -1004,7 +1005,7 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings, 
 }
 
 // ── COMPACT TABLE ROW (portfolio) ────────────────────
-function CompactRow({s, dot, onDetail, onRemove, fxRates}) {
+function CompactRow({s, dot, onDetail, onRemove}) {
   const [open, setOpen] = useState(false);
   const [showScore, setShowScore] = useState(false);
   const c = tc(s.trust);
@@ -1013,7 +1014,11 @@ function CompactRow({s, dot, onDetail, onRemove, fxRates}) {
   const recColor = s.rec==="SELL"?"var(--rose)":s.rec==="BUY"?"var(--emerald)":"var(--amber)";
   const recBg = s.rec==="SELL"?"var(--rose2)":s.rec==="BUY"?"var(--emerald2)":"var(--amber2)";
   const recLabel = s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec;
-  const sekPrice = toSEK(s.price, s.ticker, fxRates);
+  // Use backend-provided SEK values — no frontend conversion needed
+  const valueSEK = s.value_sek || 0;
+  const priceSEK = s.shares > 0 ? valueSEK / s.shares : 0;
+  const pnlSEK = s.pnl_sek || 0;
+  const investedSEK = s.invested_sek || 0;
   return (
     <>
       {showScore && <ScoreDetail ticker={s.ticker} trust={s.trust} grade={tg(s.trust)} onClose={()=>setShowScore(false)}/>}
@@ -1029,24 +1034,23 @@ function CompactRow({s, dot, onDetail, onRemove, fxRates}) {
             <span style={{fontFamily:"var(--mono)",fontSize:8,color:s.change>=0?"var(--emerald)":"var(--rose)"}}>
               {s.change>=0?"▲":"▼"}{Math.abs(s.change).toFixed(1)}%
             </span>
-            {s.premarket&&<span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"#fff",background:"var(--rose)",padding:"1px 5px",borderRadius:3,animation:"pr 1.2s infinite"}}>PRE-MKT</span>}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,marginTop:1}}>
             <span style={{fontSize:9,color:"var(--t3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:90}}>{s.name}</span>
-            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{s.shares} units</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{s.shares} st</span>
           </div>
         </div>
         <div>
-          {sekPrice!=null ? (
+          {priceSEK > 0 ? (
             <>
               <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--t1)"}}>
-                kr{Math.round(sekPrice).toLocaleString()}
+                {fmtSEK(priceSEK)}
                 <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnlPos?"var(--emerald)":"var(--rose)",marginLeft:4}}>{pnlPos?"+":""}{pnlPct.toFixed(1)}%</span>
               </div>
               <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
                 {cu(s.ticker)}{typeof s.price==="number"?s.price.toFixed(2):s.price}
                 <span style={{color:pnlPos?"var(--emerald)":"var(--rose)",marginLeft:3}}>
-                  · {pnlPos?"+":(pnlPos?"":"-")}kr{Math.abs(Math.round((s.pnl||0) * ((fxRates&&fxRates.SEK)||10.4))).toLocaleString()}
+                  · {pnlPos?"+":""}{fmtSEK(pnlSEK)}
                 </span>
               </div>
             </>
@@ -1071,7 +1075,7 @@ function CompactRow({s, dot, onDetail, onRemove, fxRates}) {
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Earnings <span style={{color:"var(--t1)",fontWeight:600}}>{s.earn}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust)}</span></span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Bought <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = kr{Math.round(s.buy * s.shares * ((fxRates&&fxRates.SEK)||10.4)).toLocaleString()}</span></span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Köpt <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
           </div>
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
@@ -1134,7 +1138,7 @@ function CompactWatchRow({s, dot, onRemove}) {
 }
 
 
-function PivotSection({title, accentColor, slices, fxRates}) {
+function PivotSection({title, accentColor, slices}) {
   const ac = accentColor||"var(--indigo)";
   const [active, setActive] = useState(0);
   const slice = slices[active];
@@ -1175,7 +1179,7 @@ function PivotSection({title, accentColor, slices, fxRates}) {
         ? <div style={{padding:"12px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:"var(--t3)"}}>No stocks in this category</div>
         : slice.items.map(s=>slice.isWatch
             ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove}/>
-            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} fxRates={fxRates}/>
+            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove}/>
           )
       }
     </div>
@@ -1321,7 +1325,7 @@ function AddModal({onClose, onAdded}) {
 }
 
 // ── STOCKS SCREEN ────────────────────────────────────
-function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd, fxRates}) {
+function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd}) {
   const [f, setF] = useState("All");
   const [showAdd, setShowAdd] = useState(false);
   const U=urgent||[], W=watch||[], G=good||[], WR=wlReady||[], WW=wlWatch||[], WA=wlAvoid||[];
@@ -1362,12 +1366,12 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
           <button key={p} className={`pill${f===p?" on":""}`} onClick={()=>setF(p)}>{p}</button>
         ))}
       </div>
-      {f==="All"&&(<><PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} fxRates={fxRates}/><PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/></>)}
-      {f==="My Stocks"&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} fxRates={fxRates}/>}
+      {f==="All"&&(<><PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/><PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/></>)}
+      {f==="My Stocks"&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/>}
       {f==="Watchlist"&&<PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/>}
       {["🇺🇸 US","🇪🇺 Europe","🇮🇳 India"].includes(f)&&(
         <>
-          {(fU.length+fW.length+fG.length)>0&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} fxRates={fxRates}/>}
+          {(fU.length+fW.length+fG.length)>0&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/>}
           {(fWR.length+fWW.length+fWA.length)>0&&<PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/>}
           {(fU.length+fW.length+fG.length)===0&&(fWR.length+fWW.length+fWA.length)===0&&(
             <div style={{textAlign:"center",padding:"40px 20px"}}>
@@ -1593,8 +1597,6 @@ export default function App() {
   const [accuracy, setAccuracy] = useState("—");
   const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[]});
   const [earnings, setEarnings] = useState([]);
-  const [fxRates, setFxRates] = useState({SEK:10.4, EUR:0.93, INR:83});
-
   const refreshData = () => {
     Promise.allSettled([getPortfolio(), getWatchlist()]).then(([pR, wR]) => {
       if(pR.status==="fulfilled") setPortfolio(pR.value||{positions:[],summary:{}});
@@ -1603,12 +1605,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Fetch FX rates for SEK conversion
-    fetch("https://api.frankfurter.app/latest?from=USD&to=SEK,EUR,INR")
-      .then(r=>r.json())
-      .then(d=>{ if(d.rates) setFxRates(d.rates); })
-      .catch(()=>{});
-
     Promise.allSettled([
       getPortfolio(), getWatchlist(), getMarket(),
       getAlerts(), getPicks(), getDisqualified(), getAccuracy(),
@@ -1654,8 +1650,8 @@ export default function App() {
   const urgentCount = urgent.length;
 
   const screens = [
-    <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)} fxRates={fxRates}/>,
-    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} fxRates={fxRates}/>,
+    <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
+    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData}/>,
     <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy}/>,
     <StrategyScreen strategyData={strategyData}/>,
   ];

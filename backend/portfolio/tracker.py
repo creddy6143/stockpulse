@@ -1,59 +1,77 @@
-"""Portfolio P&L and positions management."""
+"""Portfolio P&L and positions management — all values in native currency + SEK."""
 from database.db import get_portfolio, get_watchlist
-from data.fetcher import get_stock_price
+from data.fetcher import get_stock_price, get_exchange_rates
 from intelligence.trust_score import get_trust_score_with_fallback
-from intelligence.claude_ai import get_verdict
 
-# Demo prices for when live data is unavailable
-DEMO_PRICES = {
-    "TNXP":       {"price": 13.50,  "change_pct": -71.2, "name": "Tonix Pharma"},
-    "XGN":        {"price": 3.39,   "change_pct": +13.0,  "name": "Exagen Inc"},
-    "GRRR":       {"price": 13.06,  "change_pct": -68.1,  "name": "Gorilla Technology"},
-    "INSM":       {"price": 103.0,  "change_pct": -10.4,  "name": "Insmed Inc"},
-    "CVNA":       {"price": 198.4,  "change_pct": +2.1,   "name": "Carvana Co"},
-    "NVDA":       {"price": 875.2,  "change_pct": +3.2,   "name": "NVIDIA Corp"},
-    "AXON":       {"price": 298.4,  "change_pct": +1.8,   "name": "Axon Enterprise"},
-    "PLTR":       {"price": 23.60,  "change_pct": +0.9,   "name": "Palantir"},
-    "MSFT":       {"price": 418.3,  "change_pct": +0.8,   "name": "Microsoft Corp"},
-    "ASML.AS":    {"price": 876.4,  "change_pct": +1.4,   "name": "ASML Holding"},
-    "HDFCBANK.NS":{"price": 1623.0, "change_pct": +0.4,   "name": "HDFC Bank"},
-    "RELIANCE.NS":{"price": 2847.0, "change_pct": +1.1,   "name": "Reliance Industries"},
-    "TSLA":       {"price": 172.3,  "change_pct": -2.1,   "name": "Tesla Inc"},
-}
+
+def _detect_currency(ticker: str) -> str:
+    """Infer native currency from ticker suffix."""
+    if ticker.endswith(".NS") or ticker.endswith(".BO"):
+        return "INR"
+    if ticker.endswith(".ST"):           # Stockholm — Swedish kronor
+        return "SEK"
+    if any(ticker.endswith(s) for s in [".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR"]):
+        return "EUR"
+    if ticker.endswith(".L"):
+        return "GBP"
+    return "USD"
+
+
+def _sek_rate(currency: str, rates: dict) -> float:
+    """How many SEK per 1 unit of the given currency."""
+    mapping = {
+        "USD": rates.get("USDSEK", 10.4),
+        "EUR": rates.get("EURSEK", 11.2),
+        "INR": rates.get("INRSEK", 0.124),
+        "SEK": 1.0,
+        "GBP": rates.get("GBPSEK", 13.2),
+    }
+    return mapping.get((currency or "USD").upper(), rates.get("USDSEK", 10.4))
 
 
 def get_portfolio_with_pnl() -> dict:
-    """Returns all positions with live prices and P&L."""
+    """Returns all positions with live prices, P&L in native currency, and SEK values."""
     positions = get_portfolio()
+    rates = get_exchange_rates()
     result = []
 
     for pos in positions:
         ticker = pos["ticker"]
         price_data = get_stock_price(ticker)
-        # Fall back to demo prices if live data unavailable
-        if not price_data.get("price"):
-            price_data = {**price_data, **DEMO_PRICES.get(ticker, {})}
-        price = price_data.get("price", pos["buy_price"])
-        pnl = (price - pos["buy_price"]) * pos["shares"]
-        pnl_pct = ((price - pos["buy_price"]) / pos["buy_price"] * 100) if pos["buy_price"] else 0
+
+        # Use live price; fall back to buy_price if yfinance returns nothing
+        price = price_data.get("price") or pos["buy_price"]
+        currency = pos.get("currency") or _detect_currency(ticker)
+        rate = _sek_rate(currency, rates)
+
+        shares = pos["shares"]
+        buy_price = pos["buy_price"]
+
+        pnl = (price - buy_price) * shares
+        pnl_pct = ((price - buy_price) / buy_price * 100) if buy_price else 0
+        value_sek = price * shares * rate
+        invested_sek = buy_price * shares * rate
+        pnl_sek = value_sek - invested_sek
 
         trust = get_trust_score_with_fallback(ticker, price_data)
-
-        # Determine group
         group = _classify_position(trust, pnl_pct)
 
         result.append({
             "id": pos["id"],
             "ticker": ticker,
             "name": pos.get("name") or price_data.get("name", ticker),
-            "shares": pos["shares"],
-            "buy_price": pos["buy_price"],
-            "current_price": round(price, 4),
-            "change_pct": price_data.get("change_pct", 0),
-            "pnl": round(pnl, 2),
-            "pnl_pct": round(pnl_pct, 2),
+            "shares": shares,
+            "buy_price": buy_price,
+            "current_price": round(float(price), 4),
+            "change_pct": round(float(price_data.get("change_pct", 0)), 2),
+            "pnl": round(float(pnl), 2),
+            "pnl_pct": round(float(pnl_pct), 2),
+            "value_sek": round(value_sek, 0),
+            "invested_sek": round(invested_sek, 0),
+            "pnl_sek": round(pnl_sek, 0),
+            "sek_rate": rate,
             "market": pos.get("market", "US"),
-            "currency": pos.get("currency", "USD"),
+            "currency": currency,
             "trust_score": trust["total_score"],
             "grade": trust["grade"],
             "auto_disqualified": trust["auto_disqualified"],
@@ -61,21 +79,23 @@ def get_portfolio_with_pnl() -> dict:
             "group": group,
         })
 
-    # Sort: auto-disqualified first, then by P&L
+    # Sort: auto-disqualified first, then worst P&L first
     result.sort(key=lambda x: (not x["auto_disqualified"], x["pnl_pct"]))
 
-    total_value = sum(p["current_price"] * p["shares"] for p in result)
-    total_invested = sum(p["buy_price"] * p["shares"] for p in result)
-    total_pnl = total_value - total_invested
+    total_value_sek = sum(p["value_sek"] for p in result)
+    total_invested_sek = sum(p["invested_sek"] for p in result)
+    total_pnl_sek = total_value_sek - total_invested_sek
+    pnl_pct_sek = (total_pnl_sek / total_invested_sek * 100) if total_invested_sek else 0
 
     return {
         "positions": result,
         "summary": {
-            "total_value": round(total_value, 2),
-            "total_invested": round(total_invested, 2),
-            "total_pnl": round(total_pnl, 2),
-            "total_pnl_pct": round((total_pnl / total_invested * 100) if total_invested else 0, 2),
+            "total_value_sek": round(total_value_sek, 0),
+            "total_invested_sek": round(total_invested_sek, 0),
+            "total_pnl_sek": round(total_pnl_sek, 0),
+            "total_pnl_pct": round(pnl_pct_sek, 2),
             "position_count": len(result),
+            "exchange_rates": rates,
         },
     }
 
@@ -89,18 +109,15 @@ def _classify_position(trust: dict, pnl_pct: float) -> str:
 
 
 def get_watchlist_with_signals() -> list:
-    """Returns watchlist items with trust scores and AI signals."""
+    """Returns watchlist items with trust scores and signals."""
     items = get_watchlist()
     result = []
 
     for item in items:
         ticker = item["ticker"]
         price_data = get_stock_price(ticker)
-        if not price_data.get("price"):
-            price_data = {**price_data, **DEMO_PRICES.get(ticker, {})}
         trust = get_trust_score_with_fallback(ticker, price_data)
 
-        # Watchlist grouping
         if trust["total_score"] >= 75 and not trust["auto_disqualified"]:
             wl_group = "ready"
             signal = "Entry zone now"
