@@ -216,8 +216,7 @@ const fmtSEK = (n) => {
 };
 const fmtSEKCompact = (n) => {
   const abs = Math.abs(n);
-  if (abs >= 1000000) return (abs/1000000).toFixed(2).replace(".",",") + "\u00a0Mkr";
-  if (abs >= 1000) return Math.round(abs/1000) + "\u00a0tkr";
+  if (abs >= 1000000) return (abs/1000000).toFixed(1).replace(".",",") + "\u00a0Mkr";
   return Math.round(abs).toLocaleString("sv-SE") + "\u00a0kr";
 };
 
