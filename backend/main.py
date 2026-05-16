@@ -110,17 +110,17 @@ def update_portfolio(pos_id: int, req: UpdatePositionRequest):
     return {"status": "updated"}
 
 
+@app.delete("/api/portfolio/all")
+def clear_all_portfolio():
+    """Remove all portfolio positions and watchlist entries. Must be before /{pos_id}."""
+    db.clear_all_data()
+    return {"status": "cleared"}
+
+
 @app.delete("/api/portfolio/{pos_id}")
 def delete_portfolio(pos_id: int):
     db.delete_position(pos_id)
     return {"status": "deleted"}
-
-
-@app.delete("/api/portfolio/all")
-def clear_all_portfolio():
-    """Remove all portfolio positions and watchlist entries."""
-    db.clear_all_data()
-    return {"status": "cleared"}
 
 
 # ── WATCHLIST ────────────────────────────────────────────────────────────────
