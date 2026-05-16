@@ -828,12 +828,20 @@ function EarningsIntel({earnings, onClose}) {
 }
 
 // ── PORTFOLIO ARC ────────────────────────────────────
-function PortfolioArc({positions, summary}) {
+function PortfolioArc({positions, summary, fxRates}) {
   const s = summary || {};
   const val = s.total_value || 0;
   const invested = s.total_invested || 0;
   const pnl = s.total_pnl || 0;
   const pnlPct = invested > 0 ? (pnl / invested * 100) : 0;
+  const sekRate = (fxRates && fxRates.SEK) || 10.4;
+  const valSEK = val * sekRate;
+  const investedSEK = invested * sekRate;
+  const pnlSEK = pnl * sekRate;
+  const fmtSEK = (n) => {
+    const abs = Math.abs(n);
+    return abs >= 1000000 ? `kr${(abs/1000000).toFixed(2)}M` : abs >= 1000 ? `kr${Math.round(abs/1000)}k` : `kr${Math.round(abs)}`;
+  };
   const size=120, stroke=10, r=size/2-stroke;
   const circ=2*Math.PI*r, f=Math.min(invested > 0 ? val/invested : 0, 1)*circ;
   return (
@@ -846,7 +854,7 @@ function PortfolioArc({positions, summary}) {
         </svg>
         <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
           <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5}}>Value</div>
-          <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:700,color:"var(--t1)",letterSpacing:-1,lineHeight:1}}>{val >= 1000 ? `$${(val/1000).toFixed(1)}k` : `$${val.toFixed(0)}`}</div>
+          <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--t1)",letterSpacing:-1,lineHeight:1}}>{fmtSEK(valSEK)}</div>
           <div style={{fontFamily:"var(--mono)",fontSize:10,color:pnl>=0?"var(--emerald)":"var(--rose)",marginTop:2}}>{pnl>=0?"▲":"▼"}{Math.abs(pnlPct).toFixed(0)}%</div>
         </div>
       </div>
@@ -856,8 +864,8 @@ function PortfolioArc({positions, summary}) {
           <span style={{fontSize:11,color:"var(--indigo)",fontWeight:500,cursor:"pointer"}}>View all →</span>
         </div>
         {[
-          {l:"Invested",v:`$${invested.toLocaleString('en',{maximumFractionDigits:0})}`,c:"var(--t2)"},
-          {l:"Total P&L",v:`${pnl>=0?"+$":"-$"}${Math.abs(pnl).toLocaleString('en',{maximumFractionDigits:0})}`,c:pnl>=0?"var(--emerald)":"var(--rose)"},
+          {l:"Invested",v:fmtSEK(investedSEK),c:"var(--t2)"},
+          {l:"Total P&L",v:`${pnlSEK>=0?"+":"-"}${fmtSEK(pnlSEK)}`,c:pnl>=0?"var(--emerald)":"var(--rose)"},
         ].map((s,i)=>(
           <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:5,borderTop:i>0?"1px solid rgba(15,23,42,.04)":"none"}}>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5}}>{s.l}</span>
@@ -886,7 +894,7 @@ function PortfolioArc({positions, summary}) {
 }
 
 // ── HOME SCREEN ──────────────────────────────────────
-function HomeScreen({positions, summary, signals, earnings, market, onEarnings}) {
+function HomeScreen({positions, summary, signals, earnings, market, onEarnings, fxRates}) {
   const [sigOpen,setSigOpen] = useState(null);
   const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
   const vix = market?.vix?.price || 0;
@@ -902,7 +910,7 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
   const sigList = signals && signals.length > 0 ? signals : [];
   return (
     <div className="pad" style={{paddingTop:12}}>
-      <PortfolioArc positions={positions} summary={summary}/>
+      <PortfolioArc positions={positions} summary={summary} fxRates={fxRates}/>
 
       {/* Earnings Watch card */}
       <div onClick={onEarnings} style={{background:"var(--white)",borderRadius:12,
@@ -1029,15 +1037,23 @@ function CompactRow({s, dot, onDetail, onRemove, fxRates}) {
           </div>
         </div>
         <div>
-          <div style={{display:"flex",alignItems:"baseline",gap:4}}>
-            <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--t1)"}}>{cu(s.ticker)}{typeof s.price==="number"?s.price.toFixed(2):s.price}</span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnlPos?"var(--emerald)":"var(--rose)"}}>
-              {pnlPos?"+":""}{pnlPct.toFixed(1)}%
-            </span>
-          </div>
-          {sekPrice!=null && (
-            <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
-              kr{Math.round(sekPrice).toLocaleString()}
+          {sekPrice!=null ? (
+            <>
+              <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--t1)"}}>
+                kr{Math.round(sekPrice).toLocaleString()}
+                <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnlPos?"var(--emerald)":"var(--rose)",marginLeft:4}}>{pnlPos?"+":""}{pnlPct.toFixed(1)}%</span>
+              </div>
+              <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
+                {cu(s.ticker)}{typeof s.price==="number"?s.price.toFixed(2):s.price}
+                <span style={{color:pnlPos?"var(--emerald)":"var(--rose)",marginLeft:3}}>
+                  · {pnlPos?"+":(pnlPos?"":"-")}kr{Math.abs(Math.round((s.pnl||0) * ((fxRates&&fxRates.SEK)||10.4))).toLocaleString()}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+              <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--t1)"}}>{cu(s.ticker)}{typeof s.price==="number"?s.price.toFixed(2):s.price}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnlPos?"var(--emerald)":"var(--rose)"}}>{pnlPos?"+":""}{pnlPct.toFixed(1)}%</span>
             </div>
           )}
         </div>
@@ -1055,7 +1071,7 @@ function CompactRow({s, dot, onDetail, onRemove, fxRates}) {
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Earnings <span style={{color:"var(--t1)",fontWeight:600}}>{s.earn}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust)}</span></span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Bought <span style={{color:"var(--t2)",fontWeight:600}}>${s.buy}×{s.shares}</span></span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Bought <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = kr{Math.round(s.buy * s.shares * ((fxRates&&fxRates.SEK)||10.4)).toLocaleString()}</span></span>
           </div>
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
@@ -1184,6 +1200,23 @@ function AddModal({onClose, onAdded}) {
     const timer = setTimeout(async () => {
       setSugLoading(true);
       try {
+        // Try Yahoo Finance directly first (works without backend)
+        const yhUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=8&newsCount=0&enableFuzzyQuery=true`;
+        const yhRes = await fetch(yhUrl);
+        if (yhRes.ok) {
+          const yhData = await yhRes.json();
+          const items = (yhData.quotes || [])
+            .filter(q => q.quoteType === "EQUITY" || q.quoteType === "ETF")
+            .map(q => ({ticker: q.symbol, name: q.shortname || q.longname || q.symbol}))
+            .slice(0, 6);
+          if (items.length > 0) {
+            setSuggestions(items);
+            setShowSug(true);
+            setSugLoading(false);
+            return;
+          }
+        }
+        // Fallback to backend search
         const res = await searchTicker(ticker);
         setSuggestions(res || []);
         setShowSug((res||[]).length > 0);
@@ -1209,7 +1242,8 @@ function AddModal({onClose, onAdded}) {
     setErr(""); setLoading(true);
     try {
       if (type === "portfolio") {
-        await addPosition(t, +shares, +buyPrice, buyDate || null, null);
+        const cleanPrice = +buyPrice.toString().replace(",", ".");
+        await addPosition(t, +shares, cleanPrice, buyDate || null, null);
       } else {
         await addToWatchlist(t, null);
       }
@@ -1620,7 +1654,7 @@ export default function App() {
   const urgentCount = urgent.length;
 
   const screens = [
-    <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
+    <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)} fxRates={fxRates}/>,
     <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} fxRates={fxRates}/>,
     <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy}/>,
     <StrategyScreen strategyData={strategyData}/>,
