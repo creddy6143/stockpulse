@@ -1,14 +1,15 @@
 """Data fetcher.
 
-Primary sources (no Yahoo Finance dependency):
+Primary sources:
   - Stock prices:   Finnhub quote()
   - Forex rates:    Frankfurter.app (ECB rates, free, no key)
-  - Market indices: Finnhub ETF proxies (SPY, QQQ, EWG, INDA, VXX)
+  - Market indices: Yahoo Finance v8 (cookie+crumb auth) → Finnhub ETF proxies
 
-Fallback:
-  - Yahoo Finance v8 chart API (works on fresh IPs; used for non-US tickers)
+Yahoo Finance cookie+crumb auth lets us get real ^VIX, ^GSPC, ^IXIC, ^GDAXI, ^NSEI.
+Falls back to Finnhub ETF proxies (SPY, QQQ, EWG, INDA, VXX) if Yahoo is blocked.
 """
 import os
+import time as _time
 import requests
 import finnhub
 from datetime import datetime, timedelta
@@ -17,9 +18,14 @@ from .cache import cache_get, cache_set
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 _fh_client = None
 
+# Yahoo Finance authenticated session (cookie+crumb, refreshed every 30 min)
+_yf_session = None
+_yf_crumb = None
+_yf_crumb_ts = 0.0
+
 _HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
@@ -35,22 +41,50 @@ def _finnhub():
     return _fh_client
 
 
-def _yf_chart(symbol: str) -> dict:
-    """Yahoo Finance v8 chart API fallback — works on Railway's fresh IP."""
-    url = (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        "?range=1d&interval=5m"
-    )
+def _get_yf_auth() -> tuple:
+    """Returns (session, crumb) for authenticated Yahoo Finance requests.
+    Visits finance.yahoo.com to get a cookie, then fetches the crumb token.
+    Result cached for 30 minutes. Returns (None, None) on failure.
+    """
+    global _yf_session, _yf_crumb, _yf_crumb_ts
+    if _yf_session and _yf_crumb and (_time.time() - _yf_crumb_ts < 1800):
+        return _yf_session, _yf_crumb
     try:
-        r = requests.get(url, headers=_HEADERS, timeout=10)
-        if r.status_code != 200:
-            return {}
-        results = r.json().get("chart", {}).get("result")
-        if not results:
-            return {}
-        return results[0].get("meta", {})
+        sess = requests.Session()
+        sess.headers.update(_HEADERS)
+        sess.get("https://finance.yahoo.com", timeout=10)
+        r = sess.get(
+            "https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=8
+        )
+        if r.status_code == 200 and r.text.strip():
+            _yf_session = sess
+            _yf_crumb = r.text.strip()
+            _yf_crumb_ts = _time.time()
+            return _yf_session, _yf_crumb
     except Exception:
-        return {}
+        pass
+    return None, None
+
+
+def _yf_chart(symbol: str) -> dict:
+    """Yahoo Finance v8 chart. Tries cookie+crumb auth first, then unauthenticated."""
+    session, crumb = _get_yf_auth()
+    base = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=5m"
+    for url in [
+        f"{base}&crumb={crumb}" if crumb else None,
+        base,
+    ]:
+        if url is None:
+            continue
+        try:
+            r = (session or requests).get(url, headers=_HEADERS, timeout=10)
+            if r.status_code == 200:
+                results = r.json().get("chart", {}).get("result")
+                if results:
+                    return results[0].get("meta", {})
+        except Exception:
+            continue
+    return {}
 
 
 def _is_us_stock(ticker: str) -> bool:
@@ -192,36 +226,57 @@ def _detect_currency(ticker: str) -> str:
 
 
 def get_market_data() -> dict:
-    """Returns VIX proxy + 4 major market indices via Finnhub ETF proxies.
-    VIX: VXX (VIX futures ETF) — VXX/1.5 ≈ actual VIX level.
-    S&P 500: SPY, Nasdaq: QQQ, DAX: EWG, Nifty: INDA.
+    """Returns VIX + 4 major market indices.
+    Primary: Yahoo Finance real indices via cookie+crumb (^VIX, ^GSPC, ^IXIC, ^GDAXI, ^NSEI).
+    Fallback: Finnhub ETF proxies (VXX/1.5, SPY, QQQ, EWG, INDA).
     """
     key = "market_data"
     cached = cache_get(key)
     if cached:
         return cached
 
-    fh = _finnhub()
-    # ETF proxies: (internal key, Finnhub symbol, divisor for display)
-    proxies = [
-        ("vix",    "VXX",  1.5),   # VXX/1.5 ≈ VIX level
-        ("sp500",  "SPY",  1.0),
-        ("nasdaq", "QQQ",  1.0),
-        ("dax",    "EWG",  1.0),
-        ("nifty",  "INDA", 1.0),
-    ]
     result = {}
-    for name, sym, divisor in proxies:
-        try:
-            q = fh.quote(sym) if fh else {}
-            price = float(q.get("c") or 0)
-            change_pct = float(q.get("dp") or 0)
-            display_price = round(price / divisor, 2) if price else 0
-            result[name] = {"price": display_price, "change_pct": round(change_pct, 2)}
-        except Exception:
-            result[name] = {"price": 0, "change_pct": 0}
 
-    # Market status based on derived VIX level (VXX / 1.5)
+    # Primary: Yahoo Finance real indices
+    yf_map = {
+        "vix":    "^VIX",
+        "sp500":  "^GSPC",
+        "nasdaq": "^IXIC",
+        "dax":    "^GDAXI",
+        "nifty":  "^NSEI",
+    }
+    for name, sym in yf_map.items():
+        meta = _yf_chart(sym)
+        price = float(meta.get("regularMarketPrice") or 0)
+        if price > 0:
+            prev = float(meta.get("chartPreviousClose") or meta.get("previousClose") or price)
+            chg = ((price - prev) / prev * 100) if prev else 0
+            result[name] = {"price": round(price, 2), "change_pct": round(chg, 2)}
+
+    # Fallback: Finnhub ETF proxies for any missing index
+    fh = _finnhub()
+    etf_fallbacks = {
+        "vix":    ("VXX",  1.5),  # VXX/1.5 ≈ actual VIX level
+        "sp500":  ("SPY",  1.0),
+        "nasdaq": ("QQQ",  1.0),
+        "dax":    ("EWG",  1.0),
+        "nifty":  ("INDA", 1.0),
+    }
+    if fh:
+        for name, (sym, div) in etf_fallbacks.items():
+            if name not in result:
+                try:
+                    q = fh.quote(sym)
+                    price = float(q.get("c") or 0)
+                    chg = float(q.get("dp") or 0)
+                    result[name] = {"price": round(price / div, 2), "change_pct": round(chg, 2)}
+                except Exception:
+                    result[name] = {"price": 0, "change_pct": 0}
+
+    # Ensure all keys exist
+    for name in yf_map:
+        result.setdefault(name, {"price": 0, "change_pct": 0})
+
     vix_level = result.get("vix", {}).get("price", 15)
     if vix_level < 15:
         status = {"label": "Market Calm",   "dot": "calm",   "color": "green"}

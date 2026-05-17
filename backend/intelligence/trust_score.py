@@ -17,6 +17,8 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     fundamentals = get_fundamentals(ticker)
     insider = get_insider_data(ticker)
     analyst = get_analyst_data(ticker)
+    # Expose analyst to smart_money scoring (needed for consensus proxy)
+    insider["_analyst"] = analyst
 
     # ── AUTO-DISQUALIFIERS ───────────────────────────────────────────────────
     auto_disq, disq_reason = _check_auto_disqualifiers(ticker, fundamentals, insider)
@@ -124,29 +126,40 @@ def _business_score(f: dict) -> int:
 
 def _smart_money_score(insider: dict) -> int:
     score = 0
+    analyst = insider.get("_analyst", {})
 
     # CEO buying is highest single signal (20 pts)
     if insider.get("ceo_buying"):
         score += 20
     elif insider.get("insider_buy_value", 0) > 100_000:
-        score += 10
-
-    # Institutional ownership (8 pts)
-    if insider.get("institutional_buying"):
         score += 8
 
-    # Short interest (5 pts for low, penalty for high)
+    # Analyst consensus as institutional proxy (10 pts)
+    # Finnhub free tier doesn't expose institutional ownership; analyst
+    # consensus (e.g. 93% buy on NVDA) is a reliable proxy for smart money.
+    buy_n = analyst.get("buy_count", 0)
+    hold_n = analyst.get("hold_count", 0)
+    sell_n = analyst.get("sell_count", 0)
+    total_analysts = buy_n + hold_n + sell_n
+    if total_analysts > 0:
+        buy_pct = buy_n / total_analysts
+        if buy_pct > 0.80:
+            score += 10
+        elif buy_pct > 0.60:
+            score += 6
+        elif buy_pct > 0.40:
+            score += 3
+
+    # Short interest (5 pts for low — only when data is available)
     short_pct = insider.get("short_interest_pct", 0)
-    if short_pct < 5:
+    if short_pct > 0 and short_pct < 5:
         score += 5
     elif short_pct > 40:
         score -= 5
 
-    # Insider selling penalty
-    sell_val = insider.get("insider_sell_value", 0)
-    buy_val = insider.get("insider_buy_value", 0)
-    if sell_val > 1_000_000 and sell_val > buy_val * 3:
-        score -= 10
+    # Insider selling penalty removed — 10b5-1 scheduled plans (e.g. Jensen
+    # Huang selling NVDA) are not bearish signals; penalising them produced
+    # false S.SELL readings on world-class stocks.
 
     return max(0, min(35, score))
 
@@ -223,18 +236,41 @@ DEMO_SCORES = {
 
 
 def get_trust_score_with_fallback(ticker: str, price_data: dict = None) -> dict:
-    """Tries live data, falls back to demo scores if API fails."""
+    """
+    Priority order:
+      1. Auto-disqualified demo stocks (human-verified red flags) → DEMO_SCORES
+      2. Live calculation from real APIs
+      3. Non-disqualified DEMO_SCORES entry (as verified baseline)
+      4. Generic 50-point fallback
+    """
     import re
     clean = re.sub(r'\.[A-Z]{1,3}$', '', ticker.upper())
-    if clean in DEMO_SCORES:
-        demo = dict(DEMO_SCORES[clean])
-        demo["ticker"] = ticker
-        return demo
+    demo = DEMO_SCORES.get(clean)
+
+    # Auto-disqualified stocks use DEMO_SCORES directly — these have been
+    # manually verified (reverse splits, fraud, board resignations, etc.)
+    if demo and demo.get("auto_disqualified"):
+        result = dict(demo)
+        result["ticker"] = ticker
+        return result
+
+    # All other stocks: try live calculation first
     try:
-        return calculate_trust_score(ticker, price_data)
+        score = calculate_trust_score(ticker, price_data)
+        if score.get("total_score", 0) > 0 or score.get("auto_disqualified"):
+            return score
     except Exception:
-        return {
-            "ticker": ticker, "total_score": 50,
-            "business_score": 20, "smart_money_score": 15, "momentum_score": 15,
-            "grade": "Moderate", "auto_disqualified": False, "disqualify_reason": None,
-        }
+        pass
+
+    # Live failed → fall back to DEMO_SCORES baseline if one exists
+    if demo:
+        result = dict(demo)
+        result["ticker"] = ticker
+        return result
+
+    # Final fallback — generic moderate score
+    return {
+        "ticker": ticker, "total_score": 50,
+        "business_score": 20, "smart_money_score": 15, "momentum_score": 15,
+        "grade": "Moderate", "auto_disqualified": False, "disqualify_reason": None,
+    }
