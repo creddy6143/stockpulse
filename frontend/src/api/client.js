@@ -59,6 +59,7 @@ export const removeFromWatchlist = (ticker) =>
 
 export const getStock = (ticker) => request(`/api/stock/${ticker}`);
 export const getStockTrust = (ticker) => request(`/api/stock/${ticker}/trust`);
+export const getStockDetail = (ticker) => request(`/api/stock/${ticker}/detail`);
 export const getStockSignals = (ticker) => request(`/api/stock/${ticker}/signals`);
 export const getStockVerdict = (ticker) => request(`/api/stock/${ticker}/verdict`);
 

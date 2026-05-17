@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker, getStockTrust, getStockDetail, getStockVerdict } from "./api/client";
+const BASE = process.env.REACT_APP_API_URL || '';
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600;700&display=swap');
@@ -434,8 +435,7 @@ function ScoreDetail({ticker, trust, grade, onClose}) {
   const c = tc(trust);
 
   useEffect(() => {
-    fetch(`/api/stock/${encodeURIComponent(ticker)}/trust`)
-      .then(r => r.ok ? r.json() : null)
+    getStockTrust(ticker)
       .then(data => { setD(data); setLoading(false); })
       .catch(() => setLoading(false));
   }, [ticker]);
@@ -503,13 +503,11 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
     setVLoading(true);
     setVerdict(null);
     // Fast fetch: detail without AI
-    fetch(`/api/stock/${encodeURIComponent(ticker)}/detail`)
-      .then(r => r.ok ? r.json() : null)
+    getStockDetail(ticker)
       .then(data => { setD(buildDetailData(data)); setDLoading(false); })
       .catch(() => setDLoading(false));
     // Separate fetch: AI verdict (slow, loads independently)
-    fetch(`/api/stock/${encodeURIComponent(ticker)}/verdict`)
-      .then(r => r.ok ? r.json() : null)
+    getStockVerdict(ticker)
       .then(v => { setVerdict(v); setVLoading(false); })
       .catch(() => setVLoading(false));
   }, [ticker]);
@@ -1768,7 +1766,7 @@ export default function App() {
 
   useEffect(() => {
     // Keep-alive ping every 10 min so Railway never sleeps mid-session
-    const ping = setInterval(() => fetch('/api/ping').catch(()=>{}), 10*60*1000);
+    const ping = setInterval(() => fetch(`${BASE}/api/ping`).catch(()=>{}), 10*60*1000);
 
     // PRIORITY 1 — critical for Home screen (load first, update state immediately)
     getMarket().then(v => { if(v) setMarket(v); }).catch(()=>{});

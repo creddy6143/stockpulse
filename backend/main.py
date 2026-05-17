@@ -352,53 +352,51 @@ def strategy():
     my_stocks = []
     for pos in portfolio_data.get("positions", []):
         sit = _detect_situation(pos, market_data)
-        if sit:
-            my_stocks.append({
-                "ticker": pos["ticker"],
-                "flag": _get_flag(pos.get("market", "US")),
-                "situation_type": sit["situation_type"],
-                "label": sit["label"],
-                "icon": sit["icon"],
-                "action": sit["action"],
-                "color": sit["color"],
-                "summary": sit["summary"],
-                "priority": sit["priority"],
-                "playbook": None,
-                # Full context — used by playbook endpoint + frontend display
-                "name": pos.get("name", pos["ticker"]),
-                "current_price": pos.get("current_price", 0),
-                "change_pct": pos.get("change_pct", 0),
-                "pnl_pct": pos.get("pnl_pct", 0),
-                "pnl_sek": pos.get("pnl_sek", 0),
-                "shares": pos.get("shares"),
-                "buy_price": pos.get("buy_price"),
-                "trust_score": pos.get("trust_score", 50),
-                "grade": pos.get("grade", ""),
-                "is_speculative": pos.get("is_speculative", False),
-            })
+        my_stocks.append({
+            "ticker": pos["ticker"],
+            "flag": _get_flag(pos.get("market", "US")),
+            "situation_type": sit["situation_type"],
+            "label": sit["label"],
+            "icon": sit["icon"],
+            "action": sit["action"],
+            "color": sit["color"],
+            "summary": sit["summary"],
+            "priority": sit["priority"],
+            "playbook": None,
+            # Full context — used by playbook endpoint + frontend display
+            "name": pos.get("name", pos["ticker"]),
+            "current_price": pos.get("current_price", 0),
+            "change_pct": pos.get("change_pct", 0),
+            "pnl_pct": pos.get("pnl_pct", 0),
+            "pnl_sek": pos.get("pnl_sek", 0),
+            "shares": pos.get("shares"),
+            "buy_price": pos.get("buy_price"),
+            "trust_score": pos.get("trust_score", 50),
+            "grade": pos.get("grade", ""),
+            "is_speculative": pos.get("is_speculative", False),
+        })
 
     wl_situations = []
     for item in watchlist_data:
         sit = _detect_wl_situation(item, market_data)
-        if sit:
-            wl_situations.append({
-                "ticker": item["ticker"],
-                "flag": _get_flag(item.get("market", "US")),
-                "situation_type": sit["situation_type"],
-                "label": sit["label"],
-                "icon": sit["icon"],
-                "action": sit["action"],
-                "color": sit["color"],
-                "summary": sit["summary"],
-                "priority": sit["priority"],
-                "playbook": None,
-                "name": item.get("name", item["ticker"]),
-                "current_price": item.get("current_price", 0),
-                "change_pct": item.get("change_pct", 0),
-                "trust_score": item.get("trust_score", 50),
-                "grade": item.get("grade", ""),
-                "is_speculative": item.get("is_speculative", False),
-            })
+        wl_situations.append({
+            "ticker": item["ticker"],
+            "flag": _get_flag(item.get("market", "US")),
+            "situation_type": sit["situation_type"],
+            "label": sit["label"],
+            "icon": sit["icon"],
+            "action": sit["action"],
+            "color": sit["color"],
+            "summary": sit["summary"],
+            "priority": sit["priority"],
+            "playbook": None,
+            "name": item.get("name", item["ticker"]),
+            "current_price": item.get("current_price", 0),
+            "change_pct": item.get("change_pct", 0),
+            "trust_score": item.get("trust_score", 50),
+            "grade": item.get("grade", ""),
+            "is_speculative": item.get("is_speculative", False),
+        })
 
     my_stocks.sort(key=lambda x: x["priority"])
     wl_situations.sort(key=lambda x: x["priority"])
@@ -516,10 +514,12 @@ def _get_flag(market: str) -> str:
     return {"US": "🇺🇸", "EU": "🇪🇺", "IN": "🇮🇳"}.get(market, "🇺🇸")
 
 
-def _detect_situation(pos: dict, market_data: dict) -> Optional[dict]:
+def _detect_situation(pos: dict, market_data: dict) -> dict:
+    """Always returns a situation — every portfolio stock gets a strategy card."""
     pnl_pct = pos.get("pnl_pct", 0)
     trust = pos.get("trust_score", 50)
     auto_disq = pos.get("auto_disqualified", False)
+    grade = pos.get("grade", "")
 
     if auto_disq:
         return {
@@ -530,35 +530,65 @@ def _detect_situation(pos: dict, market_data: dict) -> Optional[dict]:
     if pnl_pct < -30:
         return {
             "situation_type": "crash_decision", "label": "Crash Decision", "icon": "📉",
-            "action": "HOLD" if trust >= 60 else "SELL", "color": "var(--amber)", "priority": 2,
-            "summary": f"Down {abs(pnl_pct):.0f}%. {'Business still intact.' if trust >= 60 else 'Fundamentals weak — consider exit.'}",
+            "action": "HOLD" if trust >= 60 else "SELL", "color": "var(--amber)", "priority": 1,
+            "summary": f"Down {abs(pnl_pct):.0f}%. {'Business fundamentals still intact.' if trust >= 60 else 'Fundamentals weak — consider exit.'}",
         }
     if pnl_pct > 30:
         return {
             "situation_type": "profit_decision", "label": "Profit Decision", "icon": "💰",
-            "action": "HOLD", "color": "var(--emerald)", "priority": 3,
-            "summary": f"Up {pnl_pct:.0f}%. Consider trimming to lock in gains.",
+            "action": "HOLD", "color": "var(--emerald)", "priority": 2,
+            "summary": f"Up {pnl_pct:.0f}% from entry. Consider trimming to lock in gains.",
         }
-    return None
+    if trust < 40:
+        return {
+            "situation_type": "weak_fundamentals", "label": "Weak Signal", "icon": "⚠️",
+            "action": "REVIEW", "color": "var(--amber)", "priority": 2,
+            "summary": f"Trust score {trust}/100 ({grade}). Review fundamentals before holding further.",
+        }
+    if -10 <= pnl_pct <= 10:
+        return {
+            "situation_type": "monitor", "label": "On Track", "icon": "👁",
+            "action": "HOLD", "color": "var(--indigo)", "priority": 3,
+            "summary": f"Trust {trust}/100. P&L {pnl_pct:+.0f}%. No action required — monitoring.",
+        }
+    if pnl_pct < -10:
+        return {
+            "situation_type": "mild_loss", "label": "Under Pressure", "icon": "📉",
+            "action": "HOLD" if trust >= 60 else "REVIEW", "color": "var(--amber)", "priority": 2,
+            "summary": f"Down {abs(pnl_pct):.0f}%. Trust {trust}/100. {'Hold — fundamentals intact.' if trust >= 60 else 'Review position carefully.'}",
+        }
+    return {
+        "situation_type": "monitor", "label": "Holding Well", "icon": "✅",
+        "action": "HOLD", "color": "var(--emerald)", "priority": 3,
+        "summary": f"Up {pnl_pct:.0f}%. Trust {trust}/100. Holding well — no action needed.",
+    }
 
 
-def _detect_wl_situation(item: dict, market_data: dict) -> Optional[dict]:
+def _detect_wl_situation(item: dict, market_data: dict) -> dict:
+    """Always returns a situation — every watchlist stock gets a strategy card."""
     trust = item.get("trust_score", 50)
     wl_group = item.get("wl_group", "watching")
+    upside = item.get("analyst_upside_pct")
 
     if wl_group == "ready":
         return {
             "situation_type": "ready_to_buy", "label": "Ready to Buy", "icon": "🟢",
             "action": "BUY", "color": "var(--emerald)", "priority": 1,
-            "summary": f"Trust {trust}. Entry conditions aligned.",
+            "summary": f"Trust {trust}/100. Entry conditions aligned — consider buying now.",
         }
     if wl_group == "avoid":
         return {
             "situation_type": "dont_buy", "label": "Don't Buy Yet", "icon": "🔴",
-            "action": "WAIT", "color": "var(--rose)", "priority": 3,
-            "summary": f"Trust {trust}. Red flags present.",
+            "action": "WAIT", "color": "var(--rose)", "priority": 2,
+            "summary": f"Trust {trust}/100. Red flags present — wait for conditions to improve.",
         }
-    return None
+    # Still watching — always show
+    upside_str = f" Analysts see +{upside:.0f}% upside." if upside and upside > 0 else ""
+    return {
+        "situation_type": "watching", "label": "Watching", "icon": "👁",
+        "action": "WAIT", "color": "var(--indigo)", "priority": 3,
+        "summary": f"Trust {trust}/100 — not yet at entry threshold.{upside_str} Wait for ≥75 score.",
+    }
 
 
 def _seed_demo_data():
