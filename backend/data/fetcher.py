@@ -323,75 +323,74 @@ def get_fundamentals(ticker: str) -> dict:
     }
 
     fh = _finnhub()
-    if not fh:
-        return result
 
     # Strip exchange suffix for Finnhub
     clean = ticker
     for suffix in (".NS", ".BO", ".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
         clean = clean.replace(suffix, "")
 
-    try:
-        bf = fh.company_basic_financials(clean, "all")
-        m = (bf or {}).get("metric", {})
-        if m:
-            # Finnhub returns these values in PERCENTAGE form (e.g. 65.47 means 65.47%)
-            rev = float(m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y") or 0)
-            result["revenue_growth"] = round(rev / 100, 4)
-
-            eps_growth = float(
-                m.get("epsGrowthTTMYoy") or m.get("epsGrowthQuarterlyYoy") or
-                m.get("epsGrowth3Y") or 0
-            )
-            result["earnings_growth"] = round(eps_growth / 100, 4)
-
-            margin = float(m.get("netProfitMarginTTM") or 0)
-            result["profit_margins"] = round(margin / 100, 4)
-            result["gaap_profitable"] = margin > 0
-
-            gross = float(m.get("grossMarginTTM") or 0)
-            result["gross_margins"] = round(gross / 100, 4)
-
-            pe = m.get("peNormalizedAnnual") or m.get("peTTM")
-            result["pe_ratio"] = round(float(pe), 2) if pe else None
-
-            curr = m.get("currentRatioAnnual")
-            result["current_ratio"] = round(float(curr), 2) if curr else None
-
-            mktcap = m.get("marketCapitalization")
-            result["market_cap"] = int(float(mktcap) * 1_000_000) if mktcap else 0
-
-            result["w52_high"] = float(m["52WeekHigh"]) if m.get("52WeekHigh") else None
-            result["w52_low"]  = float(m["52WeekLow"])  if m.get("52WeekLow")  else None
-    except Exception:
-        pass
-
-    # Earnings history + surprise (US & EU only)
-    if not ticker.endswith((".NS", ".BO")):
+    if fh:
         try:
-            eq = fh.company_earnings(clean, limit=8)
-            if eq:
-                result["earnings_history"] = eq[:4]
-                last = eq[0]
-                est = last.get("estimate")
-                act = last.get("actual")
-                if est and act is not None and est != 0:
-                    result["earnings_surprise_pct"] = round(
-                        (act - est) / abs(est) * 100, 1
-                    )
+            bf = fh.company_basic_financials(clean, "all")
+            m = (bf or {}).get("metric", {})
+            if m:
+                # Finnhub returns values in PERCENTAGE form (e.g. 65.47 means 65.47%)
+                rev = float(m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y") or 0)
+                result["revenue_growth"] = round(rev / 100, 4)
+
+                eps_growth = float(
+                    m.get("epsGrowthTTMYoy") or m.get("epsGrowthQuarterlyYoy") or
+                    m.get("epsGrowth3Y") or 0
+                )
+                result["earnings_growth"] = round(eps_growth / 100, 4)
+
+                margin = float(m.get("netProfitMarginTTM") or 0)
+                result["profit_margins"] = round(margin / 100, 4)
+                result["gaap_profitable"] = margin > 0
+
+                gross = float(m.get("grossMarginTTM") or 0)
+                result["gross_margins"] = round(gross / 100, 4)
+
+                pe = m.get("peNormalizedAnnual") or m.get("peTTM")
+                result["pe_ratio"] = round(float(pe), 2) if pe else None
+
+                curr = m.get("currentRatioAnnual")
+                result["current_ratio"] = round(float(curr), 2) if curr else None
+
+                mktcap = m.get("marketCapitalization")
+                result["market_cap"] = int(float(mktcap) * 1_000_000) if mktcap else 0
+
+                result["w52_high"] = float(m["52WeekHigh"]) if m.get("52WeekHigh") else None
+                result["w52_low"]  = float(m["52WeekLow"])  if m.get("52WeekLow")  else None
         except Exception:
             pass
 
-        # Next earnings date
-        try:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-            cal = fh.earnings_calendar(symbol=clean, from_=today_str, to=ninety_str)
-            cal_list = (cal or {}).get("earningsCalendar", [])
-            if cal_list:
-                result["next_earnings_date"] = cal_list[0].get("date")
-        except Exception:
-            pass
+        # Earnings history + surprise (US & EU only)
+        if not ticker.endswith((".NS", ".BO")):
+            try:
+                eq = fh.company_earnings(clean, limit=8)
+                if eq:
+                    result["earnings_history"] = eq[:4]
+                    last = eq[0]
+                    est = last.get("estimate")
+                    act = last.get("actual")
+                    if est and act is not None and est != 0:
+                        result["earnings_surprise_pct"] = round(
+                            (act - est) / abs(est) * 100, 1
+                        )
+            except Exception:
+                pass
+
+            # Next earnings date
+            try:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+                cal = fh.earnings_calendar(symbol=clean, from_=today_str, to=ninety_str)
+                cal_list = (cal or {}).get("earningsCalendar", [])
+                if cal_list:
+                    result["next_earnings_date"] = cal_list[0].get("date")
+            except Exception:
+                pass
 
     # Yahoo Finance fallback for 52W range and market cap (always available)
     if not result["w52_high"] or not result["market_cap"]:
