@@ -1,7 +1,8 @@
 """All AI API calls — Groq (primary) → Gemini (fallback) → Anthropic (last resort)."""
 import os
 import json
-from .prompts import SYSTEM_PROMPT, STRATEGY_SYSTEM_PROMPT
+from .prompts import SYSTEM_PROMPT, STRATEGY_SYSTEM_PROMPT, build_strategy_user_prompt
+from data.cache import cache_get, cache_set, TTL_STRATEGY
 
 _groq_client = None
 _anthropic_client = None
@@ -193,23 +194,95 @@ def generate_strategy_playbook(
     ticker: str,
     stock_data: dict,
     market_data: dict,
+    fundamentals: dict = None,
+    analyst: dict = None,
+    insider: dict = None,
+    news: list = None,
+    user_context: str = "",
 ) -> str:
-    """Returns a plain English strategy playbook for a situation."""
-    prompt = f"""Situation: {situation_type}
-Stock: {ticker}
-Trust Score: {stock_data.get('trust_score', 50)}/100
-Current Price: {stock_data.get('price', 'N/A')}
-Performance: {stock_data.get('change_pct', 0):.1f}% today
-Market VIX: {market_data.get('vix', {}).get('price', 15)}
+    """Returns a specific, personalized plain English strategy playbook.
 
-Write a 3-4 sentence plain English playbook for what this investor
-should do RIGHT NOW. No jargon. Specific to their situation.
-Include a specific stop loss or exit condition."""
+    Enriched with all available data: news, analyst targets, insider activity,
+    earnings dates, fundamentals. Cached per-stock for 2 hours to prevent
+    repeated AI calls on refresh.
+    """
+    cache_key = f"strategy_playbook:{ticker}:{situation_type}"
+    cached = cache_get(cache_key, TTL_STRATEGY)
+    if cached:
+        return cached
 
-    text = _call_ai(STRATEGY_SYSTEM_PROMPT, prompt, max_tokens=300)
-    if text:
-        return text
-    return _default_playbook(situation_type, ticker, stock_data)
+    f = fundamentals or {}
+    a = analyst or {}
+    ins = insider or {}
+    vix_data = market_data.get("vix", {})
+    vix = vix_data.get("price", 15) if isinstance(vix_data, dict) else 15
+    market_status = market_data.get("status", {}).get("label", "Market Calm")
+
+    trust = stock_data.get("trust_score", 50)
+    grade = stock_data.get("grade", "Moderate")
+
+    prompt = build_strategy_user_prompt(
+        situation_type=situation_type,
+        ticker=ticker,
+        name=stock_data.get("name", ticker),
+        user_context=user_context or _build_user_context(situation_type, stock_data),
+        price=stock_data.get("current_price") or stock_data.get("price", 0),
+        change_pct=stock_data.get("change_pct", 0),
+        trust=trust,
+        grade=grade,
+        business=stock_data.get("business_score", 0),
+        smart=stock_data.get("smart_money_score", 0),
+        momentum=stock_data.get("momentum_score", 0),
+        revenue_growth=f.get("revenue_growth", 0) or 0,
+        profit_margin=f.get("profit_margins", 0) or 0,
+        earnings_surprise=f.get("earnings_surprise_pct"),
+        analyst_target=a.get("target_price"),
+        analyst_buy=a.get("buy_count", 0),
+        analyst_hold=a.get("hold_count", 0),
+        analyst_sell=a.get("sell_count", 0),
+        insider_buy_value=ins.get("insider_buy_value", 0),
+        insider_sell_value=ins.get("insider_sell_value", 0),
+        ceo_buying=ins.get("ceo_buying", False),
+        next_earnings=f.get("next_earnings_date"),
+        news_headlines=[n.get("headline", "") for n in (news or [])[:3]],
+        vix=vix,
+        market_status=market_status,
+        is_speculative=stock_data.get("is_speculative", False),
+    )
+
+    text = _call_ai(STRATEGY_SYSTEM_PROMPT, prompt, max_tokens=350)
+    result = text if text else _default_playbook(situation_type, ticker, stock_data)
+
+    cache_set(cache_key, result)
+    return result
+
+
+def _build_user_context(situation_type: str, stock_data: dict) -> str:
+    """Build a plain English user context string from stock data."""
+    ticker = stock_data.get("ticker", "")
+    pnl_pct = stock_data.get("pnl_pct")
+    pnl_sek = stock_data.get("pnl_sek")
+    shares = stock_data.get("shares")
+    buy_price = stock_data.get("buy_price")
+    trust = stock_data.get("trust_score", 50)
+
+    if shares and buy_price:
+        # Portfolio stock — user owns it
+        pnl_str = ""
+        if pnl_pct is not None:
+            pnl_str = f", currently {pnl_pct:+.1f}% P&L"
+            if pnl_sek is not None:
+                pnl_str += f" ({pnl_sek:+,.0f} SEK)"
+        return (
+            f"You own {shares} shares of {ticker} bought at ${buy_price:.2f}{pnl_str}. "
+            f"Trust score is {trust}/100."
+        )
+    else:
+        # Watchlist — user is watching
+        return (
+            f"You are watching {ticker} on your watchlist (not yet owned). "
+            f"Trust score {trust}/100 — threshold for entry is ≥75."
+        )
 
 
 # ── FALLBACK FUNCTIONS ────────────────────────────────────────────────────────

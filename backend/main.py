@@ -19,7 +19,7 @@ from datetime import datetime
 
 from database.models import init_db
 from database import db
-from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data, get_stock_history, get_news
+from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data, get_stock_history, get_news, get_insider_data
 from data.india import get_india_signals, is_indian_stock
 from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.patterns import detect_all_patterns
@@ -341,7 +341,10 @@ def accuracy():
 
 @app.get("/api/strategy")
 def strategy():
-    """Strategy situations for all stocks."""
+    """Strategy situations — returns metadata instantly (NO AI calls).
+    Playbooks are fetched on-demand via /api/strategy/{ticker}/playbook.
+    This endpoint typically returns in <500ms.
+    """
     market_data = get_market_data()
     portfolio_data = get_portfolio_with_pnl()
     watchlist_data = get_watchlist_with_signals()
@@ -350,9 +353,6 @@ def strategy():
     for pos in portfolio_data.get("positions", []):
         sit = _detect_situation(pos, market_data)
         if sit:
-            playbook = generate_strategy_playbook(
-                sit["situation_type"], pos["ticker"], pos, market_data
-            )
             my_stocks.append({
                 "ticker": pos["ticker"],
                 "flag": _get_flag(pos.get("market", "US")),
@@ -362,17 +362,20 @@ def strategy():
                 "action": sit["action"],
                 "color": sit["color"],
                 "summary": sit["summary"],
-                "playbook": playbook,
                 "priority": sit["priority"],
+                # No playbook here — fetched on-demand when card is tapped
+                "playbook": None,
+                # Pass through stock context for frontend display
+                "pnl_pct": pos.get("pnl_pct", 0),
+                "trust_score": pos.get("trust_score", 50),
+                "grade": pos.get("grade", ""),
+                "is_speculative": pos.get("is_speculative", False),
             })
 
     wl_situations = []
     for item in watchlist_data:
         sit = _detect_wl_situation(item, market_data)
         if sit:
-            playbook = generate_strategy_playbook(
-                sit["situation_type"], item["ticker"], item, market_data
-            )
             wl_situations.append({
                 "ticker": item["ticker"],
                 "flag": _get_flag(item.get("market", "US")),
@@ -382,8 +385,11 @@ def strategy():
                 "action": sit["action"],
                 "color": sit["color"],
                 "summary": sit["summary"],
-                "playbook": playbook,
                 "priority": sit["priority"],
+                "playbook": None,
+                "trust_score": item.get("trust_score", 50),
+                "grade": item.get("grade", ""),
+                "is_speculative": item.get("is_speculative", False),
             })
 
     my_stocks.sort(key=lambda x: x["priority"])
@@ -396,6 +402,70 @@ def strategy():
         "watchlist": wl_situations,
         "smart_picks": [],
     }
+
+
+class PlaybookRequest(BaseModel):
+    situation_type: str
+    # Stock data snapshot to give AI context
+    current_price: Optional[float] = None
+    change_pct: Optional[float] = None
+    trust_score: Optional[int] = None
+    grade: Optional[str] = None
+    business_score: Optional[int] = None
+    smart_money_score: Optional[int] = None
+    momentum_score: Optional[int] = None
+    pnl_pct: Optional[float] = None
+    pnl_sek: Optional[float] = None
+    shares: Optional[float] = None
+    buy_price: Optional[float] = None
+    name: Optional[str] = None
+    is_speculative: Optional[bool] = False
+
+
+@app.post("/api/strategy/{ticker}/playbook")
+def strategy_playbook(ticker: str, req: PlaybookRequest):
+    """Generate AI playbook for a specific stock situation — on-demand, cached 2hrs.
+    Called when user taps a Strategy card. Enriches AI with news, analyst,
+    insider data, and fundamentals.
+    """
+    ticker = ticker.upper()
+    market_data = get_market_data()
+
+    # All data fetched from cache (already populated by portfolio/watchlist load)
+    fundamentals = get_fundamentals(ticker)
+    analyst = get_analyst_data(ticker)
+    insider = get_insider_data(ticker)
+    news = get_news(ticker, days=7)
+
+    # Build stock_data dict from request + cached data
+    stock_data = {
+        "ticker": ticker,
+        "name": req.name or ticker,
+        "current_price": req.current_price or 0,
+        "change_pct": req.change_pct or 0,
+        "trust_score": req.trust_score or 50,
+        "grade": req.grade or "Moderate",
+        "business_score": req.business_score or 0,
+        "smart_money_score": req.smart_money_score or 0,
+        "momentum_score": req.momentum_score or 0,
+        "pnl_pct": req.pnl_pct,
+        "pnl_sek": req.pnl_sek,
+        "shares": req.shares,
+        "buy_price": req.buy_price,
+        "is_speculative": req.is_speculative or False,
+    }
+
+    playbook = generate_strategy_playbook(
+        situation_type=req.situation_type,
+        ticker=ticker,
+        stock_data=stock_data,
+        market_data=market_data,
+        fundamentals=fundamentals,
+        analyst=analyst,
+        insider=insider,
+        news=news,
+    )
+    return {"ticker": ticker, "playbook": playbook}
 
 
 # ── EARNINGS ─────────────────────────────────────────────────────────────────

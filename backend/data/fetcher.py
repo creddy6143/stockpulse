@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from .cache import (cache_get, cache_set,
                      TTL_PRICE, TTL_MARKET, TTL_RATES, TTL_FUNDAMENTALS,
                      TTL_ANALYST, TTL_INSIDER, TTL_HISTORY, TTL_NEWS,
-                     TTL_SEARCH, TTL_TRUST)
+                     TTL_SEARCH, TTL_TRUST, TTL_STRATEGY)
 
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 _fh_client = None
@@ -88,6 +88,53 @@ def _yf_chart(symbol: str) -> dict:
         except Exception:
             continue
     return {}
+
+
+def _yf_quotesummary(ticker: str) -> dict:
+    """Yahoo Finance v10 quoteSummary — returns rich fundamentals + analyst target price.
+    More reliable than Finnhub for international stocks (.ST, .AS, .L etc.).
+    Uses cookie+crumb auth. Returns merged financialData + defaultKeyStatistics dict.
+    """
+    key = f"yf_qs:{ticker}"
+    cached = cache_get(key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    session, crumb = _get_yf_auth()
+    modules = "financialData,defaultKeyStatistics"
+    base = (
+        f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+        f"?modules={modules}&corsDomain=finance.yahoo.com"
+    )
+    for url in [
+        f"{base}&crumb={crumb}" if crumb else None,
+        base,
+    ]:
+        if url is None:
+            continue
+        try:
+            r = (session or requests).get(url, headers=_HEADERS, timeout=10)
+            if r.status_code == 200:
+                qs = r.json().get("quoteSummary", {})
+                if qs.get("error"):
+                    break
+                results = qs.get("result") or []
+                if results:
+                    fd = results[0].get("financialData", {})
+                    ks = results[0].get("defaultKeyStatistics", {})
+                    # Merge both modules into one flat dict of raw values
+                    merged = {}
+                    for d in (fd, ks):
+                        for k, v in d.items():
+                            merged[k] = v.get("raw") if isinstance(v, dict) else v
+                    cache_set(key, merged)
+                    return merged
+        except Exception:
+            continue
+
+    empty = {}
+    cache_set(key, empty)
+    return empty
 
 
 def _is_us_stock(ticker: str) -> bool:
@@ -395,7 +442,49 @@ def get_fundamentals(ticker: str) -> dict:
             except Exception:
                 pass
 
-    # Yahoo Finance fallback for 52W range and market cap (always available)
+    # Yahoo Finance v10 quoteSummary fallback — richer than Finnhub for non-US stocks
+    # Covers fundamentals for .ST, .AS, .L, .DE etc. that Finnhub free tier misses.
+    has_fundamentals = (result["market_cap"] or 0) > 0 or abs(result["revenue_growth"]) > 0.001
+    if not has_fundamentals:
+        qs = _yf_quotesummary(ticker)
+        if qs:
+            # Revenue growth
+            rev = qs.get("revenueGrowth")
+            if rev is not None:
+                result["revenue_growth"] = round(float(rev), 4)
+
+            # Earnings growth
+            eg = qs.get("earningsGrowth") or qs.get("revenueGrowth")
+            if eg is not None:
+                result["earnings_growth"] = round(float(eg), 4)
+
+            # Margins
+            pm = qs.get("profitMargins")
+            if pm is not None:
+                result["profit_margins"] = round(float(pm), 4)
+                result["gaap_profitable"] = float(pm) > 0
+
+            gm = qs.get("grossMargins")
+            if gm is not None:
+                result["gross_margins"] = round(float(gm), 4)
+
+            # Market cap
+            mc = qs.get("marketCap")
+            if mc:
+                result["market_cap"] = int(float(mc))
+
+            # 52W range
+            if not result["w52_high"]:
+                result["w52_high"] = qs.get("fiftyTwoWeekHigh")
+            if not result["w52_low"]:
+                result["w52_low"] = qs.get("fiftyTwoWeekLow")
+
+            # Forward PE
+            fpe = qs.get("forwardPE")
+            if fpe:
+                result["forward_pe"] = round(float(fpe), 2)
+
+    # Yahoo Finance v8 chart fallback for 52W range and market cap when all else fails
     if not result["w52_high"] or not result["market_cap"]:
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1y&interval=1d"
@@ -539,6 +628,30 @@ def get_analyst_data(ticker: str) -> dict:
             result["target_low"]   = pt.get("targetLow")
     except Exception:
         pass
+
+    # Yahoo v10 quoteSummary fallback for target price (Finnhub paywalls this on free tier)
+    if result["target_price"] is None:
+        try:
+            qs = _yf_quotesummary(ticker)
+            if qs:
+                tp = qs.get("targetMeanPrice")
+                if tp:
+                    result["target_price"] = float(tp)
+                th = qs.get("targetHighPrice")
+                if th:
+                    result["target_high"] = float(th)
+                tl = qs.get("targetLowPrice")
+                if tl:
+                    result["target_low"] = float(tl)
+                # Also get analyst count and recommendation from Yahoo if Finnhub unavailable
+                n = qs.get("numberOfAnalystOpinions")
+                if n and result["buy_count"] == 0:
+                    result["analyst_count_yf"] = int(n)
+                rec_key = qs.get("recommendationKey", "")
+                if rec_key and result["recommendation"] == "hold":
+                    result["recommendation"] = rec_key.lower()
+        except Exception:
+            pass
 
     try:
         recs = fh.recommendation_trends(clean)

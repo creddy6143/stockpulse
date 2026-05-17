@@ -80,6 +80,12 @@ export const getAccuracy = () => request('/api/accuracy');
 
 export const getStrategy = () => request('/api/strategy');
 
+export const getStrategyPlaybook = (ticker, situationData) =>
+  request(`/api/strategy/${ticker}/playbook`, {
+    method: 'POST',
+    body: JSON.stringify(situationData),
+  });
+
 // ── HEALTH ───────────────────────────────────────────────────────────────────
 
 export const getHealth = () => request('/api/health');

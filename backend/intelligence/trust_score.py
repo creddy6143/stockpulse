@@ -4,6 +4,34 @@ from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data
 from data.india import get_india_signals, is_indian_stock
 
 
+def _has_real_data(f: dict) -> bool:
+    """True when at least one meaningful fundamental field has real data.
+    Prevents awarding points on missing-data defaults (e.g. profit_margins=0.0
+    when Finnhub simply has no coverage for a stock).
+    """
+    return (
+        (f.get("market_cap") or 0) > 0
+        or abs(f.get("revenue_growth") or 0) > 0.001
+        or abs(f.get("gross_margins") or 0) > 0.001
+        or abs(f.get("profit_margins") or 0) > 0.001
+        or (f.get("earnings_surprise_pct") is not None)
+    )
+
+
+def _is_speculative_prerevenue(f: dict) -> bool:
+    """True when market cap data exists but fundamental operating data is absent.
+    This means a company that IS real (it has a market cap) but has not yet
+    reached revenue-generating stage. NNE, OKLO are examples.
+    Distinct from 'no coverage' (MILDEF.ST) and from 'failing traditional business'.
+    """
+    market_cap = f.get("market_cap") or 0
+    rev = abs(f.get("revenue_growth") or 0)
+    gross = abs(f.get("gross_margins") or 0)
+    profitable = f.get("gaap_profitable", False)
+    # Has market cap (real company) but zero operating metrics → pre-revenue
+    return market_cap > 0 and rev < 0.001 and gross < 0.001 and not profitable
+
+
 def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     """
     Returns full trust score breakdown:
@@ -49,7 +77,15 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
             smart_money = min(35, smart_money + 2)
 
     total = business + smart_money + momentum
-    grade = _grade(total)
+
+    # Detect pre-revenue speculative stage AFTER scoring
+    speculative = _is_speculative_prerevenue(fundamentals)
+    grade = _grade(total, speculative)
+
+    # Include analyst consensus in result so frontend can display it
+    buy_n  = analyst.get("buy_count", 0)
+    hold_n = analyst.get("hold_count", 0)
+    sell_n = analyst.get("sell_count", 0)
 
     return {
         "ticker": ticker,
@@ -60,6 +96,13 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
         "grade": grade,
         "auto_disqualified": False,
         "disqualify_reason": None,
+        "is_speculative": speculative,
+        # Analyst consensus — displayed on watchlist and stock rows
+        "analyst_buy": buy_n,
+        "analyst_hold": hold_n,
+        "analyst_sell": sell_n,
+        "analyst_target": analyst.get("target_price"),
+        "data_quality": "limited" if not _has_real_data(fundamentals) else "full",
     }
 
 
@@ -88,12 +131,16 @@ def _disqualified_result(ticker: str, reason: str) -> dict:
         "grade": "Blocked",
         "auto_disqualified": True,
         "disqualify_reason": reason,
+        "is_speculative": False,
+        "data_quality": "full",
+        "analyst_buy": 0, "analyst_hold": 0, "analyst_sell": 0, "analyst_target": None,
     }
 
 
 def _business_score(f: dict) -> int:
     score = 0
     rev = f.get("revenue_growth", 0) or 0
+    has_data = _has_real_data(f)
 
     # Revenue growth (12 pts max)
     if rev > 0.30:
@@ -104,9 +151,12 @@ def _business_score(f: dict) -> int:
         score += 3
 
     # Profitability (10 pts)
+    # BUG FIX: only award "near profitable" when we actually have data.
+    # profit_margins defaults to 0.0 when no data — 0.0 > -0.10 was awarding
+    # 5 pts to pre-revenue companies and uncovered stocks (NNE, OKLO, MILDEF.ST).
     if f.get("gaap_profitable"):
         score += 10
-    elif f.get("profit_margins", 0) > -0.10:
+    elif has_data and (f.get("profit_margins") or 0) > -0.10:
         score += 5
 
     # Earnings surprise (8 pts)
@@ -228,7 +278,12 @@ def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict) -> int:
     return min(25, score)
 
 
-def _grade(total: int) -> str:
+def _grade(total: int, speculative: bool = False) -> str:
+    if speculative:
+        # Pre-revenue companies get "Speculative" — not "Blocked"
+        # They can still rank within speculative by score:
+        # Speculative-Strong (score >= 25), Speculative (lower)
+        return "Speculative"
     if total >= 90:
         return "Exceptional"
     if total >= 75:
@@ -296,4 +351,6 @@ def get_trust_score_with_fallback(ticker: str, price_data: dict = None) -> dict:
         "ticker": ticker, "total_score": 50,
         "business_score": 20, "smart_money_score": 15, "momentum_score": 15,
         "grade": "Moderate", "auto_disqualified": False, "disqualify_reason": None,
+        "is_speculative": False, "data_quality": "limited",
+        "analyst_buy": 0, "analyst_hold": 0, "analyst_sell": 0, "analyst_target": None,
     }

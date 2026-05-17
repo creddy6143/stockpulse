@@ -1,7 +1,7 @@
 """Portfolio P&L and positions management — all values in native currency + SEK."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database.db import get_portfolio, get_watchlist
-from data.fetcher import get_stock_price, get_exchange_rates
+from data.fetcher import get_stock_price, get_exchange_rates, get_analyst_data, get_fundamentals
 from intelligence.trust_score import get_trust_score_with_fallback
 
 
@@ -136,6 +136,38 @@ def _build_watchlist_item(item: dict) -> dict:
     price_data = get_stock_price(ticker)
     trust = get_trust_score_with_fallback(ticker, price_data)
 
+    # Analyst data is already fetched inside trust score calculation (cached).
+    # Re-fetch from cache (near-instant) to get target price for upside calc.
+    analyst = get_analyst_data(ticker)
+    fundamentals = get_fundamentals(ticker)
+
+    price = price_data.get("price", 0)
+    target_price = trust.get("analyst_target") or analyst.get("target_price")
+
+    # Real analyst upside % — (target - price) / price × 100
+    if target_price and price > 0:
+        upside_pct = round(((target_price - price) / price) * 100, 1)
+        upside_str = f"+{upside_pct:.0f}%" if upside_pct >= 0 else f"{upside_pct:.0f}%"
+    else:
+        upside_pct = None
+        upside_str = "—"
+
+    # Entry zone: 52W support +15% → current price -3%
+    entry_str = "—"
+    w52_low = fundamentals.get("w52_low")
+    if w52_low and price > 0:
+        entry_low = w52_low * 1.15
+        entry_high = price * 0.97
+        if entry_low < entry_high:
+            entry_str = f"{entry_low:.0f}–{entry_high:.0f}"
+        else:
+            entry_str = f"{price*0.92:.0f}–{price*0.98:.0f}"
+
+    # Signal group — also considers analyst consensus now
+    total_analysts = (trust.get("analyst_buy", 0) + trust.get("analyst_hold", 0)
+                      + trust.get("analyst_sell", 0))
+    buy_pct = (trust.get("analyst_buy", 0) / total_analysts) if total_analysts > 0 else 0
+
     if trust["total_score"] >= 75 and not trust["auto_disqualified"]:
         wl_group = "ready"
         signal = "Entry zone now"
@@ -144,20 +176,36 @@ def _build_watchlist_item(item: dict) -> dict:
         signal = "Not yet"
     else:
         wl_group = "watching"
-        signal = "Still watching"
+        # More descriptive signal based on analyst consensus
+        if buy_pct >= 0.75:
+            signal = "High analyst conviction"
+        elif upside_pct is not None and upside_pct > 30:
+            signal = f"Analysts see +{upside_pct:.0f}% upside"
+        else:
+            signal = "Still watching"
 
     return {
         "id": item["id"],
         "ticker": ticker,
         "name": item.get("name") or price_data.get("name", ticker),
-        "current_price": price_data.get("price", 0),
+        "current_price": price,
         "change_pct": price_data.get("change_pct", 0),
         "trust_score": trust["total_score"],
         "grade": trust["grade"],
+        "is_speculative": trust.get("is_speculative", False),
+        "data_quality": trust.get("data_quality", "full"),
         "wl_group": wl_group,
         "signal": signal,
         "added_at": item.get("added_at"),
         "market": item.get("market", "US"),
+        # Analyst data for display
+        "analyst_target": target_price,
+        "analyst_upside_pct": upside_pct,
+        "analyst_upside_str": upside_str,
+        "analyst_entry": entry_str,
+        "analyst_buy": trust.get("analyst_buy", 0),
+        "analyst_hold": trust.get("analyst_hold", 0),
+        "analyst_sell": trust.get("analyst_sell", 0),
     }
 
 

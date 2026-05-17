@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker } from "./api/client";
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600;700&display=swap');
@@ -71,6 +71,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
 .sig-exp{padding:9px 14px 11px;background:rgba(91,114,248,.02);font-size:11px;color:var(--t2);line-height:1.6;animation:exIn .2s ease}
 @keyframes exIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .mkt-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
 .mkt-card{background:var(--white);border-radius:var(--rm);padding:12px;box-shadow:var(--shadowsm);border:1px solid transparent}
 .mkt-card.g{border-color:rgba(5,150,105,.12);background:linear-gradient(135deg,#f0fdf9,#fff)}
@@ -202,8 +203,16 @@ const getFlag = (market, ticker) => {
   if (market === "EU" || t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".ST") || t.endsWith(".L") || t.endsWith(".F") || t.endsWith(".MI")) return "🇪🇺";
   return "🇺🇸";
 };
-const tc = s => s>=75?"#5b72f8":s>=60?"#d97706":s>=40?"#f59e0b":"#e11d48";
-const tg = s => s>=75?"Strong":s>=60?"Moderate":s>=40?"Weak":"Blocked";
+const tc = (s, grade) => {
+  // Speculative gets violet colour — different from Blocked red
+  if (grade === "Speculative") return "var(--violet)";
+  if (grade === "Limited Data") return "var(--t3)";
+  return s>=75?"#5b72f8":s>=60?"#d97706":s>=40?"#f59e0b":"#e11d48";
+};
+const tg = (s, grade) => {
+  if (grade) return grade; // use grade from API when available
+  return s>=75?"Strong":s>=60?"Moderate":s>=40?"Weak":"Blocked";
+};
 const isINR = t => t && (t.endsWith(".NS") || t.endsWith(".BO"));
 const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".MI") || t.endsWith(".F"));
 const isSEK = t => t && (t.endsWith(".ST") || t.endsWith(".HE") || t.endsWith(".CO") || t.endsWith(".OL"));
@@ -270,8 +279,18 @@ const mapWatchlistItem = item => ({
   ticker: item.ticker, flag: getFlag(item.market, item.ticker),
   price: item.current_price, change: item.change_pct,
   name: item.name || item.ticker, trust: item.trust_score,
-  signal: item.signal || "Still watching", reason: item.signal || "Still watching",
-  entry: "—", potential: "—",
+  grade: item.grade || "",
+  isSpeculative: item.is_speculative || false,
+  signal: item.signal || "Still watching",
+  reason: item.signal || "Still watching",
+  // Real analyst upside from API (was hardcoded "—")
+  potential: item.analyst_upside_str || "—",
+  entry: item.analyst_entry || "—",
+  // Analyst consensus for tooltip
+  analystBuy: item.analyst_buy || 0,
+  analystHold: item.analyst_hold || 0,
+  analystSell: item.analyst_sell || 0,
+  analystTarget: item.analyst_target || null,
 });
 
 const mapAlert = alert => {
@@ -1153,9 +1172,21 @@ function CompactRow({s, dot, onDetail, onRemove}) {
 
 function CompactWatchRow({s, dot, onRemove}) {
   const [open, setOpen] = useState(false);
-  const c = tc(s.trust);
+  const c = tc(s.trust, s.grade);
   const cc = dot;
   const cbg = dot==="var(--emerald)"?"var(--emerald2)":dot==="var(--amber)"?"var(--amber2)":"var(--rose2)";
+  // Third column: show analyst upside % if available, else trust score
+  const hasRealUpside = s.potential && s.potential !== "—";
+  const thirdVal = hasRealUpside ? s.potential : s.trust;
+  const thirdColor = hasRealUpside
+    ? (s.potential.startsWith("+") ? "var(--emerald)" : "var(--rose)")
+    : c;
+  const thirdLabel = hasRealUpside
+    ? (s.analystBuy+s.analystHold+s.analystSell > 0
+        ? `${s.analystBuy}B/${s.analystHold}H/${s.analystSell}S`
+        : "analyst target")
+    : `score${s.isSpeculative ? " · speculative" : ""}`;
+
   return (
     <>
       <div onClick={()=>setOpen(o=>!o)}
@@ -1167,6 +1198,7 @@ function CompactWatchRow({s, dot, onRemove}) {
           <div style={{display:"flex",alignItems:"center",gap:4}}>
             <span style={{fontSize:10}}>{s.flag}</span>
             <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12,color:"var(--t1)"}}>{s.ticker}</span>
+            {s.isSpeculative && <span style={{fontSize:7,fontWeight:700,color:"var(--violet)",background:"rgba(124,58,237,.1)",padding:"1px 4px",borderRadius:3}}>SPEC</span>}
           </div>
           <div style={{fontSize:9,color:"var(--t3)",marginTop:1}}>{s.name}</div>
         </div>
@@ -1175,23 +1207,36 @@ function CompactWatchRow({s, dot, onRemove}) {
           <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",marginTop:2}}>{s.entry}</div>
         </div>
         <div style={{textAlign:"right"}}>
-          <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:c}}>{s.trust}</span>
-          <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{s.potential}</div>
+          <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:thirdColor}}>{thirdVal}</span>
+          <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:1}}>{thirdLabel}</div>
         </div>
       </div>
       {open&&(
         <div style={{padding:"9px 12px 11px",background:"rgba(91,114,248,.02)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
           <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:9}}>{s.reason}</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <div style={{background:"var(--card2)",borderRadius:8,padding:"7px 10px"}}>
-              <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>Best Entry</div>
+              <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>Entry Zone</div>
               <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--sky)"}}>{s.entry}</div>
             </div>
             <div style={{background:"var(--card2)",borderRadius:8,padding:"7px 10px"}}>
-              <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>Potential</div>
-              <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--emerald)"}}>{s.potential}</div>
+              <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>{hasRealUpside?"Analyst Upside":"AI Score"}</div>
+              <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:thirdColor}}>{thirdVal}</div>
             </div>
           </div>
+          {(s.analystBuy+s.analystHold+s.analystSell) > 0 && (
+            <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>
+              Analysts: <span style={{color:"var(--emerald)",fontWeight:700}}>{s.analystBuy} Buy</span>
+              {" / "}<span style={{color:"var(--amber)"}}>{s.analystHold} Hold</span>
+              {" / "}<span style={{color:"var(--rose)"}}>{s.analystSell} Sell</span>
+              {s.analystTarget && <> · Target: ${s.analystTarget.toFixed(0)}</>}
+            </div>
+          )}
+          {s.isSpeculative && (
+            <div style={{fontSize:9,color:"var(--violet)",marginTop:6,fontStyle:"italic"}}>
+              Pre-revenue company — score reflects analyst conviction, not operating metrics.
+            </div>
+          )}
         </div>
       )}
     </>
@@ -1228,7 +1273,7 @@ function PivotSection({title, accentColor, slices}) {
       <div style={{display:"grid",gridTemplateColumns:slice.isWatch?"1.4fr 1.8fr .8fr":"1.9fr 1.5fr .7fr .9fr",
         padding:"4px 12px",background:"rgba(15,23,42,.018)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
         {(slice.isWatch
-          ? ["Stock","Signal · Entry","Upside"]
+          ? ["Stock","Signal · Entry","Upside %"]
           : ["Stock","Price · P&L","Score","Rec"]
         ).map((h,i)=>(
           <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.7,
@@ -1590,11 +1635,43 @@ function SmartPicksScreen({picks, disq, accuracy}) {
 function StrategyScreen({strategyData}) {
   const [tab,setTab] = useState(0);
   const [exp,setExp] = useState(null);
+  const [playbookCache,setPlaybookCache] = useState({});
+  const [loadingKey,setLoadingKey] = useState(null);
   const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[]};
   const tabs = ["My Stocks","Watchlist","Smart Picks"];
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy)];
   const items = lists[tab];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length;
+
+  const handleExpand = (s, i) => {
+    const wasOpen = exp === i;
+    setExp(wasOpen ? null : i);
+    if (!wasOpen) {
+      const key = `${s.ticker}:${s.situation_type}`;
+      if (!playbookCache[key]) {
+        setLoadingKey(key);
+        getStrategyPlaybook(s.ticker, {
+          situation_type: s.situation_type,
+          current_price: s.current_price,
+          change_pct: s.change_pct,
+          trust_score: s.trust_score,
+          grade: s.grade,
+          business_score: s.business_score,
+          smart_money_score: s.smart_money_score,
+          momentum_score: s.momentum_score,
+          pnl_pct: s.pnl_pct,
+          pnl_sek: s.pnl_sek,
+          shares: s.shares,
+          buy_price: s.buy_price,
+          name: s.name,
+          is_speculative: s.is_speculative,
+        }).then(res => {
+          if (res?.playbook) setPlaybookCache(c=>({...c,[key]:res.playbook}));
+        }).catch(()=>{}).finally(()=>setLoadingKey(null));
+      }
+    }
+  };
+
   return (
     <div className="pad" style={{paddingTop:14}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -1613,11 +1690,17 @@ function StrategyScreen({strategyData}) {
             </button>
           ))}
         </div>
+        {items.length===0&&(
+          <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
+        )}
         {items.map((s,i)=>{
           const open=exp===i;
+          const key=`${s.ticker}:${s.situation_type}`;
+          const playbook=playbookCache[key];
+          const loading=loadingKey===key;
           return (
-            <div key={s.ticker}>
-              <div onClick={()=>setExp(open?null:i)} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?"rgba(91,114,248,.025)":"transparent",transition:"background .15s"}}>
+            <div key={s.ticker+s.situation_type}>
+              <div onClick={()=>handleExpand(s,i)} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?"rgba(91,114,248,.025)":"transparent",transition:"background .15s"}}>
                 <span style={{fontSize:18,flexShrink:0}}>{s.icon}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
@@ -1635,7 +1718,16 @@ function StrategyScreen({strategyData}) {
               {open&&(
                 <div style={{padding:"13px 14px 15px",background:"linear-gradient(180deg,rgba(91,114,248,.03),transparent)",borderBottom:"1px solid rgba(15,23,42,.04)",animation:"exIn .2s ease"}}>
                   <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>WHAT TO DO</div>
-                  <div style={{fontSize:12,color:"var(--t1)",lineHeight:1.7,marginBottom:13}}>{s.playbook}</div>
+                  {loading?(
+                    <div style={{fontSize:11,color:"var(--t3)",fontStyle:"italic",marginBottom:13,display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{display:"inline-block",width:10,height:10,border:"2px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+                      Analysing your situation…
+                    </div>
+                  ):(
+                    <div style={{fontSize:12,color:"var(--t1)",lineHeight:1.7,marginBottom:13,borderLeft:"3px solid "+(s.col||"var(--indigo)"),paddingLeft:10}}>
+                      {playbook||s.summary}
+                    </div>
+                  )}
                   <button style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:s.action==="EXIT"||s.action==="WAIT"?"var(--rose)":s.action==="BUY"||s.action==="STRONG BUY"?"var(--emerald)":"var(--indigo)",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
                     {s.action==="EXIT"?"Exit This Position →":s.action==="STRONG BUY"||s.action==="BUY"?"View Full Analysis →":s.action==="DECIDE"?"Make a Decision →":"View Full Guidance →"}
                   </button>

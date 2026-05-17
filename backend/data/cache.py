@@ -14,6 +14,7 @@ TTL_INSIDER      = 60 * 60     # 1 hr   — insider transactions
 TTL_HISTORY      = 5 * 60      # 5 min  — chart history / perf %
 TTL_NEWS         = 10 * 60     # 10 min — news headlines
 TTL_SEARCH       = 5 * 60      # 5 min  — search results
+TTL_STRATEGY     = 2 * 60 * 60 # 2 hr   — AI strategy playbooks (cached per-stock, generated on-demand)
 TTL_DEFAULT      = 15 * 60     # 15 min — everything else
 
 
