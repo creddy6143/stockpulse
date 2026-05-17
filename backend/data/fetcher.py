@@ -573,27 +573,92 @@ def get_insider_data(ticker: str) -> dict:
 
 # ── NEWS ──────────────────────────────────────────────────────────────────────
 
+def _yf_rss_news(ticker: str, max_items: int = 8) -> list:
+    """Yahoo Finance RSS feed — indexes Globe Newswire / BusinessWire press releases.
+    This catches clinical trial announcements, FDA news, and earnings PRs that
+    Finnhub free tier misses for small-cap biotech/pharma stocks."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    # Try the ticker as-is first, then stripped (for .NS/.ST etc)
+    clean = ticker.replace(".NS","").replace(".BO","")
+    attempts = [ticker] if ticker == clean else [clean, ticker]
+
+    for t in attempts:
+        try:
+            url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={t}&region=US&lang=en-US"
+            r = requests.get(url, headers=_HEADERS, timeout=8)
+            if r.status_code != 200 or not r.text.strip():
+                continue
+            root = ET.fromstring(r.text)
+            items = []
+            for item in root.findall(".//item")[:max_items]:
+                title = (item.findtext("title") or "").strip()
+                link  = (item.findtext("link")  or "").strip()
+                pub   = (item.findtext("pubDate") or "").strip()
+                ts = 0
+                if pub:
+                    try:
+                        ts = int(parsedate_to_datetime(pub).timestamp())
+                    except Exception:
+                        pass
+                if title:
+                    items.append({
+                        "headline": title,
+                        "url": link,
+                        "source": "Yahoo Finance",
+                        "datetime": ts,
+                    })
+            if items:
+                return items
+        except Exception:
+            continue
+    return []
+
+
 def get_news(ticker: str, days: int = 7) -> list:
-    """Recent news headlines from Finnhub."""
+    """Recent news headlines — Finnhub primary, Yahoo Finance RSS supplement.
+
+    Finnhub free tier covers major business media but misses specialized
+    press release wires (Globe Newswire, BusinessWire) used by small-cap
+    biotech/pharma. Yahoo Finance RSS indexes those and fills the gap.
+    Results are merged, deduplicated by headline, sorted newest-first.
+    """
     key = f"news:{ticker}:{days}"
     cached = cache_get(key, TTL_NEWS)
     if cached:
         return cached
 
+    finnhub_news = []
     fh = _finnhub()
-    if not fh:
-        return []
+    if fh:
+        try:
+            from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            to_date   = datetime.now().strftime("%Y-%m-%d")
+            clean = ticker.replace(".NS", "").replace(".BO", "")
+            raw = fh.company_news(clean, _from=from_date, to=to_date)
+            finnhub_news = raw[:10] if raw else []
+        except Exception:
+            pass
 
-    try:
-        from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        to_date = datetime.now().strftime("%Y-%m-%d")
-        clean = ticker.replace(".NS", "").replace(".BO", "")
-        news = fh.company_news(clean, _from=from_date, to=to_date)
-        result = news[:10] if news else []
-        cache_set(key, result)
-        return result
-    except Exception:
-        return []
+    # Always supplement with Yahoo Finance RSS — catches press releases Finnhub misses
+    yf_news = _yf_rss_news(ticker, max_items=8)
+
+    # Merge: combine both sources, deduplicate by lowercase headline prefix (60 chars)
+    seen = set()
+    merged = []
+    for article in finnhub_news + yf_news:
+        h = (article.get("headline") or "").lower()[:60]
+        if h and h not in seen:
+            seen.add(h)
+            merged.append(article)
+
+    # Sort newest-first, keep top 10
+    merged.sort(key=lambda x: x.get("datetime", 0), reverse=True)
+    result = merged[:10]
+
+    cache_set(key, result)
+    return result
 
 
 # ── ANALYST DATA ──────────────────────────────────────────────────────────────

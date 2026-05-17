@@ -184,9 +184,34 @@ Give a plain English verdict following the system rules."""
     if parsed:
         return parsed
 
-    # For manually-blocked stocks, the exit message is always valid regardless of
-    # market conditions. For everything else, use the generic trust-score-based verdict.
-    return _BLOCKED_VERDICTS.get(clean, _default_verdict(ticker, trust_score))
+    # For manually-blocked stocks: return the base verdict but if there's a
+    # significant price move today, surface it as the EXIT WINDOW (not a reason to hold).
+    blocked = _BLOCKED_VERDICTS.get(clean)
+    if blocked:
+        change_pct = float(price_data.get("change_pct", 0) or 0)
+        if change_pct >= 5:
+            # Big up day — use it as context: exit at a better price
+            result = dict(blocked)
+            result["verdict"] = (
+                f"Up {change_pct:.0f}% today — this pop is your exit window. "
+                f"{blocked['verdict']}"
+            )
+            result["stop_loss_explanation"] = (
+                f"Exit now while price is elevated {change_pct:+.0f}%. "
+                f"Do not wait for it to reverse — the underlying problems have not changed."
+            )
+            return result
+        elif change_pct <= -5:
+            # Big down day — reinforce urgency
+            result = dict(blocked)
+            result["verdict"] = (
+                f"Down {abs(change_pct):.0f}% today — confirms the exit signal. "
+                f"{blocked['verdict']}"
+            )
+            return result
+        return blocked
+
+    return _default_verdict(ticker, trust_score)
 
 
 def generate_strategy_playbook(
