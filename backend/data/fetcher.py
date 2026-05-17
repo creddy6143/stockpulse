@@ -13,7 +13,10 @@ import time as _time
 import requests
 import finnhub
 from datetime import datetime, timedelta
-from .cache import cache_get, cache_set
+from .cache import (cache_get, cache_set,
+                     TTL_PRICE, TTL_MARKET, TTL_RATES, TTL_FUNDAMENTALS,
+                     TTL_ANALYST, TTL_INSIDER, TTL_HISTORY, TTL_NEWS,
+                     TTL_SEARCH, TTL_TRUST)
 
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 _fh_client = None
@@ -112,7 +115,7 @@ def get_exchange_rates() -> dict:
     Cached 15 minutes.
     """
     key = "exchange_rates"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_RATES)
     if cached:
         return cached
 
@@ -153,7 +156,7 @@ def get_stock_price(ticker: str) -> dict:
     Fallback: Yahoo Finance v8 chart.
     """
     key = f"price:{ticker}"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_PRICE)
     if cached:
         return cached
 
@@ -231,7 +234,7 @@ def get_market_data() -> dict:
     Fallback: Finnhub ETF proxies (VXX/1.5, SPY, QQQ, EWG, INDA).
     """
     key = "market_data"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_MARKET)
     if cached:
         return cached
 
@@ -295,7 +298,7 @@ def get_market_data() -> dict:
 def get_fundamentals(ticker: str) -> dict:
     """Revenue growth, earnings, profitability from Finnhub company_basic_financials."""
     key = f"fundamentals:{ticker}"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_FUNDAMENTALS)
     if cached:
         return cached
 
@@ -417,7 +420,7 @@ def get_fundamentals(ticker: str) -> dict:
 def get_insider_data(ticker: str) -> dict:
     """Insider buy/sell signals and institutional data from Finnhub."""
     key = f"insider:{ticker}"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_INSIDER)
     if cached:
         return cached
 
@@ -484,7 +487,7 @@ def get_insider_data(ticker: str) -> dict:
 def get_news(ticker: str, days: int = 7) -> list:
     """Recent news headlines from Finnhub."""
     key = f"news:{ticker}:{days}"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_NEWS)
     if cached:
         return cached
 
@@ -509,7 +512,7 @@ def get_news(ticker: str, days: int = 7) -> list:
 def get_analyst_data(ticker: str) -> dict:
     """Analyst ratings and price target from Finnhub."""
     key = f"analyst:{ticker}"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_ANALYST)
     if cached:
         return cached
 
@@ -563,7 +566,7 @@ def get_analyst_data(ticker: str) -> dict:
 def get_stock_history(ticker: str) -> dict:
     """Performance % for 1W/1M/3M/6M/1Y + full price series for charting."""
     key = f"history:{ticker}"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_HISTORY)
     if cached:
         return cached
 
@@ -651,7 +654,7 @@ _EXCHANGE_NAMES = {
 def search_ticker(query: str) -> list:
     """Search for tickers. Yahoo Finance search first, Finnhub as supplement."""
     key = f"search:{query.lower()[:20]}"
-    cached = cache_get(key)
+    cached = cache_get(key, TTL_SEARCH)
     if cached is not None:
         return cached
 

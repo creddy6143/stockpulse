@@ -1,6 +1,7 @@
 """StockPulse FastAPI backend."""
 import os
 import sys
+import time as _time
 from pathlib import Path
 
 # Ensure backend directory is in path
@@ -9,8 +10,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -40,6 +42,19 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    t0 = _time.monotonic()
+    response = await call_next(request)
+    elapsed = _time.monotonic() - t0
+    ms = int(elapsed * 1000)
+    response.headers["X-Response-Time"] = f"{ms}ms"
+    # Log slow requests (>1s) so Railway logs show the bottlenecks
+    if elapsed > 1.0:
+        print(f"[SLOW] {request.method} {request.url.path} → {ms}ms", flush=True)
+    return response
+
+
 @app.on_event("startup")
 def startup():
     init_db()
@@ -50,6 +65,12 @@ def startup():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/api/ping")
+def ping():
+    """Keep-alive endpoint — frontend pings every 10 min to prevent Railway sleep."""
+    return {"ok": True}
 
 
 @app.delete("/api/reset")

@@ -1673,21 +1673,29 @@ export default function App() {
   };
 
   useEffect(() => {
-    Promise.allSettled([
-      getPortfolio(), getWatchlist(), getMarket(),
-      getAlerts(), getPicks(), getDisqualified(), getAccuracy(),
-      getStrategy(), getEarnings(),
-    ]).then(([pR,wR,mR,aR,piR,dR,acR,stR,eR]) => {
-      if(pR.status==="fulfilled") setPortfolio(pR.value||{positions:[],summary:{}});
-      if(wR.status==="fulfilled") setWatchlistRaw(wR.value||[]);
-      if(mR.status==="fulfilled") setMarket(mR.value);
-      if(aR.status==="fulfilled") setAlerts(aR.value||[]);
-      if(piR.status==="fulfilled") setPicks((piR.value||[]).map(mapPick));
-      if(dR.status==="fulfilled") setDisq((dR.value||[]).map(mapDisq));
-      if(acR.status==="fulfilled") setAccuracy(acR.value?.accuracy_pct!=null?`${acR.value.accuracy_pct}%`:"—");
-      if(stR.status==="fulfilled") setStrategyData(stR.value||{myStocks:[],watchlist:[],smartPicks:[]});
-      if(eR.status==="fulfilled") setEarnings((eR.value||[]).map(mapEarnings));
-    });
+    // Keep-alive ping every 10 min so Railway never sleeps mid-session
+    const ping = setInterval(() => fetch('/api/ping').catch(()=>{}), 10*60*1000);
+
+    // PRIORITY 1 — critical for Home screen (load first, update state immediately)
+    getMarket().then(v => { if(v) setMarket(v); }).catch(()=>{});
+    getAlerts().then(v => { setAlerts(v||[]); }).catch(()=>{});
+    getPortfolio().then(v => { setPortfolio(v||{positions:[],summary:{}}); }).catch(()=>{});
+
+    // PRIORITY 2 — Stocks screen (start together with P1, resolve slightly later)
+    getWatchlist().then(v => { setWatchlistRaw(v||[]); }).catch(()=>{});
+    getEarnings().then(v => { setEarnings((v||[]).map(mapEarnings)); }).catch(()=>{});
+    getAccuracy().then(v => { setAccuracy(v?.accuracy_pct!=null?`${v.accuracy_pct}%`:"—"); }).catch(()=>{});
+
+    // PRIORITY 3 — Smart Picks + Strategy (heavy, load in background after page is visible)
+    setTimeout(() => {
+      getDisqualified().then(v => { setDisq((v||[]).map(mapDisq)); }).catch(()=>{});
+      getPicks().then(v => { setPicks((v||[]).map(mapPick)); }).catch(()=>{});
+    }, 500);
+    setTimeout(() => {
+      getStrategy().then(v => { setStrategyData(v||{myStocks:[],watchlist:[],smartPicks:[]}); }).catch(()=>{});
+    }, 1000);
+
+    return () => clearInterval(ping);
   }, []);
 
   // ── Derived data ──

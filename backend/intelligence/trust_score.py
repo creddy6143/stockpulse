@@ -1,4 +1,5 @@
 """Trust Score calculator — 3 pillars, 100 points total."""
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data
 from data.india import get_india_signals, is_indian_stock
 
@@ -14,9 +15,14 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
       - auto_disqualified (bool)
       - disqualify_reason (str|None)
     """
-    fundamentals = get_fundamentals(ticker)
-    insider = get_insider_data(ticker)
-    analyst = get_analyst_data(ticker)
+    # Fetch all 3 data sources in parallel — was serial (3× slower)
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_future = ex.submit(get_fundamentals, ticker)
+        i_future = ex.submit(get_insider_data, ticker)
+        a_future = ex.submit(get_analyst_data, ticker)
+        fundamentals = f_future.result()
+        insider      = i_future.result()
+        analyst      = a_future.result()
     # Expose analyst to smart_money scoring (needed for consensus proxy)
     insider["_analyst"] = analyst
 
