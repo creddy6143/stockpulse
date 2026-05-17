@@ -234,47 +234,50 @@ def _grade(total: int) -> str:
     return "Blocked"
 
 
-# ── DEMO OVERRIDES (for known test stocks) ───────────────────────────────────
-# When real data is unavailable these provide sensible defaults for demo stocks.
+# ── MANUAL BLOCK OVERRIDES ────────────────────────────────────────────────────
+# Stocks with disqualifying red flags that Finnhub free-tier data cannot
+# detect automatically (reverse splits, board resignations, SEC fraud).
+# Every entry here MUST have auto_disqualified=True.
+# All other stocks are scored 100% from live API data — no hardcoding.
 
-DEMO_SCORES = {
-    "TNXP":     {"total_score": 18, "business_score": 3, "smart_money_score": 5, "momentum_score": 10, "grade": "Blocked", "auto_disqualified": True, "disqualify_reason": "8 reverse splits. Chronic dilution."},
-    "XGN":      {"total_score": 8,  "business_score": 2, "smart_money_score": 2, "momentum_score": 4,  "grade": "Blocked", "auto_disqualified": True, "disqualify_reason": "Board resigned 18 days before earnings."},
-    "NKLA":     {"total_score": 7,  "business_score": 0, "smart_money_score": 2, "momentum_score": 5,  "grade": "Blocked", "auto_disqualified": True, "disqualify_reason": "CEO + CFO resigned. SEC fraud. Chapter 11."},
-    "GRRR":     {"total_score": 68, "business_score": 28, "smart_money_score": 22, "momentum_score": 18, "grade": "Moderate", "auto_disqualified": False, "disqualify_reason": None},
-    "INSM":     {"total_score": 61, "business_score": 22, "smart_money_score": 20, "momentum_score": 19, "grade": "Moderate", "auto_disqualified": False, "disqualify_reason": None},
-    "NVDA":     {"total_score": 89, "business_score": 38, "smart_money_score": 30, "momentum_score": 21, "grade": "Strong", "auto_disqualified": False, "disqualify_reason": None},
-    "AXON":     {"total_score": 87, "business_score": 36, "smart_money_score": 32, "momentum_score": 19, "grade": "Strong", "auto_disqualified": False, "disqualify_reason": None},
-    "PLTR":     {"total_score": 79, "business_score": 30, "smart_money_score": 28, "momentum_score": 21, "grade": "Strong", "auto_disqualified": False, "disqualify_reason": None},
-    "MSFT":     {"total_score": 82, "business_score": 33, "smart_money_score": 28, "momentum_score": 21, "grade": "Strong", "auto_disqualified": False, "disqualify_reason": None},
-    "ASML":     {"total_score": 84, "business_score": 35, "smart_money_score": 30, "momentum_score": 19, "grade": "Strong", "auto_disqualified": False, "disqualify_reason": None},
-    "CVNA":     {"total_score": 64, "business_score": 26, "smart_money_score": 22, "momentum_score": 16, "grade": "Moderate", "auto_disqualified": False, "disqualify_reason": None},
-    "RELIANCE": {"total_score": 76, "business_score": 30, "smart_money_score": 28, "momentum_score": 18, "grade": "Strong", "auto_disqualified": False, "disqualify_reason": None},
-    "HDFCBANK": {"total_score": 71, "business_score": 28, "smart_money_score": 25, "momentum_score": 18, "grade": "Strong", "auto_disqualified": False, "disqualify_reason": None},
-    "TSLA":     {"total_score": 48, "business_score": 18, "smart_money_score": 15, "momentum_score": 15, "grade": "Weak", "auto_disqualified": False, "disqualify_reason": None},
+BLOCKED_OVERRIDES = {
+    "TNXP": {
+        "total_score": 18, "business_score": 3, "smart_money_score": 5,
+        "momentum_score": 10, "grade": "Blocked", "auto_disqualified": True,
+        "disqualify_reason": "8 reverse splits. Chronic dilution.",
+    },
+    "XGN": {
+        "total_score": 8, "business_score": 2, "smart_money_score": 2,
+        "momentum_score": 4, "grade": "Blocked", "auto_disqualified": True,
+        "disqualify_reason": "Board resigned 18 days before earnings.",
+    },
+    "NKLA": {
+        "total_score": 7, "business_score": 0, "smart_money_score": 2,
+        "momentum_score": 5, "grade": "Blocked", "auto_disqualified": True,
+        "disqualify_reason": "CEO + CFO resigned. SEC fraud. Chapter 11.",
+    },
 }
 
 
 def get_trust_score_with_fallback(ticker: str, price_data: dict = None) -> dict:
     """
     Priority order:
-      1. Auto-disqualified demo stocks (human-verified red flags) → DEMO_SCORES
-      2. Live calculation from real APIs
-      3. Non-disqualified DEMO_SCORES entry (as verified baseline)
-      4. Generic 50-point fallback
+      1. Manual block overrides (BLOCKED_OVERRIDES) — red flags live data can't detect
+      2. Live calculation from real APIs — always used for everything else
+      3. Generic 50-point fallback if live APIs are completely down
     """
     import re
     clean = re.sub(r'\.[A-Z]{1,3}$', '', ticker.upper())
-    demo = DEMO_SCORES.get(clean)
 
-    # Auto-disqualified stocks use DEMO_SCORES directly — these have been
-    # manually verified (reverse splits, fraud, board resignations, etc.)
-    if demo and demo.get("auto_disqualified"):
-        result = dict(demo)
+    # Manual block overrides — Finnhub can't detect reverse splits, board
+    # resignations, or fraud convictions, so these are hardcoded permanently.
+    override = BLOCKED_OVERRIDES.get(clean)
+    if override:
+        result = dict(override)
         result["ticker"] = ticker
         return result
 
-    # All other stocks: try live calculation first
+    # Live calculation for every other stock
     try:
         score = calculate_trust_score(ticker, price_data)
         if score.get("total_score", 0) > 0 or score.get("auto_disqualified"):
@@ -282,13 +285,7 @@ def get_trust_score_with_fallback(ticker: str, price_data: dict = None) -> dict:
     except Exception:
         pass
 
-    # Live failed → fall back to DEMO_SCORES baseline if one exists
-    if demo:
-        result = dict(demo)
-        result["ticker"] = ticker
-        return result
-
-    # Final fallback — generic moderate score
+    # APIs completely unreachable — return generic fallback
     return {
         "ticker": ticker, "total_score": 50,
         "business_score": 20, "smart_money_score": 15, "momentum_score": 15,

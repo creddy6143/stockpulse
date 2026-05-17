@@ -7,90 +7,32 @@ _groq_client = None
 _anthropic_client = None
 
 
-DEMO_VERDICTS = {
+# Fallback verdicts for manually-blocked stocks only.
+# These fire only when ALL three AI providers (Groq + Gemini + Anthropic) fail.
+# For manually-blocked stocks the exit message is always the same regardless of
+# market conditions, so a static fallback is acceptable.
+# All other stocks use _default_verdict() — no stale hardcoded text.
+_BLOCKED_VERDICTS = {
     "TNXP": {
-        "verdict": "8 reverse splits. Auto-disqualified. Exit on any pre-market pop this morning.",
+        "verdict": "Auto-disqualified: 8 reverse splits. This stock has a history of destroying value through dilution. Exit any position immediately.",
         "recommendation": "strong_sell", "confidence_pct": 95,
-        "stop_loss_explanation": "Exit immediately — do not hold through earnings today.",
+        "stop_loss_explanation": "Exit immediately — do not hold.",
         "time_horizon": "short (days)",
-        "key_risk": "Further dilution from the authorized 9th reverse split.",
+        "key_risk": "Continued dilution and reverse splits.",
     },
     "XGN": {
-        "verdict": "Board resigned 18 days before earnings — a severe warning sign. Pre-market pop is your exit window. Exit at open.",
+        "verdict": "Auto-disqualified: board resigned before earnings. This is one of the strongest warning signs that exist. Exit any position at the earliest opportunity.",
         "recommendation": "strong_sell", "confidence_pct": 92,
-        "stop_loss_explanation": "Exit at market open. Do not wait for results.",
+        "stop_loss_explanation": "Exit at market open. Do not wait.",
         "time_horizon": "short (days)",
-        "key_risk": "91% of stocks with board resignations before earnings declined further within 30 days.",
+        "key_risk": "Insider knowledge of bad results is the most likely explanation for a board resignation.",
     },
-    "GRRR": {
-        "verdict": "AI contracts executing but macro conditions dragged the price down, not the business. Hold through June 17 earnings — that is when the thesis gets confirmed or denied.",
-        "recommendation": "hold", "confidence_pct": 65,
-        "stop_loss_explanation": "Exit if it falls below $8.50 from current levels.",
-        "time_horizon": "medium (weeks)",
-        "key_risk": "June 17 earnings miss on contract pipeline commentary.",
-    },
-    "INSM": {
-        "verdict": "Biotech with significant Phase 3 pipeline. Small 10-share position means low stress. Watch BofA Healthcare Conference May 12 for a narrative catalyst.",
-        "recommendation": "hold", "confidence_pct": 58,
-        "stop_loss_explanation": "Exit if it falls 25% from your entry of $115.",
-        "time_horizon": "medium (weeks)",
-        "key_risk": "Phase 3 trial data miss — binary event risk.",
-    },
-    "NVDA": {
-        "verdict": "AI supercycle is real and accelerating. Revenue up 122% year over year. Hold with a trailing stop — but note you now hold 31% of your portfolio in one stock.",
-        "recommendation": "hold", "confidence_pct": 85,
-        "stop_loss_explanation": "Sell if it falls 20% from its recent peak. Also consider trimming to reduce concentration.",
-        "time_horizon": "long (months)",
-        "key_risk": "Concentration risk — one bad earnings report moves your entire portfolio.",
-    },
-    "AXON": {
-        "verdict": "All three quality signals aligned. CEO bought $1.2M of his own stock in the open market — the strongest insider signal. Entry zone $285-310 is active now.",
-        "recommendation": "strong_buy", "confidence_pct": 87,
-        "stop_loss_explanation": "Exit if it falls below $260 from entry.",
-        "time_horizon": "long (months)",
-        "key_risk": "Government contract budget cuts in a tough fiscal year.",
-    },
-    "PLTR": {
-        "verdict": "Government AI platform gaining traction fast. Commercial revenue up 55% year over year. Good entry below $25.",
-        "recommendation": "buy", "confidence_pct": 76,
-        "stop_loss_explanation": "Exit if it falls 20% from your entry price.",
-        "time_horizon": "long (months)",
-        "key_risk": "Valuation remains high — any revenue growth slowdown will hurt the price.",
-    },
-    "MSFT": {
-        "verdict": "Azure cloud growth re-accelerating with AI. World-class business generating $68B in free cash annually. Hold with confidence.",
-        "recommendation": "hold", "confidence_pct": 80,
-        "stop_loss_explanation": "Exit if it falls 15% from current levels.",
-        "time_horizon": "long (months)",
-        "key_risk": "OpenAI partnership costs rising while Copilot monetisation remains early-stage.",
-    },
-    "ASML": {
-        "verdict": "Monopoly supplier of the machines needed to make every advanced chip. AI demand drives a long equipment order cycle. Hold for July 16 results.",
-        "recommendation": "buy", "confidence_pct": 82,
-        "stop_loss_explanation": "Exit if it falls 18% from current price.",
-        "time_horizon": "long (months)",
-        "key_risk": "China export restrictions tightening could cut order backlog.",
-    },
-    "CVNA": {
-        "verdict": "Turnaround confirmed and now GAAP profitable. Revenue growing 20% year over year. Monitor the 2026 debt maturity closely.",
-        "recommendation": "hold", "confidence_pct": 62,
-        "stop_loss_explanation": "Exit if it falls below $150 as debt concerns would resurface.",
-        "time_horizon": "long (months)",
-        "key_risk": "2026 debt maturity wall — refinancing in a high-rate environment.",
-    },
-    "RELIANCE": {
-        "verdict": "India's largest company with Jio and Retail both growing. Large overseas investors buying for 3 consecutive days — a clear vote of confidence.",
-        "recommendation": "buy", "confidence_pct": 74,
-        "stop_loss_explanation": "Exit if it falls below ₹2,550.",
-        "time_horizon": "long (months)",
-        "key_risk": "Regulatory changes in Indian telecom or retail markets.",
-    },
-    "HDFCBANK": {
-        "verdict": "India's most trusted private bank. Both domestic and overseas institutions accumulating. Long-term compounder at fair value.",
-        "recommendation": "buy", "confidence_pct": 70,
-        "stop_loss_explanation": "Exit if it falls below ₹1,450.",
-        "time_horizon": "long (months)",
-        "key_risk": "Indian credit cycle turning — rising bad loans could pressure margins.",
+    "NKLA": {
+        "verdict": "Auto-disqualified: SEC fraud conviction, CEO and CFO resigned, Chapter 11 bankruptcy. No recovery path exists.",
+        "recommendation": "strong_sell", "confidence_pct": 99,
+        "stop_loss_explanation": "Exit immediately. This company is in bankruptcy.",
+        "time_horizon": "short (days)",
+        "key_risk": "Total loss of capital in bankruptcy proceedings.",
     },
 }
 
@@ -216,7 +158,7 @@ def get_verdict(
     price_data: dict,
     fundamentals: dict,
 ) -> dict:
-    """Returns AI verdict for a stock. Falls back to demo data if all AI providers fail."""
+    """Returns AI verdict for a stock. Falls back to blocked-stock text or generic verdict if all AI providers fail."""
     clean = ticker.replace(".NS", "").replace(".BO", "").replace(".ST", "")
 
     # Build user prompt
@@ -241,7 +183,9 @@ Give a plain English verdict following the system rules."""
     if parsed:
         return parsed
 
-    return DEMO_VERDICTS.get(clean, _default_verdict(ticker, trust_score))
+    # For manually-blocked stocks, the exit message is always valid regardless of
+    # market conditions. For everything else, use the generic trust-score-based verdict.
+    return _BLOCKED_VERDICTS.get(clean, _default_verdict(ticker, trust_score))
 
 
 def generate_strategy_playbook(
