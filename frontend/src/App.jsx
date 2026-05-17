@@ -179,8 +179,8 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
 .ac-wrap{position:relative;margin-bottom:12px}
 .ac-inp{width:100%;background:var(--white);border:1.5px solid var(--t4);border-radius:10px;padding:11px 13px;font-family:var(--dm);font-size:14px;color:var(--t1);outline:none;box-sizing:border-box}
 .ac-inp:focus{border-color:var(--sky)}
-.ac-drop{position:absolute;left:0;right:0;top:100%;background:var(--white);border:1.5px solid var(--sky);border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.12);z-index:20;overflow-y:auto;max-height:280px;margin-top:3px}
-.ac-item{padding:9px 13px;cursor:pointer;border-bottom:1px solid rgba(15,23,42,.05);transition:background .12s}
+.ac-drop{position:absolute;left:0;right:0;bottom:calc(100% + 3px);top:auto;background:var(--white);border:1.5px solid var(--sky);border-radius:10px;box-shadow:0 -4px 24px rgba(15,23,42,.12);z-index:20;overflow-y:auto;max-height:260px}
+.ac-item{padding:7px 11px;cursor:pointer;border-bottom:1px solid rgba(15,23,42,.05);transition:background .12s}
 .ac-item:last-child{border-bottom:none}
 .ac-item:hover{background:rgba(91,114,248,.05)}
 .ac-ticker{font-family:var(--syne);font-weight:700;font-size:12px;color:var(--t1)}
