@@ -393,6 +393,22 @@ def get_fundamentals(ticker: str) -> dict:
         except Exception:
             pass
 
+    # Yahoo Finance fallback for 52W range and market cap (always available)
+    if not result["w52_high"] or not result["market_cap"]:
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1y&interval=1d"
+            r = requests.get(url, headers=_HEADERS, timeout=8)
+            if r.status_code == 200:
+                meta = r.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+                if not result["w52_high"]:
+                    result["w52_high"] = meta.get("fiftyTwoWeekHigh") or meta.get("regularMarketDayHigh")
+                if not result["w52_low"]:
+                    result["w52_low"] = meta.get("fiftyTwoWeekLow") or meta.get("regularMarketDayLow")
+                if not result["market_cap"]:
+                    result["market_cap"] = int(meta.get("marketCap") or 0)
+        except Exception:
+            pass
+
     cache_set(key, result)
     return result
 
@@ -546,31 +562,41 @@ def get_analyst_data(ticker: str) -> dict:
 # ── STOCK HISTORY ─────────────────────────────────────────────────────────────
 
 def get_stock_history(ticker: str) -> dict:
-    """Performance % for 1W, 1M, 3M, 6M, 1Y via Yahoo v8 chart (1y range)."""
+    """Performance % for 1W/1M/3M/6M/1Y + full price series for charting."""
     key = f"history:{ticker}"
     cached = cache_get(key)
     if cached:
         return cached
 
-    empty = {"1W": 0, "1M": 0, "3M": 0, "6M": 0, "1Y": 0}
-    try:
-        url = (
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-            "?range=1y&interval=1d"
-        )
-        r = requests.get(url, headers=_HEADERS, timeout=15)
-        if r.status_code != 200:
-            return empty
-        results = r.json().get("chart", {}).get("result")
-        if not results:
-            return empty
+    empty = {"1W": 0, "1M": 0, "3M": 0, "6M": 0, "1Y": 0, "prices": []}
+    session, crumb = _get_yf_auth()
+    base = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1y&interval=1d"
 
-        closes = (
-            results[0].get("indicators", {})
-            .get("quote", [{}])[0]
-            .get("close", [])
-        )
+    data = None
+    for url in [
+        f"{base}&crumb={crumb}" if crumb else None,
+        base,
+    ]:
+        if url is None:
+            continue
+        try:
+            r = (session or requests).get(url, headers=_HEADERS, timeout=15)
+            if r.status_code == 200:
+                results = r.json().get("chart", {}).get("result")
+                if results:
+                    data = results[0]
+                    break
+        except Exception:
+            continue
+
+    if not data:
+        return empty
+
+    try:
+        timestamps = data.get("timestamp", [])
+        closes = data.get("indicators", {}).get("quote", [{}])[0].get("close", [])
         closes = [c for c in closes if c is not None]
+
         if len(closes) < 5:
             return empty
 
@@ -581,9 +607,28 @@ def get_stock_history(ticker: str) -> dict:
             past = closes[idx]
             return round((current - past) / past * 100, 1) if past else 0
 
+        # Build price series: subsample to ~52 points for the full year
+        prices = []
+        step = max(1, len(closes) // 52)
+        import datetime as _dt
+        for i in range(0, len(closes), step):
+            if timestamps and i < len(timestamps):
+                try:
+                    d = _dt.datetime.utcfromtimestamp(timestamps[i])
+                    label = d.strftime("%b %d")
+                except Exception:
+                    label = str(i)
+            else:
+                label = str(i)
+            prices.append({"date": label, "price": round(closes[i], 2)})
+        # Always include last point with accurate final price
+        if prices and closes:
+            prices[-1]["price"] = round(closes[-1], 2)
+
         result = {
             "1W": pct(5), "1M": pct(22), "3M": pct(65),
             "6M": pct(130), "1Y": pct(min(252, len(closes) - 1)),
+            "prices": prices,
         }
         cache_set(key, result)
         return result

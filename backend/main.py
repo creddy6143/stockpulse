@@ -17,7 +17,7 @@ from datetime import datetime
 
 from database.models import init_db
 from database import db
-from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data, get_stock_history
+from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data, get_stock_history, get_news
 from data.india import get_india_signals, is_indian_stock
 from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.patterns import detect_all_patterns
@@ -211,15 +211,14 @@ def stock_signals(ticker: str):
 
 @app.get("/api/stock/{ticker}/detail")
 def stock_detail_full(ticker: str):
-    """Full detail for StockDetail overlay: history, 52W, analyst, verdict, fundamentals."""
+    """Fast detail — price, history, fundamentals, analyst, trust, news. No AI call."""
     ticker = ticker.upper()
     price_data = get_stock_price(ticker)
     fundamentals = get_fundamentals(ticker)
     trust = get_trust_score_with_fallback(ticker, price_data)
     analyst = get_analyst_data(ticker)
-    patterns = detect_all_patterns(ticker, trust["total_score"], price_data, fundamentals)
-    verdict = get_verdict(ticker, trust["total_score"], patterns, price_data, fundamentals)
     history = get_stock_history(ticker)
+    news = get_news(ticker, days=7)
 
     india_signals = {}
     if is_indian_stock(ticker):
@@ -231,9 +230,9 @@ def stock_detail_full(ticker: str):
         "fundamentals": fundamentals,
         "trust": trust,
         "analyst": analyst,
-        "verdict": verdict,
         "history": history,
         "india_signals": india_signals,
+        "news": [{"headline": n.get("headline",""), "url": n.get("url",""), "source": n.get("source",""), "datetime": n.get("datetime",0)} for n in (news or [])[:4]],
     }
 
 

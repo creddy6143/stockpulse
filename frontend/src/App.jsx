@@ -337,21 +337,28 @@ const buildDetailData = resp => {
   const f = resp.fundamentals || {}, a = resp.analyst || {}, t = resp.trust || {}, v = resp.verdict || {};
   const price = (resp.price_data || {}).price || 0;
   const metrics = [];
-  if (f.revenue_growth != null) metrics.push({l:"Revenue Growth", v:`${(f.revenue_growth*100).toFixed(0)}%`, s:"YoY"});
+  const revGrowth = f.revenue_growth;
+  if (revGrowth != null && revGrowth !== 0) metrics.push({l:"Revenue Growth", v:`${(revGrowth*100).toFixed(0)}%`, s:"YoY"});
   if (f.gross_margins) metrics.push({l:"Gross Margin", v:`${(f.gross_margins*100).toFixed(0)}%`, s:f.gross_margins>0.5?"Strong":"Moderate"});
   if (f.pe_ratio) metrics.push({l:"P/E Ratio", v:`${f.pe_ratio}×`, s:f.pe_ratio>50?"Growth":"Value"});
+  if (f.market_cap && f.market_cap > 0) {
+    const mc = f.market_cap >= 1e12 ? `$${(f.market_cap/1e12).toFixed(1)}T` : f.market_cap >= 1e9 ? `$${(f.market_cap/1e9).toFixed(1)}B` : `$${(f.market_cap/1e6).toFixed(0)}M`;
+    metrics.push({l:"Market Cap", v:mc, s:f.market_cap>=10e9?"Large Cap":f.market_cap>=2e9?"Mid Cap":"Small Cap"});
+  }
   if (f.cash_runway_months) metrics.push({l:"Cash Runway", v:`${f.cash_runway_months} mo`, s:f.cash_runway_months<6?"At risk":"Safe"});
-  if (f.debt_to_equity != null) metrics.push({l:"Debt/Equity", v:`${f.debt_to_equity}×`, s:f.debt_to_equity<1?"Conservative":"Leveraged"});
-  if (t.total_score) metrics.push({l:"Trust Score", v:`${t.total_score}/100`, s:t.grade||"—"});
+  if (f.debt_to_equity != null && f.debt_to_equity > 0) metrics.push({l:"Debt/Equity", v:`${f.debt_to_equity}×`, s:f.debt_to_equity<1?"Conservative":"Leveraged"});
+  metrics.push({l:"Trust Score", v:`${t.total_score||0}/100`, s:t.grade||"—"});
   if (f.next_earnings_date) metrics.push({l:"Next Earnings", v:fmtEarnDate(f.next_earnings_date), s:"Upcoming"});
   while (metrics.length < 4) metrics.push({l:"—", v:"—", s:"—"});
   return {
     perf: resp.history || {"1W":0,"1M":0,"3M":0,"6M":0,"1Y":0},
+    chartPrices: (resp.history || {}).prices || [],
     w52Lo: f.w52_low || price*0.7, w52Hi: f.w52_high || price*1.3,
     aTarget: a.target_price||null, aLow: a.target_low||null, aHigh: a.target_high||null,
     aBuy: a.buy_count||0, aHold: a.hold_count||0, aSell: a.sell_count||0,
     metrics: metrics.slice(0,4),
     verdict: v.verdict || t.disqualify_reason || `Trust score ${t.total_score}/100 — ${t.grade}.`,
+    news: resp.news || [],
   };
 };
 
@@ -468,14 +475,24 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
   const [tf,setTf] = useState("3M");
   const [d, setD] = useState(null);
   const [dLoading, setDLoading] = useState(true);
+  const [verdict, setVerdict] = useState(null);
+  const [vLoading, setVLoading] = useState(true);
   const tfs = ["1W","1M","3M","6M","1Y"];
 
   useEffect(() => {
     setDLoading(true);
-    fetch(`/api/stock/${ticker}/detail`)
+    setVLoading(true);
+    setVerdict(null);
+    // Fast fetch: detail without AI
+    fetch(`/api/stock/${encodeURIComponent(ticker)}/detail`)
       .then(r => r.ok ? r.json() : null)
       .then(data => { setD(buildDetailData(data)); setDLoading(false); })
       .catch(() => setDLoading(false));
+    // Separate fetch: AI verdict (slow, loads independently)
+    fetch(`/api/stock/${encodeURIComponent(ticker)}/verdict`)
+      .then(r => r.ok ? r.json() : null)
+      .then(v => { setVerdict(v); setVLoading(false); })
+      .catch(() => setVLoading(false));
   }, [ticker]);
 
   const c = tc(trust);
@@ -483,7 +500,11 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
   const perf = d ? (d.perf[tf] || 0) : 0;
   const perfPos = perf >= 0;
   const pts = tf==="1W"?7:tf==="1M"?22:tf==="3M"?65:tf==="6M"?130:252;
-  const chartData = d ? genChart(price, perf, pts) : [];
+  // Use real prices from backend; slice to timeframe
+  const allPrices = d ? (d.chartPrices || []) : [];
+  const chartData = allPrices.length > 0
+    ? allPrices.slice(-pts)
+    : (d ? genChart(price, perf, pts) : []);
   const chartMin = chartData.length ? Math.min(...chartData.map(p=>p.price))*.995 : price*0.9;
   const chartMax = chartData.length ? Math.max(...chartData.map(p=>p.price))*1.005 : price*1.1;
   const upside = d && d.aTarget && price ? (((d.aTarget-price)/price)*100).toFixed(0) : null;
@@ -600,7 +621,22 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
                 <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>3 pillars · Updated today</div>
               </div>
             </div>
-            <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.65,padding:"10px 12px",background:"var(--card2)",borderRadius:8,borderLeft:"3px solid var(--indigo)"}}>{d ? d.verdict : "Loading..."}</div>
+            <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.65,padding:"10px 12px",background:"var(--card2)",borderRadius:8,borderLeft:"3px solid var(--indigo)"}}>
+              {vLoading
+                ? <span style={{color:"var(--t3)"}}>Analysing with AI… <span style={{animation:"pr 1s infinite",display:"inline-block"}}>●</span></span>
+                : (verdict?.verdict || (d && d.verdict) || "Analysis unavailable — check back shortly.")}
+            </div>
+            {!vLoading && verdict?.recommendation && (
+              <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+                <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:4,
+                  background:verdict.recommendation.includes("buy")?"var(--emerald2)":verdict.recommendation.includes("sell")?"var(--rose2)":"var(--amber2)",
+                  color:verdict.recommendation.includes("buy")?"var(--emerald)":verdict.recommendation.includes("sell")?"var(--rose)":"var(--amber)"}}>
+                  {verdict.recommendation.replace("_"," ").toUpperCase()}
+                </span>
+                {verdict.confidence_pct && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",padding:"3px 6px"}}>{verdict.confidence_pct}% confidence</span>}
+                {verdict.key_risk && <span style={{fontSize:9,color:"var(--t3)",padding:"3px 0"}}>Risk: {verdict.key_risk}</span>}
+              </div>
+            )}
           </div>
 
           {/* Forecast — only if analyst data available */}
@@ -637,7 +673,7 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
           </div>}
 
           {/* Metrics */}
-          {d && <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,border:"1px solid rgba(91,114,248,.06)"}}>
+          {d && <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,marginBottom:10,border:"1px solid rgba(91,114,248,.06)"}}>
             <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:12}}>📈 Key Metrics</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
               {d.metrics.map((m,i)=>(
@@ -649,6 +685,19 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
               ))}
             </div>
           </div>}
+
+          {/* News */}
+          {d && d.news && d.news.length > 0 && (
+            <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,border:"1px solid rgba(91,114,248,.06)"}}>
+              <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:10}}>📰 Recent News</div>
+              {d.news.map((n,i)=>(
+                <div key={i} style={{paddingBottom:9,marginBottom:9,borderBottom:i<d.news.length-1?"1px solid var(--t4)":"none"}}>
+                  <div style={{fontSize:11,color:"var(--t1)",lineHeight:1.45,marginBottom:3}}>{n.headline}</div>
+                  <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{n.source}</div>
+                </div>
+              ))}
+            </div>
+          )}
 
         </div>
       </div>
