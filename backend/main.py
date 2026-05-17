@@ -363,10 +363,15 @@ def strategy():
                 "color": sit["color"],
                 "summary": sit["summary"],
                 "priority": sit["priority"],
-                # No playbook here — fetched on-demand when card is tapped
                 "playbook": None,
-                # Pass through stock context for frontend display
+                # Full context — used by playbook endpoint + frontend display
+                "name": pos.get("name", pos["ticker"]),
+                "current_price": pos.get("current_price", 0),
+                "change_pct": pos.get("change_pct", 0),
                 "pnl_pct": pos.get("pnl_pct", 0),
+                "pnl_sek": pos.get("pnl_sek", 0),
+                "shares": pos.get("shares"),
+                "buy_price": pos.get("buy_price"),
                 "trust_score": pos.get("trust_score", 50),
                 "grade": pos.get("grade", ""),
                 "is_speculative": pos.get("is_speculative", False),
@@ -387,6 +392,9 @@ def strategy():
                 "summary": sit["summary"],
                 "priority": sit["priority"],
                 "playbook": None,
+                "name": item.get("name", item["ticker"]),
+                "current_price": item.get("current_price", 0),
+                "change_pct": item.get("change_pct", 0),
                 "trust_score": item.get("trust_score", 50),
                 "grade": item.get("grade", ""),
                 "is_speculative": item.get("is_speculative", False),

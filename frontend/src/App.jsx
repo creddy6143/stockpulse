@@ -1273,7 +1273,7 @@ function PivotSection({title, accentColor, slices}) {
       <div style={{display:"grid",gridTemplateColumns:slice.isWatch?"1.4fr 1.8fr .8fr":"1.9fr 1.5fr .7fr .9fr",
         padding:"4px 12px",background:"rgba(15,23,42,.018)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
         {(slice.isWatch
-          ? ["Stock","Signal · Entry","Upside %"]
+          ? ["Stock","Signal · Entry", slice.items.some(s=>s.potential&&s.potential!=="—")?"Upside %":"Score"]
           : ["Stock","Price · P&L","Score","Rec"]
         ).map((h,i)=>(
           <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.7,
@@ -1632,7 +1632,7 @@ function SmartPicksScreen({picks, disq, accuracy}) {
 }
 
 // ── STRATEGY SCREEN ──────────────────────────────────
-function StrategyScreen({strategyData}) {
+function StrategyScreen({strategyData, onDetail}) {
   const [tab,setTab] = useState(0);
   const [exp,setExp] = useState(null);
   const [playbookCache,setPlaybookCache] = useState({});
@@ -1728,8 +1728,10 @@ function StrategyScreen({strategyData}) {
                       {playbook||s.summary}
                     </div>
                   )}
-                  <button style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:s.action==="EXIT"||s.action==="WAIT"?"var(--rose)":s.action==="BUY"||s.action==="STRONG BUY"?"var(--emerald)":"var(--indigo)",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                    {s.action==="EXIT"?"Exit This Position →":s.action==="STRONG BUY"||s.action==="BUY"?"View Full Analysis →":s.action==="DECIDE"?"Make a Decision →":"View Full Guidance →"}
+                  <button
+                    onClick={()=>{ if(onDetail) onDetail({ticker:s.ticker, name:s.name||s.ticker, flag:s.flag||"🇺🇸", price:s.current_price||0, trust:s.trust_score||50, rec:s.action==="EXIT"?"SELL":s.action==="BUY"?"BUY":"HOLD"}); }}
+                    style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:s.action==="EXIT"||s.action==="WAIT"?"var(--rose)":s.action==="BUY"||s.action==="STRONG BUY"?"var(--emerald)":"var(--indigo)",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                    {s.action==="EXIT"?"Exit Position — View Full Detail →":s.action==="STRONG BUY"||s.action==="BUY"?"View Full Analysis →":"View Full Stock Detail →"}
                   </button>
                 </div>
               )}
@@ -1784,7 +1786,13 @@ export default function App() {
       getPicks().then(v => { setPicks((v||[]).map(mapPick)); }).catch(()=>{});
     }, 500);
     setTimeout(() => {
-      getStrategy().then(v => { setStrategyData(v||{myStocks:[],watchlist:[],smartPicks:[]}); }).catch(()=>{});
+      getStrategy().then(v => {
+        if(v) setStrategyData({
+          myStocks: v.my_stocks || [],
+          watchlist: v.watchlist || [],
+          smartPicks: v.smart_picks || [],
+        });
+      }).catch(()=>{});
     }, 1000);
 
     return () => clearInterval(ping);
@@ -1821,7 +1829,7 @@ export default function App() {
     <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
     <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData}/>,
     <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy}/>,
-    <StrategyScreen strategyData={strategyData}/>,
+    <StrategyScreen strategyData={strategyData} onDetail={setSel}/>,
   ];
   const tabDefs = [
     {icon:"🏠",label:"Home",badge:urgentCount},
