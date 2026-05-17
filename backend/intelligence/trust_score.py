@@ -121,6 +121,14 @@ def _business_score(f: dict) -> int:
     elif gm > 0.20:
         score += 4
 
+    # EPS growth quality (4 pts) — separate from revenue growth, measures
+    # bottom-line acceleration which is the truest sign of business health.
+    eps = f.get("earnings_growth", 0) or 0
+    if eps > 0.50:
+        score += 4
+    elif eps > 0.20:
+        score += 2
+
     return min(40, score)
 
 
@@ -134,9 +142,10 @@ def _smart_money_score(insider: dict) -> int:
     elif insider.get("insider_buy_value", 0) > 100_000:
         score += 8
 
-    # Analyst consensus as institutional proxy (10 pts)
-    # Finnhub free tier doesn't expose institutional ownership; analyst
-    # consensus (e.g. 93% buy on NVDA) is a reliable proxy for smart money.
+    # Analyst consensus as institutional proxy (15 pts)
+    # Finnhub free tier blocks institutional ownership (403). Analyst consensus
+    # (71 analysts, 93% buy on NVDA) is the strongest available proxy for
+    # where professional money is positioned — raised from 10 to 15 pts.
     buy_n = analyst.get("buy_count", 0)
     hold_n = analyst.get("hold_count", 0)
     sell_n = analyst.get("sell_count", 0)
@@ -144,11 +153,11 @@ def _smart_money_score(insider: dict) -> int:
     if total_analysts > 0:
         buy_pct = buy_n / total_analysts
         if buy_pct > 0.80:
-            score += 10
+            score += 15
         elif buy_pct > 0.60:
-            score += 6
+            score += 10
         elif buy_pct > 0.40:
-            score += 3
+            score += 5
 
     # Short interest (5 pts for low — only when data is available)
     short_pct = insider.get("short_interest_pct", 0)
@@ -174,7 +183,12 @@ def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict) -> int:
     elif "hold" in rec:
         score += 2
 
-    # Price vs analyst target (7 pts)
+    # Price vs analyst target / upside proxy (7 pts)
+    # Finnhub free tier blocks price_target (403), so we fall back to
+    # revenue+earnings acceleration as a forward-upside proxy: stocks with
+    # >50% revenue AND >50% EPS growth consistently outperform over 12 months.
+    rev = fundamentals.get("revenue_growth", 0) or 0
+    earn = fundamentals.get("earnings_growth", 0) or 0
     target = analyst.get("target_price")
     price = (price_data or {}).get("price", 0)
     if target and price and price > 0:
@@ -183,10 +197,16 @@ def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict) -> int:
             score += 7
         elif upside > 0.05:
             score += 4
+    else:
+        # Growth-acceleration proxy for upside (when no target price available)
+        if rev > 0.50 and earn > 0.50:
+            score += 7   # hyper-growth — high probability of price appreciation
+        elif rev > 0.30 and earn > 0:
+            score += 4   # strong growth
+        elif rev > 0.15 and earn > 0:
+            score += 2   # decent growth
 
-    # Revenue growth momentum (5 pts)
-    rev = fundamentals.get("revenue_growth", 0) or 0
-    earn = fundamentals.get("earnings_growth", 0) or 0
+    # Revenue + earnings growth momentum (5 pts)
     if rev > 0.20 and earn > 0:
         score += 5
     elif rev > 0.10:

@@ -339,6 +339,12 @@ def get_fundamentals(ticker: str) -> dict:
             rev = float(m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y") or 0)
             result["revenue_growth"] = round(rev / 100, 4)
 
+            eps_growth = float(
+                m.get("epsGrowthTTMYoy") or m.get("epsGrowthQuarterlyYoy") or
+                m.get("epsGrowth3Y") or 0
+            )
+            result["earnings_growth"] = round(eps_growth / 100, 4)
+
             margin = float(m.get("netProfitMarginTTM") or 0)
             result["profit_margins"] = round(margin / 100, 4)
             result["gaap_profitable"] = margin > 0
