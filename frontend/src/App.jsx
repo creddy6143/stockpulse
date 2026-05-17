@@ -185,6 +185,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
 .ac-item:hover{background:rgba(91,114,248,.05)}
 .ac-ticker{font-family:var(--syne);font-weight:700;font-size:12px;color:var(--t1)}
 .ac-name{font-size:10px;color:var(--t3);margin-top:1px}
+.ac-exch{font-size:9px;color:var(--sky);margin-top:1px;font-weight:500}
 .score-modal{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:250;display:flex;align-items:center;justify-content:center;padding:20px;max-width:400px;margin:0 auto}
 .score-box{background:var(--white);border-radius:18px;padding:20px;width:100%;box-shadow:0 20px 60px rgba(15,23,42,.2)}
 .score-pillar{display:flex;align-items:center;gap:10px;margin-bottom:12px}
@@ -204,8 +205,9 @@ const getFlag = (market, ticker) => {
 const tc = s => s>=75?"#5b72f8":s>=60?"#d97706":s>=40?"#f59e0b":"#e11d48";
 const tg = s => s>=75?"Strong":s>=60?"Moderate":s>=40?"Weak":"Blocked";
 const isINR = t => t && (t.endsWith(".NS") || t.endsWith(".BO"));
-const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA"));
-const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : "$";
+const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".MI") || t.endsWith(".F"));
+const isSEK = t => t && (t.endsWith(".ST") || t.endsWith(".HE") || t.endsWith(".CO") || t.endsWith(".OL"));
+const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : isSEK(t) ? "kr\u00a0" : "$";
 const actionColor = a => a==="EXIT"||a==="WAIT"?"var(--rose)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber)":a==="BUY"||a==="STRONG BUY"?"var(--emerald)":"var(--indigo)";
 const actionBg = a => a==="EXIT"||a==="WAIT"?"var(--rose2)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber2)":a==="BUY"||a==="STRONG BUY"?"var(--emerald2)":"#eef2ff";
 // Swedish number format: 27 681 kr (space thousands separator)
@@ -218,6 +220,17 @@ const fmtSEKCompact = (n) => {
   const abs = Math.abs(n);
   if (abs >= 1000000) return (abs/1000000).toFixed(1).replace(".",",") + "\u00a0Mkr";
   return Math.round(abs).toLocaleString("sv-SE") + "\u00a0kr";
+};
+
+// Exchange code → human-readable label (for Yahoo Finance search results)
+const EXCHANGE_LABELS = {
+  "STO": "Stockholm 🇸🇪", "CPH": "Copenhagen 🇩🇰", "HEL": "Helsinki 🇫🇮",
+  "OSL": "Oslo 🇳🇴", "FRA": "Frankfurt 🇩🇪", "XETRA": "Xetra 🇩🇪",
+  "AMS": "Amsterdam 🇳🇱", "PAR": "Paris 🇫🇷", "LSE": "London 🇬🇧",
+  "MIL": "Milan 🇮🇹", "NSI": "NSE India 🇮🇳", "BSE": "BSE India 🇮🇳",
+  "NYQ": "NYSE 🇺🇸", "NMS": "NASDAQ 🇺🇸", "NGM": "NASDAQ 🇺🇸",
+  "PCX": "NYSE Arca 🇺🇸", "BTS": "NASDAQ 🇺🇸", "TOR": "Toronto 🇨🇦",
+  "ASX": "Australia 🇦🇺", "JPX": "Tokyo 🇯🇵",
 };
 
 // ── MAPPING HELPERS ──────────────────────────────────
@@ -1211,7 +1224,11 @@ function AddModal({onClose, onAdded}) {
           const yhData = await yhRes.json();
           const items = (yhData.quotes || [])
             .filter(q => q.quoteType === "EQUITY" || q.quoteType === "ETF")
-            .map(q => ({ticker: q.symbol, name: q.shortname || q.longname || q.symbol}))
+            .map(q => ({
+              ticker: q.symbol,
+              name: q.shortname || q.longname || q.symbol,
+              exchange: EXCHANGE_LABELS[q.exchange] || q.exchange || "",
+            }))
             .slice(0, 6);
           if (items.length > 0) {
             setSuggestions(items); setShowSug(true); found = true;
@@ -1289,6 +1306,7 @@ function AddModal({onClose, onAdded}) {
                 <div key={s.ticker} className="ac-item" onMouseDown={()=>pickSuggestion(s)}>
                   <div className="ac-ticker">{s.ticker}</div>
                   <div className="ac-name">{s.name}</div>
+                  {s.exchange && <div className="ac-exch">{s.exchange}</div>}
                 </div>
               ))}
             </div>

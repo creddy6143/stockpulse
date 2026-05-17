@@ -593,6 +593,17 @@ def get_stock_history(ticker: str) -> dict:
 
 # ── TICKER SEARCH ─────────────────────────────────────────────────────────────
 
+_EXCHANGE_NAMES = {
+    "STO": "Stockholm 🇸🇪", "CPH": "Copenhagen 🇩🇰", "HEL": "Helsinki 🇫🇮",
+    "OSL": "Oslo 🇳🇴", "FRA": "Frankfurt 🇩🇪", "XETRA": "Xetra 🇩🇪",
+    "AMS": "Amsterdam 🇳🇱", "PAR": "Paris 🇫🇷", "LSE": "London 🇬🇧",
+    "MIL": "Milan 🇮🇹", "NSI": "NSE India 🇮🇳", "BSE": "BSE India 🇮🇳",
+    "NYQ": "NYSE 🇺🇸", "NMS": "NASDAQ 🇺🇸", "NGM": "NASDAQ 🇺🇸",
+    "PCX": "NYSE Arca 🇺🇸", "BTS": "NASDAQ 🇺🇸", "TOR": "Toronto 🇨🇦",
+    "ASX": "Australia 🇦🇺", "JPX": "Tokyo 🇯🇵",
+}
+
+
 def search_ticker(query: str) -> list:
     """Search for tickers. Yahoo Finance search first, Finnhub as supplement."""
     key = f"search:{query.lower()[:20]}"
@@ -612,6 +623,9 @@ def search_ticker(query: str) -> list:
                 {
                     "ticker": q.get("symbol", ""),
                     "name": q.get("shortname") or q.get("longname") or q.get("symbol", ""),
+                    "exchange": _EXCHANGE_NAMES.get(
+                        q.get("exchange", ""), q.get("exchange") or ""
+                    ),
                 }
                 for q in quotes
                 if q.get("symbol") and q.get("quoteType") in ("EQUITY", "ETF")
@@ -628,7 +642,11 @@ def search_ticker(query: str) -> list:
                 for item in (res or {}).get("result", [])[:8]:
                     sym = item.get("symbol", "")
                     if sym and sym not in existing:
-                        result.append({"ticker": sym, "name": item.get("description", "")})
+                        result.append({
+                            "ticker": sym,
+                            "name": item.get("description", ""),
+                            "exchange": "",
+                        })
                         existing.add(sym)
                 result = result[:8]
             except Exception:
