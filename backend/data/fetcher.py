@@ -615,7 +615,7 @@ def search_ticker(query: str) -> list:
 
     try:
         url = "https://query2.finance.yahoo.com/v1/finance/search"
-        params = {"q": query, "quotesCount": 8, "newsCount": 0, "enableFuzzyQuery": True}
+        params = {"q": query, "quotesCount": 12, "newsCount": 0, "enableFuzzyQuery": True}
         r = requests.get(url, params=params, headers=_HEADERS, timeout=5)
         if r.status_code == 200:
             quotes = r.json().get("quotes", [])
@@ -629,7 +629,7 @@ def search_ticker(query: str) -> list:
                 }
                 for q in quotes
                 if q.get("symbol") and q.get("quoteType") in ("EQUITY", "ETF")
-            ][:8]
+            ][:10]
     except Exception:
         pass
 
@@ -639,7 +639,7 @@ def search_ticker(query: str) -> list:
             try:
                 res = fh.symbol_search(query)
                 existing = {r["ticker"] for r in result}
-                for item in (res or {}).get("result", [])[:8]:
+                for item in (res or {}).get("result", [])[:10]:
                     sym = item.get("symbol", "")
                     if sym and sym not in existing:
                         result.append({
@@ -648,7 +648,7 @@ def search_ticker(query: str) -> list:
                             "exchange": "",
                         })
                         existing.add(sym)
-                result = result[:8]
+                result = result[:10]
             except Exception:
                 pass
 
