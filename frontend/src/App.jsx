@@ -1202,8 +1202,9 @@ function AddModal({onClose, onAdded}) {
     if (ticker.length < 2) { setSuggestions([]); setShowSug(false); return; }
     const timer = setTimeout(async () => {
       setSugLoading(true);
+      let found = false;
+      // Try Yahoo Finance directly — fast, but CORS may block it in some browsers
       try {
-        // Try Yahoo Finance directly first (works without backend)
         const yhUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=8&newsCount=0&enableFuzzyQuery=true`;
         const yhRes = await fetch(yhUrl);
         if (yhRes.ok) {
@@ -1213,17 +1214,18 @@ function AddModal({onClose, onAdded}) {
             .map(q => ({ticker: q.symbol, name: q.shortname || q.longname || q.symbol}))
             .slice(0, 6);
           if (items.length > 0) {
-            setSuggestions(items);
-            setShowSug(true);
-            setSugLoading(false);
-            return;
+            setSuggestions(items); setShowSug(true); found = true;
           }
         }
-        // Fallback to backend search
-        const res = await searchTicker(ticker);
-        setSuggestions(res || []);
-        setShowSug((res||[]).length > 0);
-      } catch {}
+      } catch { /* CORS blocked — fall through to backend */ }
+      // Always fallback to backend search if Yahoo failed or returned nothing
+      if (!found) {
+        try {
+          const res = await searchTicker(ticker);
+          if ((res||[]).length > 0) { setSuggestions(res); setShowSug(true); found = true; }
+        } catch {}
+      }
+      if (!found) { setSuggestions([]); setShowSug(false); }
       setSugLoading(false);
     }, 350);
     return () => clearTimeout(timer);

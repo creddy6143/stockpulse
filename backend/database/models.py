@@ -1,7 +1,14 @@
 import sqlite3
 import os
 
-DATABASE_PATH = os.getenv("DATABASE_PATH", "/data/stockpulse.db" if os.path.isdir("/data") else "./stockpulse.db")
+# If Railway (or any host) has mounted a persistent volume at /data,
+# always use it — this takes priority over the DATABASE_PATH env var.
+# Without this, DATABASE_PATH=./stockpulse.db in .env overrides the
+# smart detection and all data is lost on every container restart.
+if os.path.isdir("/data"):
+    DATABASE_PATH = "/data/stockpulse.db"
+else:
+    DATABASE_PATH = os.getenv("DATABASE_PATH", "./stockpulse.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stocks (
