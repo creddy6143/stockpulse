@@ -71,6 +71,7 @@ def _build_position(pos: dict, rates: dict) -> dict:
         "grade": trust["grade"],
         "auto_disqualified": trust["auto_disqualified"],
         "disqualify_reason": trust["disqualify_reason"],
+        "data_source": trust.get("data_source"),
         "group": group,
     }
 
@@ -123,9 +124,13 @@ def get_portfolio_with_pnl() -> dict:
 
 
 def _classify_position(trust: dict, pnl_pct: float) -> str:
-    if trust["auto_disqualified"] or trust["total_score"] < 40:
+    score = trust["total_score"]
+    if trust["auto_disqualified"] or (score is not None and score < 40):
         return "urgent"
-    if pnl_pct < -20 or trust["total_score"] < 60:
+    if score is None:
+        # Data Unavailable — put in watch group (visible but not alarming)
+        return "watch"
+    if pnl_pct < -20 or score < 60:
         return "watch"
     return "good"
 
@@ -168,13 +173,15 @@ def _build_watchlist_item(item: dict) -> dict:
                       + trust.get("analyst_sell", 0))
     buy_pct = (trust.get("analyst_buy", 0) / total_analysts) if total_analysts > 0 else 0
 
-    if trust["total_score"] >= 75 and not trust["auto_disqualified"]:
+    score = trust["total_score"]
+    if score is not None and score >= 75 and not trust["auto_disqualified"]:
         wl_group = "ready"
         signal = "Entry zone now"
-    elif trust["auto_disqualified"] or trust["total_score"] < 40:
+    elif trust["auto_disqualified"] or (score is not None and score < 40):
         wl_group = "avoid"
         signal = "Not yet"
     else:
+        # score is None (Data Unavailable) or moderate score → watching
         wl_group = "watching"
         # More descriptive signal based on analyst consensus
         if buy_pct >= 0.75:
@@ -194,6 +201,7 @@ def _build_watchlist_item(item: dict) -> dict:
         "grade": trust["grade"],
         "is_speculative": trust.get("is_speculative", False),
         "data_quality": trust.get("data_quality", "full"),
+        "data_source": trust.get("data_source"),
         "wl_group": wl_group,
         "signal": signal,
         "added_at": item.get("added_at"),

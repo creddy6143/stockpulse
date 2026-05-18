@@ -436,12 +436,129 @@ def get_market_data() -> dict:
 
 # ── FUNDAMENTALS ──────────────────────────────────────────────────────────────
 
+def _finnhub_fundamentals_for(ticker: str) -> dict:
+    """
+    Run the Finnhub company_basic_financials call for a given ticker
+    and return a fundamentals dict in the standard format.
+    Used by ADR routing to fetch data using a US-listed ticker symbol.
+    Does NOT cache — caller handles caching under the original ticker key.
+    """
+    result = {
+        "ticker": ticker,
+        "revenue_growth": 0.0, "earnings_growth": 0.0,
+        "profit_margins": 0.0, "gross_margins": 0.0,
+        "pe_ratio": None, "forward_pe": None,
+        "debt_to_equity": 0.0, "current_ratio": None,
+        "free_cashflow": 0, "total_cash": 0, "total_debt": 0,
+        "market_cap": 0, "cash_runway_months": None,
+        "earnings_surprise_pct": None, "earnings_history": [],
+        "next_earnings_date": None, "gaap_profitable": False,
+        "w52_high": None, "w52_low": None,
+    }
+    fh = _finnhub()
+    if not fh:
+        return result
+    try:
+        bf = fh.company_basic_financials(ticker, "all")
+        m = (bf or {}).get("metric", {})
+        if m:
+            rev = float(m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y") or 0)
+            result["revenue_growth"] = round(rev / 100, 4)
+            eps_g = float(m.get("epsGrowthTTMYoy") or m.get("epsGrowthQuarterlyYoy") or
+                          m.get("epsGrowth3Y") or 0)
+            result["earnings_growth"] = round(eps_g / 100, 4)
+            margin = float(m.get("netProfitMarginTTM") or 0)
+            result["profit_margins"] = round(margin / 100, 4)
+            result["gaap_profitable"] = margin > 0
+            gross = float(m.get("grossMarginTTM") or 0)
+            result["gross_margins"] = round(gross / 100, 4)
+            pe = m.get("peNormalizedAnnual") or m.get("peTTM")
+            result["pe_ratio"] = round(float(pe), 2) if pe else None
+            curr = m.get("currentRatioAnnual")
+            result["current_ratio"] = round(float(curr), 2) if curr else None
+            mktcap = m.get("marketCapitalization")
+            result["market_cap"] = int(float(mktcap) * 1_000_000) if mktcap else 0
+            result["w52_high"] = float(m["52WeekHigh"]) if m.get("52WeekHigh") else None
+            result["w52_low"]  = float(m["52WeekLow"])  if m.get("52WeekLow")  else None
+            # Short interest (used by trust_score smart money pillar)
+            si = m.get("shortInterestSharesOutstanding")
+            if si:
+                result["short_interest_pct"] = round(float(si) * 100, 1)
+    except Exception:
+        pass
+    # Earnings history (available on free tier for US-listed tickers)
+    try:
+        fh2 = _finnhub()
+        if fh2:
+            eq = fh2.company_earnings(ticker, limit=8)
+            if eq:
+                result["earnings_history"] = eq[:4]
+                last = eq[0]
+                est = last.get("estimate")
+                act = last.get("actual")
+                if est and act is not None and est != 0:
+                    result["earnings_surprise_pct"] = round(
+                        (act - est) / abs(est) * 100, 1
+                    )
+    except Exception:
+        pass
+    # Next earnings date
+    try:
+        fh3 = _finnhub()
+        if fh3:
+            today_str  = datetime.now().strftime("%Y-%m-%d")
+            ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+            cal = fh3.earnings_calendar(_from=today_str, to=ninety_str, symbol=ticker)
+            cal_list = (cal or {}).get("earningsCalendar", [])
+            if cal_list:
+                result["next_earnings_date"] = cal_list[0].get("date")
+    except Exception:
+        pass
+    return result
+
+
 def get_fundamentals(ticker: str) -> dict:
-    """Revenue growth, earnings, profitability from Finnhub company_basic_financials."""
+    """Revenue growth, earnings, profitability — multi-source with regional routing.
+
+    Priority:
+    1. ADR/US-listing map → Finnhub with US ticker (full 133-field coverage)
+       + Screener.in overlay for India-specific data (promoter/FII holding)
+    2. Indian stocks without ADR → Screener.in scraper
+    3. Existing Finnhub + Yahoo v10 + yfinance lib chain (US/EU)
+    """
+    from data.adr_map import get_adr_ticker
+    from data.india_fetcher import get_screener_fundamentals
+    from data.india import is_indian_stock
+
     key = f"fundamentals:{ticker}"
     cached = cache_get(key, TTL_FUNDAMENTALS)
     if cached:
         return cached
+
+    # ── Route 1: ADR map → use Finnhub with US-listed ticker ─────────────────
+    adr = get_adr_ticker(ticker)
+    if adr:
+        adr_result = _finnhub_fundamentals_for(adr)
+        if adr_result and adr_result.get("market_cap"):
+            adr_result["data_source"] = f"finnhub:{adr}"
+            # For Indian ADR stocks, overlay Screener.in for India-specific fields
+            if is_indian_stock(ticker):
+                screener = get_screener_fundamentals(ticker)
+                if screener:
+                    for k in ["promoter_holding_pct", "fii_holding_pct",
+                               "roe", "roce", "pe_ratio", "dividend_yield"]:
+                        if screener.get(k) is not None:
+                            adr_result[k] = screener[k]
+                    adr_result["data_source"] += " + screener.in"
+            cache_set(key, adr_result)
+            return adr_result
+
+    # ── Route 2: Indian stocks without ADR → Screener.in ─────────────────────
+    if is_indian_stock(ticker):
+        screener = get_screener_fundamentals(ticker)
+        if screener and screener.get("market_cap"):
+            cache_set(key, screener)
+            return screener
 
     result = {
         "ticker": ticker,
@@ -638,12 +755,15 @@ def get_insider_data(ticker: str) -> dict:
     }
 
     fh = _finnhub()
-    if not fh or ticker.endswith((".NS", ".BO")):
+    if not fh:
         cache_set(key, result)
         return result
 
-    clean = ticker
-    for suffix in (".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
+    # Route through ADR map for Indian/European stocks so we use the US-listed ticker
+    from data.adr_map import get_adr_ticker
+    adr = get_adr_ticker(ticker)
+    clean = adr if adr else ticker
+    for suffix in (".NS", ".BO", ".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
         clean = clean.replace(suffix, "")
 
     try:
@@ -793,12 +913,15 @@ def get_analyst_data(ticker: str) -> dict:
     }
 
     fh = _finnhub()
-    if not fh or ticker.endswith((".NS", ".BO")):
+    if not fh:
         cache_set(key, result)
         return result
 
-    clean = ticker
-    for suffix in (".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
+    # Route through ADR map for Indian/European stocks
+    from data.adr_map import get_adr_ticker
+    adr = get_adr_ticker(ticker)
+    clean = adr if adr else ticker
+    for suffix in (".NS", ".BO", ".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
         clean = clean.replace(suffix, "")
 
     try:

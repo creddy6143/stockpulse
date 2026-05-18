@@ -32,6 +32,54 @@ def _is_speculative_prerevenue(f: dict) -> bool:
     return market_cap > 0 and rev < 0.001 and gross < 0.001 and not profitable
 
 
+# ── DATA SUFFICIENCY INFRASTRUCTURE ─────────────────────────────────────────
+# A stock must have ≥ 70% of these fields to receive any score.
+# Below that threshold, scoring would produce a fake number based on zeros —
+# which is worse than no score at all.
+
+REQUIRED_FIELDS = [
+    "market_cap",       # Company size — confirms it's a real public company
+    "revenue_growth",   # Core business health signal
+    "profit_margins",   # Profitability
+    "gaap_profitable",  # Binary profitability flag
+]
+
+
+def _data_sufficiency(f: dict) -> float:
+    """Returns fraction (0.0–1.0) of REQUIRED_FIELDS that have real data."""
+    def _has(field: str) -> bool:
+        v = f.get(field)
+        if field == "gaap_profitable":
+            return v is not None
+        if field == "market_cap":
+            return (v or 0) > 0
+        return v is not None and abs(float(v or 0)) > 0.001
+    return sum(_has(fld) for fld in REQUIRED_FIELDS) / len(REQUIRED_FIELDS)
+
+
+def _data_unavailable_result(ticker: str, data_source: str = "no coverage") -> dict:
+    """Returned when < 70% of required fundamental fields have real data.
+    total_score is None (not 0, not 50) — the frontend must display '?' not a number.
+    """
+    return {
+        "ticker": ticker,
+        "total_score": None,
+        "business_score": None,
+        "smart_money_score": None,
+        "momentum_score": None,
+        "grade": "Data Unavailable",
+        "auto_disqualified": False,
+        "disqualify_reason": None,
+        "is_speculative": False,
+        "analyst_buy": 0,
+        "analyst_hold": 0,
+        "analyst_sell": 0,
+        "analyst_target": None,
+        "data_quality": "unavailable",
+        "data_source": data_source,
+    }
+
+
 def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     """
     Returns full trust score breakdown:
@@ -54,30 +102,12 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     # Expose analyst to smart_money scoring (needed for consensus proxy)
     insider["_analyst"] = analyst
 
-    # ── LIMITED DATA — international stocks with no coverage ─────────────────
-    # Some exchanges (Stockholm .ST, Amsterdam .AS, London .L, etc.) return no
-    # fundamental data from either Finnhub free tier or Yahoo Finance (blocked
-    # on cloud IPs). Rather than scoring them 2/100 based on zeros, return a
-    # neutral 50/100 "Limited Data" result that honestly reflects our coverage.
-    _INTL_SUFFIXES = (".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC", ".CO",
-                      ".HE", ".OL", ".LS", ".BR", ".AT", ".VI")
-    if any(ticker.upper().endswith(s) for s in _INTL_SUFFIXES) and not _has_real_data(fundamentals):
-        return {
-            "ticker": ticker,
-            "total_score": 50,
-            "business_score": 0,
-            "smart_money_score": 0,
-            "momentum_score": 0,
-            "grade": "Limited Data",
-            "auto_disqualified": False,
-            "disqualify_reason": None,
-            "is_speculative": False,
-            "analyst_buy": 0,
-            "analyst_hold": 0,
-            "analyst_sell": 0,
-            "analyst_target": None,
-            "data_quality": "limited",
-        }
+    # ── DATA SUFFICIENCY CHECK ────────────────────────────────────────────────
+    # Universal replacement for the old hardcoded suffix check (.ST, .AS etc.).
+    # If < 70% of required fundamental fields have real data, scoring produces a
+    # fake low number based on zero-defaults. Return "Data Unavailable" instead.
+    if _data_sufficiency(fundamentals) < 0.70:
+        return _data_unavailable_result(ticker, fundamentals.get("data_source", "no coverage"))
 
     # ── AUTO-DISQUALIFIERS ───────────────────────────────────────────────────
     auto_disq, disq_reason = _check_auto_disqualifiers(ticker, fundamentals, insider)
@@ -88,14 +118,21 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     business = _business_score(fundamentals)
 
     # ── PILLAR 2: SMART MONEY (35 pts) ───────────────────────────────────────
+    # For Indian stocks, inject FII institutional data as smart-money proxy.
+    # FII consecutive buying and FII holding % are the most reliable signals
+    # available when Finnhub free-tier blocks insider/analyst data (403).
+    india = {}
+    if is_indian_stock(ticker):
+        india = get_india_signals(ticker)
+        insider["_fii_consecutive_buying"] = india.get("consecutive_fii_buying", 0)
+        insider["_fii_holding_pct"] = fundamentals.get("fii_holding_pct", 0) or 0
     smart_money = _smart_money_score(insider)
 
     # ── PILLAR 3: MOMENTUM (25 pts) ──────────────────────────────────────────
     momentum = _momentum_score(analyst, fundamentals, price_data)
 
-    # Indian market bonus signals
+    # Indian market bonus adjustments (post-scoring)
     if is_indian_stock(ticker):
-        india = get_india_signals(ticker)
         if india.get("consecutive_fii_buying", 0) >= 3:
             momentum = min(25, momentum + 3)
         if india.get("block_deal_buy"):
@@ -128,6 +165,7 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
         "analyst_sell": sell_n,
         "analyst_target": analyst.get("target_price"),
         "data_quality": "limited" if not _has_real_data(fundamentals) else "full",
+        "data_source": fundamentals.get("data_source"),
     }
 
 
@@ -167,18 +205,38 @@ def _business_score(f: dict) -> int:
     rev = f.get("revenue_growth", 0) or 0
     has_data = _has_real_data(f)
 
+    # Large-cap established business flag.
+    # market_cap > $10B (USD) or equivalent: Finnhub stores in absolute USD,
+    # Screener.in stores in INR (400k Cr ≈ 4e12 INR >> 1e10).
+    # This threshold correctly identifies INFY, TCS, ASML, ERIC etc. as
+    # established businesses that should not be penalized for "only" 8-10% growth.
+    mkt_cap = f.get("market_cap", 0) or 0
+    is_large = mkt_cap > 10_000_000_000  # > $10B or > ₹10B (INR)
+
     # Revenue growth (12 pts max)
-    if rev > 0.30:
-        score += 12
-    elif rev > 0.15:
-        score += 8
-    elif rev > 0:
-        score += 3
+    if is_large:
+        # Established companies: steady 8%+ growth = excellent for their scale
+        if rev > 0.20:
+            score += 12
+        elif rev > 0.08:   # INFY 9.6% → +8 pts (was +3 under old 15% threshold)
+            score += 8
+        elif rev > 0.02:
+            score += 4
+        elif rev > 0:
+            score += 2
+    else:
+        # Small/mid-cap: higher growth expected, original thresholds apply
+        if rev > 0.30:
+            score += 12
+        elif rev > 0.15:
+            score += 8
+        elif rev > 0:
+            score += 3
 
     # Profitability (10 pts)
     # BUG FIX: only award "near profitable" when we actually have data.
     # profit_margins defaults to 0.0 when no data — 0.0 > -0.10 was awarding
-    # 5 pts to pre-revenue companies and uncovered stocks (NNE, OKLO, MILDEF.ST).
+    # 5 pts to pre-revenue companies and uncovered stocks.
     if f.get("gaap_profitable"):
         score += 10
     elif has_data and (f.get("profit_margins") or 0) > -0.10:
@@ -195,12 +253,21 @@ def _business_score(f: dict) -> int:
 
     # Gross margins quality (10 pts)
     gm = f.get("gross_margins", 0) or 0
-    if gm > 0.60:
-        score += 10
-    elif gm > 0.40:
-        score += 7
-    elif gm > 0.20:
-        score += 4
+    if is_large:
+        # Large established companies: 20%+ OPM/gross = strong (not just "ok")
+        if gm > 0.40:
+            score += 10
+        elif gm > 0.20:    # INFY OPM ~21% → +7 (was +4 under 40% threshold)
+            score += 7
+        elif gm > 0.10:
+            score += 4
+    else:
+        if gm > 0.60:
+            score += 10
+        elif gm > 0.40:
+            score += 7
+        elif gm > 0.20:
+            score += 4
 
     # EPS growth quality (4 pts) — separate from revenue growth, measures
     # bottom-line acceleration which is the truest sign of business health.
@@ -239,6 +306,27 @@ def _smart_money_score(insider: dict) -> int:
             score += 10
         elif buy_pct > 0.40:
             score += 5
+
+    # India FII institutional proxy (replaces CEO buying when absent).
+    # FII holding % from Screener.in is the best available smart-money signal
+    # for Indian stocks: INFY = 33.4% FII = strong institutional conviction.
+    # FII consecutive buying (from NSE daily data) signals active accumulation.
+    fii_pct  = insider.get("_fii_holding_pct", 0) or 0
+    fii_days = insider.get("_fii_consecutive_buying", 0) or 0
+    if fii_pct > 0 or fii_days > 0:
+        if not insider.get("ceo_buying") and (insider.get("insider_buy_value") or 0) <= 100_000:
+            # Active FII accumulation flow signal
+            if fii_days >= 3:
+                score += 12
+            elif fii_days >= 1:
+                score += 5
+        # FII holding % — structural institutional backing (always scores)
+        if fii_pct > 30:
+            score += 8    # INFY 33.4% → +8
+        elif fii_pct > 20:
+            score += 5
+        elif fii_pct > 10:
+            score += 2
 
     # Short interest (5 pts for low — only when data is available)
     short_pct = insider.get("short_interest_pct", 0)
@@ -366,7 +454,11 @@ def get_trust_score_with_fallback(ticker: str, price_data: dict = None) -> dict:
     # Live calculation for every other stock
     try:
         score = calculate_trust_score(ticker, price_data)
-        if score.get("total_score", 0) > 0 or score.get("auto_disqualified"):
+        # Pass through valid results: numeric score, auto-disqualified, or Data Unavailable
+        # (total_score can be None for Data Unavailable — that is a valid honest result)
+        if (score.get("total_score") is not None
+                or score.get("auto_disqualified")
+                or score.get("data_quality") == "unavailable"):
             return score
     except Exception:
         pass

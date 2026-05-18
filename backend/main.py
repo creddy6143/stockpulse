@@ -224,8 +224,9 @@ def stock_full(ticker: str):
     price_data = get_stock_price(ticker)
     fundamentals = get_fundamentals(ticker)
     trust = get_trust_score_with_fallback(ticker, price_data)
-    patterns = detect_all_patterns(ticker, trust["total_score"], price_data, fundamentals)
-    verdict = get_verdict(ticker, trust["total_score"], patterns, price_data, fundamentals)
+    trust_score_val = trust["total_score"] or 0  # None → 0 for downstream callers
+    patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
+    verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
     analyst = get_analyst_data(ticker)
 
     india_signals = {}
@@ -289,8 +290,9 @@ def stock_verdict(ticker: str):
     price_data = get_stock_price(ticker)
     fundamentals = get_fundamentals(ticker)
     trust = get_trust_score_with_fallback(ticker, price_data)
-    patterns = detect_all_patterns(ticker, trust["total_score"], price_data, fundamentals)
-    return get_verdict(ticker, trust["total_score"], patterns, price_data, fundamentals)
+    trust_score_val = trust["total_score"] or 0
+    patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
+    return get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
 
 
 # ── ALERTS ───────────────────────────────────────────────────────────────────
@@ -324,18 +326,19 @@ def _score_one_ticker(ticker: str) -> dict | None:
         if not price_data.get("price"):
             return None
         trust = get_trust_score_with_fallback(ticker, price_data)
-        if trust["auto_disqualified"]:
+        if trust["auto_disqualified"] or trust["total_score"] is None:
             return None
         fundamentals = get_fundamentals(ticker)
         change_pct = float(price_data.get("change_pct", 0) or 0)
+        trust_score_val = trust["total_score"]
         # Buy-the-dip: quality stock down on market fear (not company news)
-        is_dip = (trust["total_score"] >= 65 and change_pct <= -4
+        is_dip = (trust_score_val >= 65 and change_pct <= -4
                   and not trust.get("disqualify_reason"))
-        qualifies = trust["total_score"] >= 75 or is_dip
+        qualifies = trust_score_val >= 75 or is_dip
         if not qualifies:
             return None
-        patterns = detect_all_patterns(ticker, trust["total_score"], price_data, fundamentals)
-        verdict = get_verdict(ticker, trust["total_score"], patterns, price_data, fundamentals)
+        patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
+        verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
         return {
             "ticker": ticker,
             "name": price_data.get("name", ticker),
@@ -377,11 +380,10 @@ def picks():
         if entry:
             result.append(entry)
 
-    result.sort(key=lambda x: (x["is_dip"], -x["trust"]["total_score"]))
     # Dip picks first, then by trust score
     dips = [r for r in result if r["is_dip"]]
     highs = [r for r in result if not r["is_dip"]]
-    highs.sort(key=lambda x: -x["trust"]["total_score"])
+    highs.sort(key=lambda x: -(x["trust"]["total_score"] or 0))
     final = highs + dips
     # Exclude stocks already in portfolio — picks are for discovery, not review of owned stocks
     portfolio_tickers = {p["ticker"] for p in portfolio}

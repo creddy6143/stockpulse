@@ -207,11 +207,13 @@ const getFlag = (market, ticker) => {
 const tc = (s, grade) => {
   // Speculative gets violet colour — different from Blocked red
   if (grade === "Speculative") return "var(--violet)";
-  if (grade === "Limited Data") return "var(--t3)";
+  if (grade === "Limited Data" || grade === "Data Unavailable") return "var(--t3)";
+  if (s == null) return "var(--t3)";  // null score = no data
   return s>=75?"#5b72f8":s>=60?"#d97706":s>=40?"#f59e0b":"#e11d48";
 };
 const tg = (s, grade) => {
   if (grade) return grade; // use grade from API when available
+  if (s == null) return "No Data";
   return s>=75?"Strong":s>=60?"Moderate":s>=40?"Weak":"Blocked";
 };
 const isINR = t => t && (t.endsWith(".NS") || t.endsWith(".BO"));
@@ -256,16 +258,19 @@ const mapPosition = (pos, earningsByTicker) => {
   const flag = getFlag(pos.market, pos.ticker);
   const {rec, rcls} = getRecFromGroup(pos.group, pos.trust_score, pos.auto_disqualified);
   const pnlPct = pos.pnl_pct || 0;
+  const scoreStr = pos.trust_score != null ? `${pos.trust_score}/100` : "score unavailable";
   let verdict = pos.disqualify_reason || "";
   if (!verdict) {
-    if (pnlPct < -30) verdict = `Down ${Math.abs(pnlPct).toFixed(0)}% from entry. Trust score ${pos.trust_score}/100. Monitor fundamentals.`;
+    if (pos.grade === "Data Unavailable") verdict = `No reliable data source found for this exchange. Price tracking continues normally.`;
+    else if (pnlPct < -30) verdict = `Down ${Math.abs(pnlPct).toFixed(0)}% from entry. Trust ${scoreStr}. Monitor fundamentals.`;
     else if (pnlPct > 30) verdict = `Up ${pnlPct.toFixed(0)}% from entry. Consider a trailing stop to protect gains.`;
-    else verdict = `Trust score ${pos.trust_score}/100 — ${pos.grade}. Hold and monitor.`;
+    else verdict = `Trust ${scoreStr} — ${pos.grade}. Hold and monitor.`;
   }
   return {
     id: pos.id, ticker: pos.ticker, flag, price: pos.current_price, change: pos.change_pct,
     name: pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
     rec, rcls, trust: pos.trust_score, grade: pos.grade,
+    dataSource: pos.data_source || null,
     pnl: pos.pnl || 0, pnl_pct: pos.pnl_pct || 0,
     value_sek: pos.value_sek || 0,
     invested_sek: pos.invested_sek || 0,
@@ -282,6 +287,7 @@ const mapWatchlistItem = item => ({
   price: item.current_price, change: item.change_pct,
   name: item.name || item.ticker, trust: item.trust_score,
   grade: item.grade || "",
+  dataSource: item.data_source || null,
   isSpeculative: item.is_speculative || false,
   signal: item.signal || "Still watching",
   reason: item.signal || "Still watching",
@@ -376,7 +382,7 @@ const buildDetailData = resp => {
   }
   if (f.cash_runway_months) metrics.push({l:"Cash Runway", v:`${f.cash_runway_months} mo`, s:f.cash_runway_months<6?"At risk":"Safe"});
   if (f.debt_to_equity != null && f.debt_to_equity > 0) metrics.push({l:"Debt/Equity", v:`${f.debt_to_equity}×`, s:f.debt_to_equity<1?"Conservative":"Leveraged"});
-  metrics.push({l:"Trust Score", v:`${t.total_score||0}/100`, s:t.grade||"—"});
+  metrics.push({l:"Trust Score", v:t.total_score!=null?`${t.total_score}/100`:"No Data", s:t.grade||"—"});
   if (f.next_earnings_date) metrics.push({l:"Next Earnings", v:fmtEarnDate(f.next_earnings_date), s:"Upcoming"});
   while (metrics.length < 4) metrics.push({l:"—", v:"—", s:"—"});
   return {
@@ -386,7 +392,7 @@ const buildDetailData = resp => {
     aTarget: a.target_price||null, aLow: a.target_low||null, aHigh: a.target_high||null,
     aBuy: a.buy_count||0, aHold: a.hold_count||0, aSell: a.sell_count||0,
     metrics: metrics.slice(0,4),
-    verdict: v.verdict || t.disqualify_reason || `Trust score ${t.total_score}/100 — ${t.grade}.`,
+    verdict: v.verdict || t.disqualify_reason || (t.grade==="Data Unavailable" ? "No reliable data source available for this exchange." : `Trust score ${t.total_score}/100 — ${t.grade}.`),
     news: resp.news || [],
   };
 };
@@ -1110,12 +1116,13 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
 function CompactRow({s, dot, onDetail, onRemove}) {
   const [open, setOpen] = useState(false);
   const [showScore, setShowScore] = useState(false);
-  const c = tc(s.trust);
+  const c = tc(s.trust, s.grade);
   const pnlPct = s.pnl_pct || ((s.price - s.buy) / s.buy * 100);
   const pnlPos = pnlPct >= 0;
+  const isDataUnavailable = s.grade === "Data Unavailable";
   const recColor = s.rec==="SELL"?"var(--rose)":s.rec==="BUY"?"var(--emerald)":"var(--amber)";
   const recBg = s.rec==="SELL"?"var(--rose2)":s.rec==="BUY"?"var(--emerald2)":"var(--amber2)";
-  const recLabel = s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec;
+  const recLabel = isDataUnavailable ? "—" : (s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec);
   // Use backend-provided SEK values — no frontend conversion needed
   const valueSEK = s.value_sek || 0;
   const priceSEK = s.shares > 0 ? valueSEK / s.shares : 0;
@@ -1165,10 +1172,12 @@ function CompactRow({s, dot, onDetail, onRemove}) {
         </div>
         <div style={{textAlign:"center"}}>
           <span onClick={e=>{e.stopPropagation();setShowScore(true);}} title="Tap for score breakdown"
-            style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:c,cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>{s.trust}</span>
+            style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:c,cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>
+            {s.trust ?? "?"}
+          </span>
         </div>
         <div style={{textAlign:"right"}}>
-          <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:recColor,background:recBg,padding:"3px 5px",borderRadius:4}}>{recLabel}</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:isDataUnavailable?"var(--t3)":recColor,background:isDataUnavailable?"transparent":recBg,padding:"3px 5px",borderRadius:4}}>{recLabel}</span>
         </div>
       </div>
       {open&&(
@@ -1176,8 +1185,9 @@ function CompactRow({s, dot, onDetail, onRemove}) {
           <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:8,borderLeft:"2.5px solid",borderLeftColor:dot,paddingLeft:9}}>{s.verdict}</div>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Earnings <span style={{color:"var(--t1)",fontWeight:600}}>{s.earn}</span></span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust)}</span></span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust, s.grade)}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Köpt <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
+            {s.dataSource && <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)"}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
           </div>
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
@@ -1199,7 +1209,7 @@ function CompactWatchRow({s, dot, onRemove}) {
   const cbg = dot==="var(--emerald)"?"var(--emerald2)":dot==="var(--amber)"?"var(--amber2)":"var(--rose2)";
   // Third column: show analyst upside % if available, else trust score
   const hasRealUpside = s.potential && s.potential !== "—";
-  const thirdVal = hasRealUpside ? s.potential : s.trust;
+  const thirdVal = hasRealUpside ? s.potential : (s.trust ?? "?");
   const thirdColor = hasRealUpside
     ? (s.potential.startsWith("+") ? "var(--emerald)" : "var(--rose)")
     : c;
@@ -1207,7 +1217,7 @@ function CompactWatchRow({s, dot, onRemove}) {
     ? (s.analystBuy+s.analystHold+s.analystSell > 0
         ? `${s.analystBuy}B/${s.analystHold}H/${s.analystSell}S`
         : "analyst target")
-    : `score${s.isSpeculative ? " · speculative" : ""}`;
+    : (s.grade === "Data Unavailable" ? "no data" : `score${s.isSpeculative ? " · speculative" : ""}`);
 
   return (
     <>
@@ -1257,6 +1267,16 @@ function CompactWatchRow({s, dot, onRemove}) {
           {s.isSpeculative && (
             <div style={{fontSize:9,color:"var(--violet)",marginTop:6,fontStyle:"italic"}}>
               Pre-revenue company — score reflects analyst conviction, not operating metrics.
+            </div>
+          )}
+          {s.grade === "Data Unavailable" && (
+            <div style={{fontSize:9,color:"var(--t3)",marginTop:6,fontStyle:"italic"}}>
+              No coverage found for this exchange. Price tracking is unaffected.
+            </div>
+          )}
+          {s.dataSource && s.grade !== "Data Unavailable" && (
+            <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:4}}>
+              Data: {s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}
             </div>
           )}
         </div>
