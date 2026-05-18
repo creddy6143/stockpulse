@@ -529,7 +529,7 @@ def get_fundamentals(ticker: str) -> dict:
             try:
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-                cal = fh.earnings_calendar(symbol=clean, from_=today_str, to=ninety_str)
+                cal = fh.earnings_calendar(_from=today_str, to=ninety_str, symbol=clean)
                 cal_list = (cal or {}).get("earningsCalendar", [])
                 if cal_list:
                     result["next_earnings_date"] = cal_list[0].get("date")

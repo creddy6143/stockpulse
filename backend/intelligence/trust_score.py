@@ -54,6 +54,31 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     # Expose analyst to smart_money scoring (needed for consensus proxy)
     insider["_analyst"] = analyst
 
+    # ── LIMITED DATA — international stocks with no coverage ─────────────────
+    # Some exchanges (Stockholm .ST, Amsterdam .AS, London .L, etc.) return no
+    # fundamental data from either Finnhub free tier or Yahoo Finance (blocked
+    # on cloud IPs). Rather than scoring them 2/100 based on zeros, return a
+    # neutral 50/100 "Limited Data" result that honestly reflects our coverage.
+    _INTL_SUFFIXES = (".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC", ".CO",
+                      ".HE", ".OL", ".LS", ".BR", ".AT", ".VI")
+    if any(ticker.upper().endswith(s) for s in _INTL_SUFFIXES) and not _has_real_data(fundamentals):
+        return {
+            "ticker": ticker,
+            "total_score": 50,
+            "business_score": 0,
+            "smart_money_score": 0,
+            "momentum_score": 0,
+            "grade": "Limited Data",
+            "auto_disqualified": False,
+            "disqualify_reason": None,
+            "is_speculative": False,
+            "analyst_buy": 0,
+            "analyst_hold": 0,
+            "analyst_sell": 0,
+            "analyst_target": None,
+            "data_quality": "limited",
+        }
+
     # ── AUTO-DISQUALIFIERS ───────────────────────────────────────────────────
     auto_disq, disq_reason = _check_auto_disqualifiers(ticker, fundamentals, insider)
     if auto_disq:
