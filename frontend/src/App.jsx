@@ -258,19 +258,22 @@ const mapPosition = (pos, earningsByTicker) => {
   const flag = getFlag(pos.market, pos.ticker);
   const {rec, rcls} = getRecFromGroup(pos.group, pos.trust_score, pos.auto_disqualified);
   const pnlPct = pos.pnl_pct || 0;
+  const fmp = pos.fmp_profile || null;
   const scoreStr = pos.trust_score != null ? `${pos.trust_score}/100` : "score unavailable";
   let verdict = pos.disqualify_reason || "";
   if (!verdict) {
-    if (pos.grade === "Data Unavailable") verdict = `No reliable data source found for this exchange. Price tracking continues normally.`;
+    if (pos.grade === "Data Unavailable") verdict = fmp
+      ? `${fmp.sector || "Company"} · ${fmp.industry || ""}. No fundamental data source for scoring — price tracking continues.`
+      : `No reliable data source found for this exchange. Price tracking continues normally.`;
     else if (pnlPct < -30) verdict = `Down ${Math.abs(pnlPct).toFixed(0)}% from entry. Trust ${scoreStr}. Monitor fundamentals.`;
     else if (pnlPct > 30) verdict = `Up ${pnlPct.toFixed(0)}% from entry. Consider a trailing stop to protect gains.`;
     else verdict = `Trust ${scoreStr} — ${pos.grade}. Hold and monitor.`;
   }
   return {
     id: pos.id, ticker: pos.ticker, flag, price: pos.current_price, change: pos.change_pct,
-    name: pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
+    name: fmp?.name || pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
     rec, rcls, trust: pos.trust_score, grade: pos.grade,
-    dataSource: pos.data_source || null,
+    dataSource: pos.data_source || null, fmpProfile: fmp,
     pnl: pos.pnl || 0, pnl_pct: pos.pnl_pct || 0,
     value_sek: pos.value_sek || 0,
     invested_sek: pos.invested_sek || 0,
@@ -285,9 +288,10 @@ const mapPosition = (pos, earningsByTicker) => {
 const mapWatchlistItem = item => ({
   ticker: item.ticker, flag: getFlag(item.market, item.ticker),
   price: item.current_price, change: item.change_pct,
-  name: item.name || item.ticker, trust: item.trust_score,
+  name: item.fmp_profile?.name || item.name || item.ticker, trust: item.trust_score,
   grade: item.grade || "",
   dataSource: item.data_source || null,
+  fmpProfile: item.fmp_profile || null,
   isSpeculative: item.is_speculative || false,
   signal: item.signal || "Still watching",
   reason: item.signal || "Still watching",
@@ -1112,6 +1116,45 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
   );
 }
 
+// ── FMP PROFILE CARD (Data Unavailable enrichment) ───
+function FmpProfileCard({p}) {
+  if (!p) return null;
+  const fmtCap = v => {
+    if (!v) return null;
+    if (v >= 1e12) return `$${(v/1e12).toFixed(1)}T`;
+    if (v >= 1e9)  return `$${(v/1e9).toFixed(1)}B`;
+    if (v >= 1e6)  return `$${(v/1e6).toFixed(0)}M`;
+    return `$${v}`;
+  };
+  return (
+    <div style={{background:"var(--card2)",borderRadius:8,padding:"8px 10px",marginTop:6,border:"1px solid var(--t4)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
+        <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:11,color:"var(--t1)"}}>{p.name || "—"}</span>
+        <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{p.country || ""} · {p.exchange || ""}</span>
+      </div>
+      {(p.sector || p.industry) && (
+        <div style={{fontSize:9,color:"var(--t2)",marginBottom:3}}>
+          {[p.sector, p.industry].filter(Boolean).join(" · ")}
+        </div>
+      )}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:p.description ? 4 : 0}}>
+        {p.market_cap > 0 && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>Cap {fmtCap(p.market_cap)}</span>}
+        {p.w52_high && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>52W {p.w52_low?.toFixed(2)}–{p.w52_high?.toFixed(2)}</span>}
+        {p.employees && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>{Number(p.employees).toLocaleString()} emp</span>}
+        {p.beta && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>β {p.beta?.toFixed(2)}</span>}
+      </div>
+      {p.description && (
+        <div style={{fontSize:9,color:"var(--t3)",lineHeight:1.5,marginBottom:3}}>
+          {p.description.length > 120 ? p.description.slice(0,120)+"…" : p.description}
+        </div>
+      )}
+      <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:2}}>
+        Source: FMP profile · Full fundamentals not available on free tier
+      </div>
+    </div>
+  );
+}
+
 // ── COMPACT TABLE ROW (portfolio) ────────────────────
 function CompactRow({s, dot, onDetail, onRemove}) {
   const [open, setOpen] = useState(false);
@@ -1183,11 +1226,12 @@ function CompactRow({s, dot, onDetail, onRemove}) {
       {open&&(
         <div style={{padding:"9px 12px 11px",background:"rgba(91,114,248,.02)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
           <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:8,borderLeft:"2.5px solid",borderLeftColor:dot,paddingLeft:9}}>{s.verdict}</div>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}>
+          {isDataUnavailable && s.fmpProfile && <FmpProfileCard p={s.fmpProfile} />}
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap",marginTop: isDataUnavailable && s.fmpProfile ? 8 : 0}}>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Earnings <span style={{color:"var(--t1)",fontWeight:600}}>{s.earn}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust, s.grade)}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Köpt <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
-            {s.dataSource && <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)"}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
+            {s.dataSource && !isDataUnavailable && <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)"}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
           </div>
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
@@ -1269,11 +1313,14 @@ function CompactWatchRow({s, dot, onRemove}) {
               Pre-revenue company — score reflects analyst conviction, not operating metrics.
             </div>
           )}
-          {s.grade === "Data Unavailable" && (
-            <div style={{fontSize:9,color:"var(--t3)",marginTop:6,fontStyle:"italic"}}>
-              No coverage found for this exchange. Price tracking is unaffected.
-            </div>
-          )}
+          {s.grade === "Data Unavailable" && s.fmpProfile
+            ? <FmpProfileCard p={s.fmpProfile} />
+            : s.grade === "Data Unavailable" && (
+                <div style={{fontSize:9,color:"var(--t3)",marginTop:6,fontStyle:"italic"}}>
+                  No coverage found for this exchange. Price tracking is unaffected.
+                </div>
+              )
+          }
           {s.dataSource && s.grade !== "Data Unavailable" && (
             <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:4}}>
               Data: {s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}

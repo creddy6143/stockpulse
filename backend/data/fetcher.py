@@ -19,6 +19,7 @@ from .cache import (cache_get, cache_set,
                      TTL_SEARCH, TTL_TRUST, TTL_STRATEGY)
 
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
+FMP_KEY = os.getenv("FMP_API_KEY", "")
 _fh_client = None
 
 # Yahoo Finance authenticated session (cookie+crumb, refreshed every 30 min)
@@ -517,6 +518,77 @@ def _finnhub_fundamentals_for(ticker: str) -> dict:
     return result
 
 
+def get_fmp_profile(ticker: str) -> dict:
+    """FMP /stable/profile — display enrichment for stocks with no fundamental coverage.
+
+    Works on FMP free tier for all exchanges (.ST, .AS, .DE, .L etc.).
+    Returns company name, sector, industry, market cap, 52W range, beta, CEO.
+    Financial fundamentals (revenue, margins) are NOT available on free tier for
+    non-US exchanges — this is display-only enrichment, not scoring data.
+
+    Returns {} if FMP key missing, ticker not found, or request fails.
+    """
+    if not FMP_KEY:
+        return {}
+    key = f"fmp_profile:{ticker}"
+    cached = cache_get(key, 24 * 60 * 60)
+    if cached is not None:
+        return cached
+    try:
+        url = (
+            f"https://financialmodelingprep.com/stable/profile"
+            f"?symbol={ticker}&apikey={FMP_KEY}"
+        )
+        r = requests.get(url, headers=_HEADERS, timeout=10)
+        if r.status_code != 200:
+            cache_set(key, {})
+            return {}
+        data = r.json()
+        # stable API returns a single object; v3 returned a list — handle both
+        p = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) and data.get("symbol") else None)
+        if not p:
+            cache_set(key, {})
+            return {}
+
+        # Parse 52W range string "110.2-294.4"
+        w52_high = w52_low = None
+        range_str = str(p.get("range") or "")
+        if "-" in range_str:
+            parts = range_str.split("-")
+            try:
+                w52_low  = float(parts[0])
+                w52_high = float(parts[1])
+            except (ValueError, IndexError):
+                pass
+
+        # Market cap from FMP is in absolute currency units (not millions)
+        mkt_cap_raw = p.get("marketCap")
+        mkt_cap = int(float(mkt_cap_raw)) if mkt_cap_raw else None
+
+        result = {
+            "fmp_name":        p.get("companyName") or None,
+            "fmp_sector":      p.get("sector") or None,
+            "fmp_industry":    p.get("industry") or None,
+            "fmp_description": (p.get("description") or "")[:280].strip() or None,
+            "fmp_ceo":         p.get("ceo") or None,
+            "fmp_employees":   p.get("fullTimeEmployees") or None,
+            "fmp_country":     p.get("country") or None,
+            "fmp_exchange":    p.get("exchangeFullName") or None,
+            "fmp_currency":    p.get("currency") or None,
+            "fmp_beta":        float(p["beta"]) if p.get("beta") else None,
+            "fmp_isin":        p.get("isin") or None,
+            "market_cap":      mkt_cap,
+            "w52_high":        w52_high,
+            "w52_low":         w52_low,
+            "data_source":     "fmp:profile",
+        }
+        cache_set(key, result)
+        return result
+    except Exception:
+        cache_set(key, {})
+        return {}
+
+
 def get_fundamentals(ticker: str) -> dict:
     """Revenue growth, earnings, profitability — multi-source with regional routing.
 
@@ -732,6 +804,16 @@ def get_fundamentals(ticker: str) -> dict:
         yf_date = _yf_earnings_date(ticker)
         if yf_date:
             result["next_earnings_date"] = yf_date
+
+    # ── Route 4: FMP profile enrichment ──────────────────────────────────────
+    # For stocks where all other routes returned no fundamental data
+    # (e.g. small Nordic stocks with no ADR, no Screener.in coverage).
+    # FMP free tier gives us company name, sector, market cap, 52W range —
+    # not enough to score, but enough to enrich the "Data Unavailable" display.
+    if not result.get("market_cap") and FMP_KEY:
+        fmp = get_fmp_profile(ticker)
+        if fmp:
+            result.update(fmp)   # overlays market_cap, w52_high/low, fmp_* fields
 
     cache_set(key, result)
     return result

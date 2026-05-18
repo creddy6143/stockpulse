@@ -1,7 +1,7 @@
 """Portfolio P&L and positions management — all values in native currency + SEK."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database.db import get_portfolio, get_watchlist
-from data.fetcher import get_stock_price, get_exchange_rates, get_analyst_data, get_fundamentals
+from data.fetcher import get_stock_price, get_exchange_rates, get_analyst_data, get_fundamentals, get_fmp_profile
 from intelligence.trust_score import get_trust_score_with_fallback
 
 
@@ -28,6 +28,28 @@ def _sek_rate(currency: str, rates: dict) -> float:
         "GBP": rates.get("GBPSEK", 13.2),
     }
     return mapping.get((currency or "USD").upper(), rates.get("USDSEK", 10.4))
+
+
+def _extract_fmp_profile(fundamentals: dict) -> dict | None:
+    """Pull FMP profile fields from a fundamentals dict, or None if not present."""
+    if not fundamentals.get("fmp_name"):
+        return None
+    return {
+        "name":        fundamentals.get("fmp_name"),
+        "sector":      fundamentals.get("fmp_sector"),
+        "industry":    fundamentals.get("fmp_industry"),
+        "description": fundamentals.get("fmp_description"),
+        "ceo":         fundamentals.get("fmp_ceo"),
+        "employees":   fundamentals.get("fmp_employees"),
+        "country":     fundamentals.get("fmp_country"),
+        "exchange":    fundamentals.get("fmp_exchange"),
+        "currency":    fundamentals.get("fmp_currency"),
+        "beta":        fundamentals.get("fmp_beta"),
+        "isin":        fundamentals.get("fmp_isin"),
+        "market_cap":  fundamentals.get("market_cap"),
+        "w52_high":    fundamentals.get("w52_high"),
+        "w52_low":     fundamentals.get("w52_low"),
+    }
 
 
 def _build_position(pos: dict, rates: dict) -> dict:
@@ -73,6 +95,9 @@ def _build_position(pos: dict, rates: dict) -> dict:
         "disqualify_reason": trust["disqualify_reason"],
         "data_source": trust.get("data_source"),
         "group": group,
+        # FMP profile enrichment — populated for Data Unavailable stocks
+        "fmp_profile": _extract_fmp_profile(get_fundamentals(ticker))
+            if trust.get("data_quality") == "unavailable" else None,
     }
 
 
@@ -214,6 +239,9 @@ def _build_watchlist_item(item: dict) -> dict:
         "analyst_buy": trust.get("analyst_buy", 0),
         "analyst_hold": trust.get("analyst_hold", 0),
         "analyst_sell": trust.get("analyst_sell", 0),
+        # FMP profile enrichment for Data Unavailable stocks
+        "fmp_profile": _extract_fmp_profile(fundamentals)
+            if trust.get("data_quality") == "unavailable" else None,
     }
 
 
