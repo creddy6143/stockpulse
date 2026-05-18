@@ -20,7 +20,11 @@ TTL_DEFAULT      = 15 * 60     # 15 min — everything else
 
 def cache_get(key: str, ttl: int = TTL_DEFAULT):
     entry = _CACHE.get(key)
-    if entry and (time.time() - entry["ts"]) < ttl:
+    if not entry:
+        return None
+    # Per-entry TTL overrides caller TTL (e.g. failed fetches use short retry window)
+    effective_ttl = entry["ttl"] if entry.get("ttl") is not None else ttl
+    if (time.time() - entry["ts"]) < effective_ttl:
         return entry["value"]
     return None
 
@@ -31,8 +35,11 @@ def cache_get_stale(key: str):
     return entry["value"] if entry else None
 
 
-def cache_set(key: str, value):
-    _CACHE[key] = {"value": value, "ts": time.time()}
+def cache_set(key: str, value, ttl: int = None):
+    """Store value. Pass ttl to override the default checked at read time.
+    Use a short ttl (e.g. 300) for failed/empty fetches so they retry quickly
+    instead of being locked in the 24-hour fundamentals cache."""
+    _CACHE[key] = {"value": value, "ts": time.time(), "ttl": ttl}
 
 
 def cached(key_fn=None, ttl=TTL_DEFAULT):

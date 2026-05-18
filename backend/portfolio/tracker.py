@@ -94,6 +94,7 @@ def _build_position(pos: dict, rates: dict) -> dict:
         "auto_disqualified": trust["auto_disqualified"],
         "disqualify_reason": trust["disqualify_reason"],
         "data_source": trust.get("data_source"),
+        "data_quality": trust.get("data_quality", "full"),
         "group": group,
         # FMP profile enrichment — populated for Data Unavailable stocks
         "fmp_profile": _extract_fmp_profile(get_fundamentals(ticker))

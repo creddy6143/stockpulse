@@ -360,7 +360,7 @@ def picks():
     Result cached 30 min; verdict caching (1hr) keeps AI calls minimal.
     """
     from data.cache import cache_get as cg, cache_set as cs, TTL_STRATEGY
-    cached = cg("picks:result", 30 * 60)  # 30 min cache
+    cached = cg("picks:result", 60 * 60)  # 60 min cache — prevents result churn on refresh
     if cached is not None:
         return cached
 
@@ -380,10 +380,12 @@ def picks():
         if entry:
             result.append(entry)
 
-    # Dip picks first, then by trust score
+    # Sort: high trust first, then alphabetically by ticker for deterministic order.
+    # Deterministic sort prevents results from changing on every refresh when scores tie.
     dips = [r for r in result if r["is_dip"]]
     highs = [r for r in result if not r["is_dip"]]
-    highs.sort(key=lambda x: -(x["trust"]["total_score"] or 0))
+    highs.sort(key=lambda x: (-(x["trust"]["total_score"] or 0), x["ticker"]))
+    dips.sort(key=lambda x: x["ticker"])
     final = highs + dips
     # Exclude stocks already in portfolio — picks are for discovery, not review of owned stocks
     portfolio_tickers = {p["ticker"] for p in portfolio}
@@ -681,8 +683,8 @@ def _detect_situation(pos: dict, market_data: dict) -> dict:
     if pnl_pct < -30:
         return {
             "situation_type": "crash_decision", "label": "Crash Decision", "icon": "📉",
-            "action": "HOLD" if trust >= 60 else "SELL", "color": "var(--amber)", "priority": 1,
-            "summary": f"Down {abs(pnl_pct):.0f}%. {'Business fundamentals still intact.' if trust >= 60 else 'Fundamentals weak — consider exit.'}",
+            "action": "HOLD" if trust >= 60 else "REVIEW", "color": "var(--amber)", "priority": 1,
+            "summary": f"Down {abs(pnl_pct):.0f}% from your entry. {'Business fundamentals still intact — hold.' if trust >= 60 else f'Trust score {trust_str}. Review recent reports before deciding.'}",
         }
     if pnl_pct > 30:
         return {

@@ -783,15 +783,19 @@ def get_fundamentals(ticker: str) -> dict:
         except Exception:
             pass
 
-    # yfinance Python library — always run for international stocks.
-    # Fixes .ST/.AS coverage gap: Finnhub free tier misses Swedish/Dutch etc. stocks,
-    # and the old price-field guard in _yf_lib_fundamentals was always returning {} on
-    # yfinance 0.2+ (price fields moved to fast_info). Now fixed.
+    # yfinance Python library — run for international stocks AND as universal safety
+    # net for any stock where Finnhub + Yahoo v10/v8 returned no core metrics.
+    # This prevents US stocks from showing "?" when Finnhub rate-limits a request:
+    # without this, an empty result gets cached for 24 hours.
     is_intl = any(ticker.endswith(s) for s in [
         ".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC",
         ".BR", ".HE", ".CO", ".OL", ".F",  # Brussels, Helsinki, Copenhagen, Oslo, Frankfurt secondary
     ])
-    if is_intl:
+    _needs_yf = is_intl or (
+        (result.get("market_cap") or 0) == 0
+        or abs(result.get("revenue_growth") or 0) < 0.001
+    )
+    if _needs_yf:
         yf_data = _yf_lib_fundamentals(ticker)
         if yf_data:
             for k, v in yf_data.items():
@@ -800,6 +804,8 @@ def get_fundamentals(ticker: str) -> dict:
             # gaap_profitable: yf might confirm profitable even if our default is False
             if yf_data.get("gaap_profitable") and not result["gaap_profitable"]:
                 result["gaap_profitable"] = True
+            if not result.get("data_source") and not is_intl:
+                result["data_source"] = "yfinance:lib"
 
     # Yahoo Finance calendarEvents fallback for next earnings date.
     # Works for all markets — covers gaps where Finnhub free tier returns nothing.
@@ -829,7 +835,10 @@ def get_fundamentals(ticker: str) -> dict:
         if fmp:
             result.update(fmp)   # overlays market_cap, w52_high/low, fmp_* fields
 
-    cache_set(key, result)
+    # Use a short retry TTL (5 min) when we got no usable data — prevents an empty
+    # fetch from locking out the stock for the full 24-hour fundamentals cache window.
+    data_ok = (result.get("market_cap") or 0) > 0
+    cache_set(key, result, ttl=TTL_FUNDAMENTALS if data_ok else (5 * 60))
     return result
 
 

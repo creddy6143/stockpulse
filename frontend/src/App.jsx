@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, clearDataCache } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, clearDataCache } from "./api/client";
 const BASE = process.env.REACT_APP_API_URL || '';
 
 const CSS = `
@@ -1156,7 +1156,7 @@ function FmpProfileCard({p}) {
 }
 
 // ── COMPACT TABLE ROW (portfolio) ────────────────────
-function CompactRow({s, dot, onDetail, onRemove}) {
+function CompactRow({s, dot, onDetail, onRemove, onEdit}) {
   const [open, setOpen] = useState(false);
   const [showScore, setShowScore] = useState(false);
   const c = tc(s.trust, s.grade);
@@ -1234,10 +1234,11 @@ function CompactRow({s, dot, onDetail, onRemove}) {
             {s.dataSource && !isDataUnavailable && <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)"}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
           </div>
           <div style={{display:"flex",gap:7}}>
-            <button onClick={()=>onDetail&&onDetail(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
+            <button onClick={()=>onDetail&&onDetail(s)} style={{flex:2,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
+            <button onClick={()=>onEdit&&onEdit(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Edit</button>
             {s.rec==="SELL"
               ?<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
-              :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
+              :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>✕</button>
             }
           </div>
         </div>
@@ -1326,6 +1327,12 @@ function CompactWatchRow({s, dot, onRemove}) {
               Data: {s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}
             </div>
           )}
+          <div style={{marginTop:9}}>
+            <button onClick={()=>onRemove&&onRemove(s)}
+              style={{width:"100%",padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              Remove from Watchlist
+            </button>
+          </div>
         </div>
       )}
     </>
@@ -1374,12 +1381,149 @@ function PivotSection({title, accentColor, slices}) {
         ? <div style={{padding:"12px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:"var(--t3)"}}>No stocks in this category</div>
         : slice.items.map(s=>slice.isWatch
             ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove}/>
-            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove}/>
+            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} onEdit={slice.onEdit}/>
           )
       }
     </div>
   );
 }
+
+// ── CONFIRM DIALOG ───────────────────────────────────
+function ConfirmDialog({message, confirmLabel, confirmColor, onConfirm, onCancel}) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-box" onClick={e=>e.stopPropagation()} style={{maxWidth:320}}>
+        <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 16px"}}/>
+        <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15,color:"var(--t1)",marginBottom:10,textAlign:"center"}}>{message}</div>
+        <div style={{fontSize:11,color:"var(--t3)",textAlign:"center",marginBottom:20}}>This cannot be undone.</div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onCancel}
+            style={{flex:1,padding:"11px",borderRadius:10,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            Cancel
+          </button>
+          <button onClick={onConfirm}
+            style={{flex:1,padding:"11px",borderRadius:10,border:"none",background:confirmColor||"var(--rose)",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            {confirmLabel||"Remove"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── EDIT POSITION MODAL ──────────────────────────────
+function EditModal({pos, onClose, onSaved}) {
+  const [mode, setMode] = useState("edit");           // "edit" | "add"
+  const [shares, setShares]   = useState(String(pos.shares));
+  const [price,  setPrice]    = useState(String(pos.buy));
+  const [addSh,  setAddSh]    = useState("");         // add-more: new lot shares
+  const [addPr,  setAddPr]    = useState("");         // add-more: new lot price
+  const [saving, setSaving]   = useState(false);
+  const [err,    setErr]      = useState("");
+
+  // Weighted average preview
+  const wavg = (() => {
+    const existSh = +pos.shares;
+    const existPr = +pos.buy;
+    const newSh   = +addSh;
+    const newPr   = +(addPr.toString().replace(",","."));
+    if (!newSh || newSh <= 0 || !newPr || newPr <= 0) return null;
+    const total   = existSh + newSh;
+    const avg     = (existSh * existPr + newSh * newPr) / total;
+    return { total, avg: avg.toFixed(4) };
+  })();
+
+  const submit = async () => {
+    setErr("");
+    let newShares, newPrice;
+    if (mode === "edit") {
+      newShares = +shares;
+      newPrice  = +(price.toString().replace(",","."));
+      if (!newShares || newShares <= 0) return setErr("Enter a valid number of shares.");
+      if (!newPrice  || newPrice  <= 0) return setErr("Enter a valid buy price.");
+    } else {
+      if (!addSh || +addSh <= 0) return setErr("Enter the new lot size.");
+      if (!addPr || +(addPr.toString().replace(",",".")) <= 0) return setErr("Enter the new lot price.");
+      if (!wavg) return setErr("Check the lot details.");
+      newShares = wavg.total;
+      newPrice  = +wavg.avg;
+    }
+    setSaving(true);
+    try {
+      await updatePosition(pos.id, { shares: newShares, buy_price: newPrice });
+      onSaved();
+      onClose();
+    } catch {
+      setErr("Save failed. Please try again.");
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 16px"}}/>
+        <div className="modal-title">{pos.ticker}</div>
+        <div className="modal-sub">{pos.name}</div>
+
+        <div className="modal-seg" style={{marginTop:12}}>
+          <button className={`modal-seg-btn${mode==="edit"?" on":""}`} onClick={()=>setMode("edit")}>✏️ Edit</button>
+          <button className={`modal-seg-btn${mode==="add"?" on":""}`} onClick={()=>setMode("add")}>➕ Add More Shares</button>
+        </div>
+
+        {mode==="edit" ? (
+          <div className="modal-row" style={{marginTop:14}}>
+            <div>
+              <div className="modal-label">Shares / Units</div>
+              <input className="modal-inp" type="number" value={shares}
+                onChange={e=>setShares(e.target.value)} placeholder={String(pos.shares)}/>
+            </div>
+            <div>
+              <div className="modal-label">Avg Buy Price</div>
+              <input className="modal-inp" type="number" value={price}
+                onChange={e=>setPrice(e.target.value)} placeholder={String(pos.buy)}/>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={{background:"var(--card2)",borderRadius:10,padding:"9px 12px",marginTop:14,marginBottom:10}}>
+              <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginBottom:3}}>Current position</div>
+              <div style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--t1)",fontWeight:600}}>
+                {pos.shares} shares @ {pos.buy}
+              </div>
+            </div>
+            <div className="modal-row">
+              <div>
+                <div className="modal-label">New Lot — Shares</div>
+                <input className="modal-inp" type="number" value={addSh}
+                  onChange={e=>setAddSh(e.target.value)} placeholder="e.g. 10"/>
+              </div>
+              <div>
+                <div className="modal-label">New Lot — Price</div>
+                <input className="modal-inp" type="number" value={addPr}
+                  onChange={e=>setAddPr(e.target.value)} placeholder="e.g. 220.00"/>
+              </div>
+            </div>
+            {wavg && (
+              <div style={{background:"var(--emerald2)",borderRadius:8,padding:"7px 10px",marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--emerald)",fontWeight:600}}>
+                  New avg: {wavg.avg} × {wavg.total} shares
+                </span>
+              </div>
+            )}
+          </>
+        )}
+
+        {err && <div className="modal-err">{err}</div>}
+        <button className="modal-submit" onClick={submit} disabled={saving}>
+          {saving ? "Saving…" : mode==="edit" ? "Save Changes" : `Confirm — ${wavg?.total||""} shares @ avg ${wavg?.avg||""}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 // ── ADD MODAL ────────────────────────────────────────
 function AddModal({onClose, onAdded}) {
@@ -1545,24 +1689,38 @@ function AddModal({onClose, onAdded}) {
 function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd}) {
   const [f, setF] = useState("All");
   const [showAdd, setShowAdd] = useState(false);
+  const [confirm, setConfirm] = useState(null);   // {message, onConfirm} or null
+  const [editPos, setEditPos]  = useState(null);   // position object to edit, or null
   const U=urgent||[], W=watch||[], G=good||[], WR=wlReady||[], WW=wlWatch||[], WA=wlAvoid||[];
 
-  const handleRemove = async (s) => {
-    if (!window.confirm(`Remove ${s.ticker} from your portfolio?`)) return;
-    try { await deletePosition(s.id); onAdd && onAdd(); } catch(e) {}
+  const handleRemove = (s) => {
+    setConfirm({
+      message: `Remove ${s.ticker} from your portfolio?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        try { await deletePosition(s.id); onAdd && onAdd(); } catch {}
+      },
+    });
   };
-  const handleRemoveWL = async (s) => {
-    if (!window.confirm(`Remove ${s.ticker} from watchlist?`)) return;
-    try { await removeFromWatchlist(s.ticker); onAdd && onAdd(); } catch(e) {}
+  const handleRemoveWL = (s) => {
+    setConfirm({
+      message: `Remove ${s.ticker} from watchlist?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        try { await removeFromWatchlist(s.ticker); onAdd && onAdd(); } catch {}
+      },
+    });
   };
+  const handleEdit = (s) => setEditPos(s);
+
   const byC = arr => f==="🇺🇸 US"?arr.filter(s=>s.flag==="🇺🇸"):f==="🇪🇺 Europe"?arr.filter(s=>s.flag==="🇪🇺"):f==="🇮🇳 India"?arr.filter(s=>s.flag==="🇮🇳"):arr;
   const fU=byC(U), fW=byC(W), fG=byC(G);
   const fWR=byC(WR), fWW=byC(WW), fWA=byC(WA);
 
   const myStocksSlices = [
-    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail, onRemove:handleRemove},
-    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail, onRemove:handleRemove},
-    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail, onRemove:handleRemove},
+    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail, onRemove:handleRemove, onEdit:handleEdit},
+    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail, onRemove:handleRemove, onEdit:handleEdit},
+    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail, onRemove:handleRemove, onEdit:handleEdit},
   ];
   const watchlistSlices = [
     {label:"Ready",   color:"var(--emerald)", items:fWR, isWatch:true, onRemove:handleRemoveWL},
@@ -1572,6 +1730,20 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
 
   return (
     <div className="pad" style={{paddingTop:10}}>
+      {confirm && (
+        <ConfirmDialog
+          message={confirm.message}
+          onConfirm={confirm.onConfirm}
+          onCancel={()=>setConfirm(null)}
+        />
+      )}
+      {editPos && (
+        <EditModal
+          pos={editPos}
+          onClose={()=>setEditPos(null)}
+          onSaved={()=>{ setEditPos(null); onAdd && onAdd(); }}
+        />
+      )}
       <div className="search-wrap">
         <span style={{fontSize:14,color:"var(--t3)",flexShrink:0}}>🔍</span>
         <input className="si-inp" placeholder="Search US, EU or India ticker…"/>
