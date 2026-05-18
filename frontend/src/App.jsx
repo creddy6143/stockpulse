@@ -220,6 +220,7 @@ const isSEK = t => t && (t.endsWith(".ST") || t.endsWith(".HE") || t.endsWith(".
 const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : isSEK(t) ? "kr\u00a0" : "$";
 const actionColor = a => a==="EXIT"||a==="WAIT"?"var(--rose)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber)":a==="BUY"||a==="STRONG BUY"?"var(--emerald)":"var(--indigo)";
 const actionBg = a => a==="EXIT"||a==="WAIT"?"var(--rose2)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber2)":a==="BUY"||a==="STRONG BUY"?"var(--emerald2)":"#eef2ff";
+const actionLabel = a => a==="EXIT"?"⚠️ Risk":a==="WAIT"?"Wait":a==="TRIM"?"Trim":a==="DECIDE"?"Decide":a==="WATCH"?"Watch":a==="BUY"?"Buy":a==="STRONG BUY"?"Strong Buy":a||"Signal";
 // Swedish number format: 27 681 kr (space thousands separator)
 const fmtSEK = (n) => {
   const abs = Math.round(Math.abs(n));
@@ -321,8 +322,8 @@ const mapEarnings = e => {
     inPortfolio: e.in_portfolio, shares: e.shares||0,
     buyPrice: e.buy_price||0, currentPrice: e.current_price||0,
     preMarketChg: null, epsEst: e.eps_estimate||null, revEst: null,
-    note: isToday ? "Earnings today — monitor results and act accordingly."
-      : `Results expected ${fmtEarnDate(e.next_earnings_date)}. Review your position before this date.`,
+    note: isToday ? "Earnings today — review the results when released."
+      : `Results expected ${fmtEarnDate(e.next_earnings_date)}. Worth checking in before then.`,
     history: [], isUrgent: false,
   };
 };
@@ -762,9 +763,9 @@ function EarningsDetail({e,onBack,onClose}) {
   const isToday=e.date==="Today";
   const hasPop=e.preMarketChg&&e.preMarketChg>8;
   const action=e.isUrgent
-    ?{label:"Exit immediately",color:"var(--rose)",bg:"var(--rose2)",detail:"Auto-disqualified stock. Exit regardless of earnings result. The safety check flagged this company — do not hold through results."}
+    ?{label:"⚠️ Risk Signals Active",color:"var(--rose)",bg:"var(--rose2)",detail:"Multiple risk signals flagged by our system. Historical data suggests this pattern warrants careful review — not financial advice, please do your own research."}
     :hasPop&&isToday
-    ?{label:"Exit on pre-market pop",color:"var(--rose)",bg:"var(--rose2)",detail:"Pre-market pop is your exit window. Elevated risk today. Consider exiting at or before market open."}
+    ?{label:"⚠️ Pre-market Pop",color:"var(--rose)",bg:"var(--rose2)",detail:"Pre-market move active on a risk-flagged stock. Historical data suggests these moves can be short-lived — worth reviewing your situation carefully before making any decision."}
     :isToday
     ?{label:"Hold — watch results",color:"var(--amber)",bg:"var(--amber2)",detail:"Earnings today. Monitor results carefully. Have a clear plan: set a stop loss if results disappoint."}
     :{label:"Hold through earnings",color:"var(--emerald)",bg:"var(--emerald2)",detail:"High trust stock with upcoming earnings. Hold with confidence. Review guidance commentary after results."};
@@ -804,7 +805,7 @@ function EarningsDetail({e,onBack,onClose}) {
               borderRadius:10,padding:"10px 12px",marginBottom:12}}>
               <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12,
                 color:hasPop?"var(--rose)":"var(--amber)",marginBottom:3}}>
-                {hasPop?"⚡ Pre-market pop — exit window active":"⏳ Results pending — due before open"}</div>
+                {hasPop?"⚡ Pre-market pop — risk signals active":"⏳ Results pending — due before open"}</div>
               <div style={{fontSize:10,color:"var(--t2)",lineHeight:1.5}}>{e.note}</div>
             </div>
           )}
@@ -854,7 +855,7 @@ function EarningsDetail({e,onBack,onClose}) {
             <button style={{padding:"11px",borderRadius:10,border:"none",cursor:"pointer",
               background:action.color==="var(--rose)"?"var(--rose)":"var(--indigo)",
               color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700}}>
-              {action.color==="var(--rose)"?"Exit Position →":"View Full Analysis →"}</button>
+              View Full Analysis →</button>
             <button style={{padding:"11px",borderRadius:10,border:"1px solid var(--t4)",cursor:"pointer",
               background:"var(--white)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:12,fontWeight:600}}>
               Set Price Alert</button>
@@ -1675,7 +1676,7 @@ function StrategyScreen({strategyData, onDetail}) {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div>
           <div style={{fontFamily:"var(--syne)",fontWeight:800,fontSize:20}}>Strategy Centre</div>
-          <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>What to do with each stock — right now</div>
+          <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Signals and context for each stock — right now</div>
         </div>
         <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#eef2ff",color:"var(--indigo)",border:"1px solid #c7d2fe",padding:"3px 10px",borderRadius:10,fontWeight:700}}>{total} active</span>
       </div>
@@ -1709,13 +1710,13 @@ function StrategyScreen({strategyData, onDetail}) {
                   <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.4}}>{s.summary}</div>
                 </div>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5,flexShrink:0}}>
-                  <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:actionColor(s.action),background:actionBg(s.action),padding:"3px 9px",borderRadius:5,border:`1px solid ${actionColor(s.action)}33`,whiteSpace:"nowrap"}}>{s.action}</span>
+                  <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:actionColor(s.action),background:actionBg(s.action),padding:"3px 9px",borderRadius:5,border:`1px solid ${actionColor(s.action)}33`,whiteSpace:"nowrap"}}>{actionLabel(s.action)}</span>
                   <span style={{fontSize:10,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
                 </div>
               </div>
               {open&&(
                 <div style={{padding:"13px 14px 15px",background:"linear-gradient(180deg,rgba(91,114,248,.03),transparent)",borderBottom:"1px solid rgba(15,23,42,.04)",animation:"exIn .2s ease"}}>
-                  <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>WHAT TO DO</div>
+                  <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>SIGNALS &amp; CONTEXT</div>
                   {loading?(
                     <div style={{fontSize:11,color:"var(--t3)",fontStyle:"italic",marginBottom:13,display:"flex",alignItems:"center",gap:8}}>
                       <span style={{display:"inline-block",width:10,height:10,border:"2px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
@@ -1729,7 +1730,7 @@ function StrategyScreen({strategyData, onDetail}) {
                   <button
                     onClick={()=>{ if(onDetail) onDetail({ticker:s.ticker, name:s.name||s.ticker, flag:s.flag||"🇺🇸", price:s.current_price||0, trust:s.trust_score||50, rec:s.action==="EXIT"?"SELL":s.action==="BUY"?"BUY":"HOLD"}); }}
                     style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:s.action==="EXIT"||s.action==="WAIT"?"var(--rose)":s.action==="BUY"||s.action==="STRONG BUY"?"var(--emerald)":"var(--indigo)",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                    {s.action==="EXIT"?"Exit Position — View Full Detail →":s.action==="STRONG BUY"||s.action==="BUY"?"View Full Analysis →":"View Full Stock Detail →"}
+                    View Full Analysis →
                   </button>
                 </div>
               )}
@@ -1864,11 +1865,11 @@ export default function App() {
           <div className="ab-left">
             <div className="ab-pulse"/>
             <div>
-              <div className="ab-title">⚡ {urgentStock.ticker} — Exit position now</div>
+              <div className="ab-title">⚠️ {urgentStock.ticker} — Risk signals flagged</div>
               <div className="ab-sub">{(urgentStock.verdict||"").substring(0,60)}</div>
             </div>
           </div>
-          <button className="ab-btn">Exit {urgentStock.ticker}</button>
+          <button className="ab-btn">View Analysis</button>
         </div>
       )}
       <div className="tabs-wrap">
@@ -1882,7 +1883,12 @@ export default function App() {
           ))}
         </div>
       </div>
-      <div className="screen" key={tab}>{screens[tab]}</div>
+      <div className="screen" key={tab}>
+        {screens[tab]}
+        <div style={{textAlign:"center",padding:"8px 20px 16px",fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",lineHeight:1.6,letterSpacing:.2}}>
+          StockPulse shows signals and historical patterns — not financial advice.<br/>Always do your own research before making any investment decision.
+        </div>
+      </div>
       {sel&&(
         <StockDetail
           ticker={sel.ticker}
