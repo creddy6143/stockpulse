@@ -137,6 +137,39 @@ def _yf_quotesummary(ticker: str) -> dict:
     return empty
 
 
+def _yf_lib_fundamentals(ticker: str) -> dict:
+    """Use yfinance Python library for better international stock data (.ST, .AS, .L etc.).
+    Only called when Finnhub + Yahoo quoteSummary HTTP calls both fail to return data.
+    """
+    key = f"yf_lib:{ticker}"
+    cached = cache_get(key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        if not info.get("regularMarketPrice") and not info.get("currentPrice"):
+            cache_set(key, {})
+            return {}
+        result = {
+            "revenue_growth":  round(float(info.get("revenueGrowth") or 0), 4),
+            "profit_margins":  round(float(info.get("profitMargins") or 0), 4),
+            "gross_margins":   round(float(info.get("grossMargins") or 0), 4),
+            "gaap_profitable": (info.get("profitMargins") or 0) > 0,
+            "market_cap":      int(info.get("marketCap") or 0),
+            "pe_ratio":        round(float(p), 2) if (p := info.get("trailingPE") or info.get("forwardPE")) else None,
+            "w52_high":        info.get("fiftyTwoWeekHigh"),
+            "w52_low":         info.get("fiftyTwoWeekLow"),
+            "earnings_growth": round(float(info.get("earningsGrowth") or 0), 4),
+        }
+        cache_set(key, result)
+        return result
+    except Exception:
+        cache_set(key, {})
+        return {}
+
+
 def _is_us_stock(ticker: str) -> bool:
     return "." not in ticker
 
@@ -500,6 +533,17 @@ def get_fundamentals(ticker: str) -> dict:
         except Exception:
             pass
 
+    # yfinance Python library fallback — most reliable for international stocks (.ST, .AS, .L etc.)
+    # Only runs when fundamentals are still missing after all HTTP-based sources
+    is_intl = any(ticker.endswith(s) for s in [".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC"])
+    still_missing = not (result["market_cap"] or 0) > 0 or abs(result["revenue_growth"]) < 0.001
+    if is_intl and still_missing:
+        yf_data = _yf_lib_fundamentals(ticker)
+        if yf_data:
+            for k, v in yf_data.items():
+                if v and not result.get(k):
+                    result[k] = v
+
     cache_set(key, result)
     return result
 
@@ -673,7 +717,7 @@ def get_analyst_data(ticker: str) -> dict:
     result = {
         "target_price": None, "target_high": None, "target_low": None,
         "buy_count": 0, "hold_count": 0, "sell_count": 0,
-        "recommendation": "hold",
+        "recommendation": "hold", "revenue_estimate": None,
     }
 
     fh = _finnhub()
@@ -715,6 +759,9 @@ def get_analyst_data(ticker: str) -> dict:
                 rec_key = qs.get("recommendationKey", "")
                 if rec_key and result["recommendation"] == "hold":
                     result["recommendation"] = rec_key.lower()
+                rev_est = qs.get("revenueEstimate") or qs.get("totalRevenue")
+                if rev_est:
+                    result["revenue_estimate"] = float(rev_est)
         except Exception:
             pass
 

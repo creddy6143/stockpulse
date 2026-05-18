@@ -72,6 +72,11 @@ export const markAlertRead = (id) => request(`/api/alerts/${id}/read`, { method:
 
 export const getPicks = () => request('/api/picks');
 export const getDisqualified = () => request('/api/picks/disqualified');
+export const getPicksUniverse = () => request('/api/picks/universe');
+export const addPicksUniverse = (ticker) =>
+  request('/api/picks/universe', { method: 'POST', body: JSON.stringify({ ticker }) });
+export const removePicksUniverse = (ticker) =>
+  request(`/api/picks/universe/${encodeURIComponent(ticker)}`, { method: 'DELETE' });
 
 // ── ACCURACY ─────────────────────────────────────────────────────────────────
 

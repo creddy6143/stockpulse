@@ -162,6 +162,12 @@ def get_verdict(
     """Returns AI verdict for a stock. Falls back to blocked-stock text or generic verdict if all AI providers fail."""
     clean = ticker.replace(".NS", "").replace(".BO", "").replace(".ST", "")
 
+    # Cache non-blocked AI verdicts for 1 hour so /api/picks doesn't re-call AI on every load
+    _verdict_cache_key = f"verdict:{ticker}"
+    _cached = cache_get(_verdict_cache_key, TTL_STRATEGY)
+    if _cached and clean not in _BLOCKED_VERDICTS:
+        return _cached
+
     # Build user prompt
     patterns_text = (
         ", ".join(p.get("name", p.get("pattern", "")) for p in patterns_detected)
@@ -182,6 +188,8 @@ Give a plain English verdict following the system rules."""
     text = _call_ai(SYSTEM_PROMPT, user_prompt, max_tokens=500)
     parsed = _parse_json(text)
     if parsed:
+        if clean not in _BLOCKED_VERDICTS:
+            cache_set(_verdict_cache_key, parsed)
         return parsed
 
     # For manually-blocked stocks: show today's price move as context alongside the signal.

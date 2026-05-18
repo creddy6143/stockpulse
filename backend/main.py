@@ -131,13 +131,14 @@ def portfolio():
 @app.post("/api/portfolio")
 def add_portfolio(req: AddPositionRequest):
     ticker = req.ticker.upper()
+    already_exists = db.ticker_in_portfolio(ticker)
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
     from portfolio.tracker import _detect_currency
     currency = _detect_currency(ticker)
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes)
-    return {"status": "added", "ticker": ticker}
+    return {"status": "added", "ticker": ticker, "already_had_position": already_exists}
 
 
 @app.put("/api/portfolio/{pos_id}")
@@ -174,13 +175,14 @@ def watchlist():
 @app.post("/api/watchlist")
 def add_watchlist(req: WatchlistRequest):
     ticker = req.ticker.upper()
+    already_exists = db.ticker_in_watchlist(ticker)
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
     from portfolio.tracker import _detect_currency
     currency = _detect_currency(ticker)
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_to_watchlist(ticker, req.notes)
-    return {"status": "added", "ticker": ticker}
+    return {"status": "added", "ticker": ticker, "already_exists": already_exists}
 
 
 @app.delete("/api/watchlist/{ticker}")
@@ -253,7 +255,7 @@ def stock_detail_full(ticker: str):
         "analyst": analyst,
         "history": history,
         "india_signals": india_signals,
-        "news": [{"headline": n.get("headline",""), "url": n.get("url",""), "source": n.get("source",""), "datetime": n.get("datetime",0)} for n in (news or [])[:4]],
+        "news": [{"headline": n.get("headline",""), "url": n.get("url",""), "source": n.get("source",""), "datetime": n.get("datetime",0)} for n in (news or [])[:8]],
     }
 
 
@@ -282,40 +284,96 @@ def mark_read(alert_id: int):
 
 # ── SMART PICKS ───────────────────────────────────────────────────────────────
 
+# Curated high-quality universe scanned every day for best picks
+_CURATED_UNIVERSE = [
+    "AXON","NVDA","MSFT","AAPL","AMZN","META","GOOGL","TSLA","AVGO","AMD",
+    "CRWD","PLTR","SNOW","NET","DDOG","MNDY","ZS","HUBS","TTD","CELH",
+    "LLY","ABBV","ISRG","DXCM","ALGN","PAYC","PCTY","TMDX","RXRX","CLOV",
+]
+
+from data.cache import cache_get as _cache_get, cache_set as _cache_set, TTL_STRATEGY
+
+def _score_one_ticker(ticker: str) -> dict | None:
+    """Evaluate one ticker and return a picks entry if it qualifies."""
+    try:
+        price_data = get_stock_price(ticker)
+        if not price_data.get("price"):
+            return None
+        trust = get_trust_score_with_fallback(ticker, price_data)
+        if trust["auto_disqualified"]:
+            return None
+        fundamentals = get_fundamentals(ticker)
+        change_pct = float(price_data.get("change_pct", 0) or 0)
+        # Buy-the-dip: quality stock down on market fear (not company news)
+        is_dip = (trust["total_score"] >= 65 and change_pct <= -4
+                  and not trust.get("disqualify_reason"))
+        qualifies = trust["total_score"] >= 75 or is_dip
+        if not qualifies:
+            return None
+        patterns = detect_all_patterns(ticker, trust["total_score"], price_data, fundamentals)
+        verdict = get_verdict(ticker, trust["total_score"], patterns, price_data, fundamentals)
+        return {
+            "ticker": ticker,
+            "name": price_data.get("name", ticker),
+            "price": price_data.get("price", 0),
+            "change_pct": change_pct,
+            "trust": trust,
+            "verdict": verdict,
+            "patterns": patterns,
+            "is_dip": is_dip,
+        }
+    except Exception:
+        return None
+
+
 @app.get("/api/picks")
 def picks():
-    """AI-generated smart picks — stocks with trust >= 75."""
+    """AI-generated smart picks — trust >= 75 OR quality buy-the-dip opportunity.
+    Scans portfolio + watchlist + user picks universe + curated universe.
+    Result cached 30 min; verdict caching (1hr) keeps AI calls minimal.
+    """
+    from data.cache import cache_get as cg, cache_set as cs, TTL_STRATEGY
+    cached = cg("picks:result", 30 * 60)  # 30 min cache
+    if cached is not None:
+        return cached
+
     portfolio = db.get_portfolio()
     watchlist = db.get_watchlist()
-    all_tickers = list({p["ticker"] for p in portfolio} | {w["ticker"] for w in watchlist})
+    user_universe = db.get_picks_universe()
+    all_tickers = list(
+        {p["ticker"] for p in portfolio}
+        | {w["ticker"] for w in watchlist}
+        | set(user_universe)
+        | set(_CURATED_UNIVERSE)
+    )
 
     result = []
     for ticker in all_tickers:
-        price_data = get_stock_price(ticker)
-        trust = get_trust_score_with_fallback(ticker, price_data)
-        if trust["total_score"] >= 75 and not trust["auto_disqualified"]:
-            fundamentals = get_fundamentals(ticker)
-            patterns = detect_all_patterns(ticker, trust["total_score"], price_data, fundamentals)
-            verdict = get_verdict(ticker, trust["total_score"], patterns, price_data, fundamentals)
-            result.append({
-                "ticker": ticker,
-                "name": price_data.get("name", ticker),
-                "price": price_data.get("price", 0),
-                "trust": trust,
-                "verdict": verdict,
-                "patterns": patterns,
-            })
+        entry = _score_one_ticker(ticker)
+        if entry:
+            result.append(entry)
 
-    result.sort(key=lambda x: x["trust"]["total_score"], reverse=True)
-    return result
+    result.sort(key=lambda x: (x["is_dip"], -x["trust"]["total_score"]))
+    # Dip picks first, then by trust score
+    dips = [r for r in result if r["is_dip"]]
+    highs = [r for r in result if not r["is_dip"]]
+    highs.sort(key=lambda x: -x["trust"]["total_score"])
+    final = highs + dips
+    cs("picks:result", final)
+    return final
 
 
 @app.get("/api/picks/disqualified")
 def picks_disqualified():
-    """Auto-disqualified stocks."""
+    """Auto-disqualified stocks from portfolio + watchlist + picks universe."""
     portfolio = db.get_portfolio()
     watchlist = db.get_watchlist()
-    all_tickers = list({p["ticker"] for p in portfolio} | {w["ticker"] for w in watchlist})
+    user_universe = db.get_picks_universe()
+    all_tickers = list(
+        {p["ticker"] for p in portfolio}
+        | {w["ticker"] for w in watchlist}
+        | set(user_universe)
+    )
 
     result = []
     for ticker in all_tickers:
@@ -328,6 +386,39 @@ def picks_disqualified():
                 "reason": trust["disqualify_reason"],
             })
     return result
+
+
+# ── PICKS UNIVERSE (user-curated) ─────────────────────────────────────────────
+
+class PicksUniverseRequest(BaseModel):
+    ticker: str
+
+
+@app.get("/api/picks/universe")
+def get_picks_universe():
+    return db.get_picks_universe()
+
+
+@app.post("/api/picks/universe")
+def add_picks_universe(req: PicksUniverseRequest):
+    ticker = req.ticker.upper()
+    price_data = get_stock_price(ticker)
+    market = _detect_market(ticker)
+    from portfolio.tracker import _detect_currency
+    currency = _detect_currency(ticker)
+    db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
+    db.add_picks_universe(ticker)
+    from data.cache import cache_set as cs
+    cs("picks:result", None)  # Invalidate picks cache
+    return {"status": "added", "ticker": ticker}
+
+
+@app.delete("/api/picks/universe/{ticker}")
+def remove_picks_universe(ticker: str):
+    db.remove_picks_universe(ticker.upper())
+    from data.cache import cache_set as cs
+    cs("picks:result", None)  # Invalidate picks cache
+    return {"status": "removed"}
 
 
 # ── ACCURACY ──────────────────────────────────────────────────────────────────
@@ -478,25 +569,48 @@ def strategy_playbook(ticker: str, req: PlaybookRequest):
 
 @app.get("/api/earnings")
 def earnings():
-    """Earnings calendar for portfolio + watchlist stocks."""
+    """Earnings calendar for portfolio + watchlist stocks with analyst consensus."""
     portfolio = db.get_portfolio()
+    watchlist_items = db.get_watchlist()
     result = []
-    for pos in portfolio:
-        ticker = pos["ticker"]
+    seen = set()
+
+    all_items = [(pos, True) for pos in portfolio] + [(w, False) for w in watchlist_items]
+
+    for item, in_portfolio in all_items:
+        ticker = item["ticker"]
+        if ticker in seen:
+            continue
+        seen.add(ticker)
         fundamentals = get_fundamentals(ticker)
         next_date = fundamentals.get("next_earnings_date")
-        if next_date:
-            price_data = get_stock_price(ticker)
-            result.append({
-                "ticker": ticker,
-                "name": pos.get("name", ticker),
-                "next_earnings_date": next_date,
-                "eps_estimate": fundamentals.get("earnings_history", [{}])[0].get("estimate") if fundamentals.get("earnings_history") else None,
-                "in_portfolio": True,
-                "shares": pos["shares"],
-                "buy_price": pos["buy_price"],
-                "current_price": price_data.get("price", 0),
-            })
+        if not next_date:
+            continue
+        price_data = get_stock_price(ticker)
+        analyst = get_analyst_data(ticker)
+        history = fundamentals.get("earnings_history") or []
+        last = history[0] if history else {}
+        entry = {
+            "ticker": ticker,
+            "name": item.get("name", ticker),
+            "next_earnings_date": next_date,
+            "eps_estimate": last.get("estimate"),
+            "eps_actual_last": last.get("actual"),
+            "revenue_estimate": analyst.get("revenue_estimate"),
+            "analyst_buy": analyst.get("buy_count", 0),
+            "analyst_hold": analyst.get("hold_count", 0),
+            "analyst_sell": analyst.get("sell_count", 0),
+            "analyst_target": analyst.get("target_price"),
+            "earnings_history": history[:4],
+            "in_portfolio": in_portfolio,
+            "shares": item.get("shares"),
+            "buy_price": item.get("buy_price"),
+            "current_price": price_data.get("price", 0),
+        }
+        result.append(entry)
+
+    # Today's earnings first
+    result.sort(key=lambda x: (x["next_earnings_date"] != "Today", x["next_earnings_date"] or ""))
     return result
 
 

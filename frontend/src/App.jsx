@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker, getStockTrust, getStockDetail, getStockVerdict } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse } from "./api/client";
 const BASE = process.env.REACT_APP_API_URL || '';
 
 const CSS = `
@@ -21,8 +21,8 @@ const CSS = `
   --syne:'Syne',sans-serif;
   --dm:'DM Sans',sans-serif;
 }
-body{background:var(--bg);color:var(--t1);font-family:var(--dm)}
-.app{max-width:400px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;background:linear-gradient(180deg,#eaf2ff,#f8faff)}
+body{background:var(--bg);color:var(--t1);font-family:var(--dm);overscroll-behavior:none}
+.app{max-width:400px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;background:linear-gradient(180deg,#eaf2ff,#f8faff);overscroll-behavior:none;touch-action:pan-y}
 .hdr{background:linear-gradient(135deg,#4f68f0,#0ea5e9);padding:14px 18px 16px;border-radius:0 0 24px 24px;box-shadow:0 8px 28px rgba(79,104,240,.22);flex-shrink:0}
 .hdr-row{display:flex;align-items:center;justify-content:space-between}
 .brand{display:flex;align-items:center;gap:9px}
@@ -321,10 +321,14 @@ const mapEarnings = e => {
     time: "Pre-market", status: isToday ? "pending" : "upcoming",
     inPortfolio: e.in_portfolio, shares: e.shares||0,
     buyPrice: e.buy_price||0, currentPrice: e.current_price||0,
-    preMarketChg: null, epsEst: e.eps_estimate||null, revEst: null,
+    preMarketChg: null, epsEst: e.eps_estimate||null,
+    revEst: e.revenue_estimate||null,
+    analystBuy: e.analyst_buy||0, analystHold: e.analyst_hold||0, analystSell: e.analyst_sell||0,
+    analystTarget: e.analyst_target||null,
+    history: (e.earnings_history||[]).map(h=>({q:h.period||"",epsEst:h.estimate,epsAct:h.actual,beat:(h.actual??0)>=(h.estimate??0)})),
     note: isToday ? "Earnings today — review the results when released."
       : `Results expected ${fmtEarnDate(e.next_earnings_date)}. Worth checking in before then.`,
-    history: [], isUrgent: false,
+    isUrgent: false,
   };
 };
 
@@ -344,9 +348,13 @@ const mapPick = pick => {
     grade: (trust.grade||"Strong").toUpperCase(), col, grad:`linear-gradient(90deg,${col},#0ea5e9)`,
     rec, rcls, b: trust.business_score||0, bm:40, s: trust.smart_money_score||0, sm:35, m: trust.momentum_score||0, mm:25,
     sigs: sigs.length ? sigs : ["Strong fundamentals across all three pillars."],
-    potential: `+${Math.round((total-60)*1.2+15)}%`,
+    potential: pick.is_dip
+      ? `${(pick.change_pct||0).toFixed(1)}% dip`
+      : `+${Math.round((total-60)*1.2+15)}%`,
     entry: price > 0 ? `${curr}${(price*0.97).toFixed(0)}-${curr}${(price*1.03).toFixed(0)}` : "—",
     risk: total >= 80 ? "LOW-MED" : "MEDIUM", horizon: verdict.time_horizon || "12 months",
+    is_dip: pick.is_dip || false,
+    change_pct: pick.change_pct || 0,
   };
 };
 
@@ -533,13 +541,14 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
   const rPos = d && d.w52Lo != null ? Math.min(100,Math.max(0,((price-d.w52Lo)/rRange*100))).toFixed(0) : 50;
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end",backdropFilter:"blur(4px)",maxWidth:400,margin:"0 auto"}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"var(--bg)",borderRadius:"24px 24px 0 0",maxHeight:"94vh",overflowY:"auto",scrollbarWidth:"none",animation:"slideUp .3s cubic-bezier(.32,.72,0,1)"}}>
+    <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end",backdropFilter:"blur(4px)",maxWidth:400,margin:"0 auto"}}>
+      <div style={{background:"var(--bg)",borderRadius:"24px 24px 0 0",maxHeight:"94vh",overflowY:"auto",scrollbarWidth:"none",animation:"slideUp .3s cubic-bezier(.32,.72,0,1)"}}>
 
         {/* Header */}
         <div style={{background:"linear-gradient(135deg,#4f68f0,#0ea5e9)",padding:"16px 18px 20px",borderRadius:"24px 24px 0 0",position:"sticky",top:0,zIndex:10}}>
-          <div style={{display:"flex",justifyContent:"center",marginBottom:12}}>
-            <div style={{width:36,height:4,background:"rgba(255,255,255,.4)",borderRadius:2}}/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{width:36,height:4,background:"rgba(255,255,255,.4)",borderRadius:2,margin:"0 auto"}}/>
+            <button onClick={onClose} style={{position:"absolute",right:14,top:12,background:"rgba(255,255,255,.2)",border:"1px solid rgba(255,255,255,.3)",borderRadius:8,color:"#fff",fontWeight:700,fontSize:14,width:28,height:28,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>✕</button>
           </div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
             <div>
@@ -809,15 +818,29 @@ function EarningsDetail({e,onBack,onClose}) {
               <div style={{fontSize:10,color:"var(--t2)",lineHeight:1.5}}>{e.note}</div>
             </div>
           )}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-            {[{l:"EPS Estimate",v:`$${e.epsEst}`},{l:"Revenue Est.",v:`$${e.revEst}M`}].map((m,i)=>(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            {[
+              {l:"EPS Estimate",v:e.epsEst!=null?`$${e.epsEst}`:"—",s:"analyst consensus"},
+              {l:"Revenue Est.",v:e.revEst!=null?(e.revEst>=1e9?`$${(e.revEst/1e9).toFixed(1)}B`:e.revEst>=1e6?`$${(e.revEst/1e6).toFixed(0)}M`:`$${e.revEst}`):"—",s:"analyst estimate"},
+            ].map((m,i)=>(
               <div key={i} style={{background:"var(--white)",borderRadius:9,padding:"10px 12px",border:"1px solid rgba(15,23,42,.07)"}}>
                 <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{m.l}</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:16,fontWeight:700,color:"var(--t1)"}}>{m.v}</div>
-                <div style={{fontSize:9,color:"var(--t3)",marginTop:1}}>consensus</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:16,fontWeight:700,color:m.v==="—"?"var(--t3)":"var(--t1)"}}>{m.v}</div>
+                <div style={{fontSize:9,color:"var(--t3)",marginTop:1}}>{m.s}</div>
               </div>
             ))}
           </div>
+          {/* Analyst consensus */}
+          {(e.analystBuy+e.analystHold+e.analystSell)>0&&(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:12}}>
+              {[{l:"Buy",v:e.analystBuy,c:"var(--emerald)"},{l:"Hold",v:e.analystHold,c:"var(--amber)"},{l:"Sell",v:e.analystSell,c:"var(--rose)"}].map((m,i)=>(
+                <div key={i} style={{background:"var(--white)",borderRadius:8,padding:"6px",textAlign:"center",border:"1px solid rgba(15,23,42,.06)"}}>
+                  <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:m.c}}>{m.v}</div>
+                  <div style={{fontSize:8,color:"var(--t3)",marginTop:1}}>analysts {m.l.toLowerCase()}</div>
+                </div>
+              ))}
+            </div>
+          )}
           <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1,marginBottom:7}}>Earnings history</div>
           <div style={{background:"var(--white)",borderRadius:9,overflow:"hidden",border:"1px solid rgba(15,23,42,.07)",marginBottom:12}}>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",padding:"5px 12px",background:"rgba(15,23,42,.018)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
@@ -1358,11 +1381,22 @@ function AddModal({onClose, onAdded}) {
     try {
       if (type === "portfolio") {
         const cleanPrice = +buyPrice.toString().replace(",", ".");
-        await addPosition(t, +shares, cleanPrice, buyDate || null, null);
+        const res = await addPosition(t, +shares, cleanPrice, buyDate || null, null);
+        onAdded();
+        if (res?.already_had_position) {
+          setLoading(false);
+          setErr(`ℹ️ ${t} already in portfolio — new lot added.`);
+          return;
+        }
       } else {
-        await addToWatchlist(t, null);
+        const res = await addToWatchlist(t, null);
+        if (res?.already_exists) {
+          setLoading(false);
+          setErr(`ℹ️ ${t} is already on your watchlist.`);
+          return;
+        }
+        onAdded();
       }
-      onAdded();
       onClose();
     } catch(e) {
       setErr("Failed to add. Check the ticker and try again.");
@@ -1427,7 +1461,7 @@ function AddModal({onClose, onAdded}) {
           </>
         )}
 
-        {err && <div className="modal-err">{err}</div>}
+        {err && <div className="modal-err" style={err.startsWith("ℹ️") ? {color:"var(--indigo)",background:"#eef2ff",borderColor:"#c7d2fe"} : {}}>{err}</div>}
         <button className="modal-submit" onClick={submit} disabled={loading}>
           {loading ? "Adding…" : type==="portfolio" ? "Add to Portfolio" : "Add to Watchlist"}
         </button>
@@ -1501,22 +1535,68 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
 
 
 // ── SMART PICKS ──────────────────────────────────────
-function SmartPicksScreen({picks, disq, accuracy}) {
+function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
   const [exp,setExp] = useState(null);
+  const [addQ,setAddQ] = useState("");
+  const [addMsg,setAddMsg] = useState("");
+  const [adding,setAdding] = useState(false);
   const PICKS = picks || [];
   const DISQ = disq || [];
   const acc = accuracy || "—";
+
+  const handleAdd = () => {
+    const t = addQ.trim().toUpperCase();
+    if (!t) return;
+    if (PICKS.some(p=>p.ticker===t) || DISQ.some(d=>d.ticker===t)) {
+      setAddMsg(`${t} is already tracked`);
+      return;
+    }
+    setAdding(true);
+    addPicksUniverse(t)
+      .then(()=>{ setAddQ(""); setAddMsg(`${t} added — refreshing picks…`); if(onRefreshPicks) onRefreshPicks(); })
+      .catch(()=>setAddMsg("Could not add — check ticker spelling"))
+      .finally(()=>setAdding(false));
+  };
+
+  const handleRemove = (ticker, e) => {
+    e.stopPropagation();
+    removePicksUniverse(ticker)
+      .then(()=>{ if(onRefreshPicks) onRefreshPicks(); })
+      .catch(()=>{});
+  };
+
   return (
     <div className="pad" style={{paddingTop:12}}>
 
-      {/* Quiet header — data leads, label whispers */}
+      {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
         <div style={{display:"flex",alignItems:"center",gap:7}}>
           <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,color:"var(--t1)"}}>Smart Picks</span>
           <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--emerald)",background:"var(--emerald2)",border:"1px solid #a7f3d0",padding:"2px 7px",borderRadius:8,fontWeight:600}}>{acc} · 90d</span>
         </div>
-        <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{PICKS.length} active</span>
+        <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{loading?"Loading…":`${PICKS.length} active`}</span>
       </div>
+
+      {/* Add stock to picks universe */}
+      <div style={{background:"var(--white)",borderRadius:"var(--rm)",padding:"10px 12px",marginBottom:10,border:"1px solid rgba(91,114,248,.1)",display:"flex",gap:8,alignItems:"center"}}>
+        <input value={addQ} onChange={e=>{ setAddQ(e.target.value); setAddMsg(""); }}
+          onKeyDown={e=>e.key==="Enter"&&handleAdd()}
+          placeholder="Track a stock — e.g. NVDA, AXON…"
+          style={{flex:1,border:"none",outline:"none",fontFamily:"var(--dm)",fontSize:12,color:"var(--t1)",background:"none"}}/>
+        <button onClick={handleAdd} disabled={adding}
+          style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",border:"none",padding:"5px 11px",borderRadius:6,cursor:"pointer",opacity:adding?.6:1}}>
+          {adding?"…":"+ Track"}
+        </button>
+      </div>
+      {addMsg&&<div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",marginBottom:8,paddingLeft:4}}>{addMsg}</div>}
+
+      {/* Loading skeleton */}
+      {loading&&PICKS.length===0&&(
+        <div style={{background:"var(--white)",borderRadius:12,padding:"20px",textAlign:"center",marginBottom:10,color:"var(--t3)",fontSize:11,fontFamily:"var(--mono)"}}>
+          <span style={{display:"inline-block",width:12,height:12,border:"2px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginRight:8}}/>
+          Scanning {30}+ quality stocks…
+        </div>
+      )}
 
       {/* Picks card */}
       <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10}}>
@@ -1536,18 +1616,20 @@ function SmartPicksScreen({picks, disq, accuracy}) {
           const c=tc(s.trust);
           const recColor=s.rcls==="rr-sb"?"var(--indigo)":s.rcls==="rr-b"?"var(--emerald)":"var(--amber)";
           const recBg=s.rcls==="rr-sb"?"#eef2ff":s.rcls==="rr-b"?"var(--emerald2)":"var(--amber2)";
+          const isDip = s.is_dip;
           return (
             <div key={s.ticker}>
               <div onClick={()=>setExp(open?null:i)}
                 style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",
                   alignItems:"center",padding:"7px 12px",
                   borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",
-                  background:open?"rgba(91,114,248,.018)":"transparent",
+                  background:open?"rgba(91,114,248,.018)":isDip?"rgba(5,150,105,.025)":"transparent",
                   transition:"background .15s",gap:4}}>
                 <div style={{minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
-                    <div style={{width:5,height:5,borderRadius:"50%",background:recColor,flexShrink:0}}/>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:isDip?"var(--emerald)":recColor,flexShrink:0}}/>
                     <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
+                    {isDip&&<span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 5px",borderRadius:3}}>DIP</span>}
                   </div>
                   <div style={{fontSize:8,color:"var(--t3)",marginTop:1,paddingLeft:10,
                     whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
@@ -1562,8 +1644,9 @@ function SmartPicksScreen({picks, disq, accuracy}) {
                 <div style={{textAlign:"center"}}>
                   <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"var(--emerald)"}}>{s.potential}</span>
                 </div>
-                <div style={{textAlign:"center"}}>
+                <div style={{textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
                   <span style={{fontSize:8,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+                  <button onClick={(e)=>handleRemove(s.ticker,e)} style={{fontSize:8,color:"var(--t3)",background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
                 </div>
               </div>
 
@@ -1675,7 +1758,7 @@ function StrategyScreen({strategyData, onDetail}) {
     <div className="pad" style={{paddingTop:14}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div>
-          <div style={{fontFamily:"var(--syne)",fontWeight:800,fontSize:20}}>Strategy Centre</div>
+          <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15}}>Strategy Centre</div>
           <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Signals and context for each stock — right now</div>
         </div>
         <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#eef2ff",color:"var(--indigo)",border:"1px solid #c7d2fe",padding:"3px 10px",borderRadius:10,fontWeight:700}}>{total} active</span>
@@ -1754,6 +1837,7 @@ export default function App() {
   const [market, setMarket] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [picks, setPicks] = useState([]);
+  const [picksLoading, setPicksLoading] = useState(false);
   const [disq, setDisq] = useState([]);
   const [accuracy, setAccuracy] = useState("—");
   const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[]});
@@ -1782,7 +1866,8 @@ export default function App() {
     // PRIORITY 3 — Smart Picks + Strategy (heavy, load in background after page is visible)
     setTimeout(() => {
       getDisqualified().then(v => { setDisq((v||[]).map(mapDisq)); }).catch(()=>{});
-      getPicks().then(v => { setPicks((v||[]).map(mapPick)); }).catch(()=>{});
+      setPicksLoading(true);
+      getPicks().then(v => { setPicks((v||[]).map(mapPick)); }).catch(()=>{}).finally(()=>setPicksLoading(false));
     }, 500);
     setTimeout(() => {
       getStrategy().then(v => {
@@ -1827,7 +1912,7 @@ export default function App() {
   const screens = [
     <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
     <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData}/>,
-    <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy}/>,
+    <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy} loading={picksLoading} onRefreshPicks={()=>{setPicksLoading(true);getPicks().then(v=>setPicks((v||[]).map(mapPick))).catch(()=>{}).finally(()=>setPicksLoading(false));}}/>,
     <StrategyScreen strategyData={strategyData} onDetail={setSel}/>,
   ];
   const tabDefs = [

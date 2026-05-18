@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS market_cache (
   value REAL,
   updated_at TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS picks_universe (
+  id INTEGER PRIMARY KEY,
+  ticker TEXT UNIQUE NOT NULL,
+  added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

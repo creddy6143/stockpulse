@@ -268,3 +268,48 @@ def clear_all_data():
     conn.execute("DELETE FROM alerts")
     conn.commit()
     conn.close()
+
+
+# ── PICKS UNIVERSE ────────────────────────────────────────────────────────────
+
+def get_picks_universe():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT ticker FROM picks_universe ORDER BY added_at DESC"
+    ).fetchall()
+    conn.close()
+    return [r["ticker"] for r in rows]
+
+
+def add_picks_universe(ticker: str):
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR IGNORE INTO picks_universe (ticker) VALUES (?)", (ticker,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_picks_universe(ticker: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM picks_universe WHERE ticker=?", (ticker,))
+    conn.commit()
+    conn.close()
+
+
+def ticker_in_portfolio(ticker: str) -> bool:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM portfolio WHERE ticker=? LIMIT 1", (ticker,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def ticker_in_watchlist(ticker: str) -> bool:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM watchlist WHERE ticker=? LIMIT 1", (ticker,)
+    ).fetchone()
+    conn.close()
+    return row is not None
