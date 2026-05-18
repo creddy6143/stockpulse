@@ -787,7 +787,10 @@ def get_fundamentals(ticker: str) -> dict:
     # Fixes .ST/.AS coverage gap: Finnhub free tier misses Swedish/Dutch etc. stocks,
     # and the old price-field guard in _yf_lib_fundamentals was always returning {} on
     # yfinance 0.2+ (price fields moved to fast_info). Now fixed.
-    is_intl = any(ticker.endswith(s) for s in [".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC"])
+    is_intl = any(ticker.endswith(s) for s in [
+        ".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC",
+        ".BR", ".HE", ".CO", ".OL", ".F",  # Brussels, Helsinki, Copenhagen, Oslo, Frankfurt secondary
+    ])
     if is_intl:
         yf_data = _yf_lib_fundamentals(ticker)
         if yf_data:
@@ -810,7 +813,18 @@ def get_fundamentals(ticker: str) -> dict:
     # (e.g. small Nordic stocks with no ADR, no Screener.in coverage).
     # FMP free tier gives us company name, sector, market cap, 52W range —
     # not enough to score, but enough to enrich the "Data Unavailable" display.
-    if not result.get("market_cap") and FMP_KEY:
+    #
+    # Trigger when: no market_cap at all (old condition) OR when we have market_cap
+    # from yfinance but lack meaningful fundamental data (revenue/margin/gross all 0).
+    # This covers pre-revenue US stocks (NNE, OKLO) and international stocks where
+    # yfinance returns market_cap but no operating metrics — both now show "Data
+    # Unavailable" in trust_score, and users deserve to see what the company does.
+    _no_fundamentals = (
+        abs(result.get("revenue_growth") or 0) < 0.001
+        and abs(result.get("profit_margins") or 0) < 0.001
+        and abs(result.get("gross_margins") or 0) < 0.001
+    )
+    if FMP_KEY and (not result.get("market_cap") or _no_fundamentals):
         fmp = get_fmp_profile(ticker)
         if fmp:
             result.update(fmp)   # overlays market_cap, w52_high/low, fmp_* fields
