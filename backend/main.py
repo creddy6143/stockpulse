@@ -659,16 +659,24 @@ def _get_flag(market: str) -> str:
 
 def _detect_situation(pos: dict, market_data: dict) -> dict:
     """Always returns a situation — every portfolio stock gets a strategy card."""
-    pnl_pct = pos.get("pnl_pct", 0)
-    trust = pos.get("trust_score", 50)
+    pnl_pct = pos.get("pnl_pct", 0) or 0
+    raw_trust = pos.get("trust_score")          # may be None for Data Unavailable
+    trust = raw_trust if raw_trust is not None else 50
     auto_disq = pos.get("auto_disqualified", False)
     grade = pos.get("grade", "")
+    trust_str = f"{trust}/100" if raw_trust is not None else "No Data"
 
     if auto_disq:
         return {
             "situation_type": "exit_now", "label": "Exit Required", "icon": "🚨",
             "action": "EXIT", "color": "var(--rose)", "priority": 0,
             "summary": f"Auto-disqualified. {pos.get('disqualify_reason', 'Exit now.')}",
+        }
+    if grade == "Data Unavailable":
+        return {
+            "situation_type": "no_data", "label": "No Data", "icon": "❓",
+            "action": "HOLD", "color": "var(--t2)", "priority": 3,
+            "summary": f"No fundamental data available for this exchange. P&L {pnl_pct:+.0f}%. Price tracking is active.",
         }
     if pnl_pct < -30:
         return {
@@ -686,51 +694,60 @@ def _detect_situation(pos: dict, market_data: dict) -> dict:
         return {
             "situation_type": "weak_fundamentals", "label": "Weak Signal", "icon": "⚠️",
             "action": "REVIEW", "color": "var(--amber)", "priority": 2,
-            "summary": f"Trust score {trust}/100 ({grade}). Review fundamentals before holding further.",
+            "summary": f"Trust score {trust_str} ({grade}). Review fundamentals before holding further.",
         }
     if -10 <= pnl_pct <= 10:
         return {
             "situation_type": "monitor", "label": "On Track", "icon": "👁",
             "action": "HOLD", "color": "var(--indigo)", "priority": 3,
-            "summary": f"Trust {trust}/100. P&L {pnl_pct:+.0f}%. No action required — monitoring.",
+            "summary": f"Trust {trust_str}. P&L {pnl_pct:+.0f}%. No action required — monitoring.",
         }
     if pnl_pct < -10:
         return {
             "situation_type": "mild_loss", "label": "Under Pressure", "icon": "📉",
             "action": "HOLD" if trust >= 60 else "REVIEW", "color": "var(--amber)", "priority": 2,
-            "summary": f"Down {abs(pnl_pct):.0f}%. Trust {trust}/100. {'Hold — fundamentals intact.' if trust >= 60 else 'Review position carefully.'}",
+            "summary": f"Down {abs(pnl_pct):.0f}%. Trust {trust_str}. {'Hold — fundamentals intact.' if trust >= 60 else 'Review position carefully.'}",
         }
     return {
         "situation_type": "monitor", "label": "Holding Well", "icon": "✅",
         "action": "HOLD", "color": "var(--emerald)", "priority": 3,
-        "summary": f"Up {pnl_pct:.0f}%. Trust {trust}/100. Holding well — no action needed.",
+        "summary": f"Up {pnl_pct:.0f}%. Trust {trust_str}. Holding well — no action needed.",
     }
 
 
 def _detect_wl_situation(item: dict, market_data: dict) -> dict:
     """Always returns a situation — every watchlist stock gets a strategy card."""
-    trust = item.get("trust_score", 50)
+    raw_trust = item.get("trust_score")         # may be None for Data Unavailable
+    trust = raw_trust if raw_trust is not None else 50
+    trust_str = f"{trust}/100" if raw_trust is not None else "No Data"
     wl_group = item.get("wl_group", "watching")
     upside = item.get("analyst_upside_pct")
+    grade = item.get("grade", "")
 
+    if grade == "Data Unavailable":
+        return {
+            "situation_type": "no_data", "label": "No Data", "icon": "❓",
+            "action": "WAIT", "color": "var(--t2)", "priority": 3,
+            "summary": "No fundamental data available for this exchange. Price tracking is active.",
+        }
     if wl_group == "ready":
         return {
             "situation_type": "ready_to_buy", "label": "Ready to Buy", "icon": "🟢",
             "action": "BUY", "color": "var(--emerald)", "priority": 1,
-            "summary": f"Trust {trust}/100. Entry conditions aligned — consider buying now.",
+            "summary": f"Trust {trust_str}. Entry conditions aligned — consider buying now.",
         }
     if wl_group == "avoid":
         return {
             "situation_type": "dont_buy", "label": "Don't Buy Yet", "icon": "🔴",
             "action": "WAIT", "color": "var(--rose)", "priority": 2,
-            "summary": f"Trust {trust}/100. Red flags present — wait for conditions to improve.",
+            "summary": f"Trust {trust_str}. Red flags present — wait for conditions to improve.",
         }
     # Still watching — always show
     upside_str = f" Analysts see +{upside:.0f}% upside." if upside and upside > 0 else ""
     return {
         "situation_type": "watching", "label": "Watching", "icon": "👁",
         "action": "WAIT", "color": "var(--indigo)", "priority": 3,
-        "summary": f"Trust {trust}/100 — not yet at entry threshold.{upside_str} Wait for ≥75 score.",
+        "summary": f"Trust {trust_str} — not yet at entry threshold.{upside_str} Wait for ≥75 score.",
     }
 
 
