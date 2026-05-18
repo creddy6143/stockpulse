@@ -95,6 +95,7 @@ export const getStrategyPlaybook = (ticker, situationData) =>
 // ── HEALTH ───────────────────────────────────────────────────────────────────
 
 export const getHealth = () => request('/api/health');
+export const clearDataCache = () => request('/api/cache/clear', { method: 'POST' });
 
 // ── EARNINGS ─────────────────────────────────────────────────────────────────
 

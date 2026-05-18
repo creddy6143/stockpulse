@@ -80,6 +80,16 @@ def reset_all_data():
     return {"status": "cleared"}
 
 
+@app.post("/api/cache/clear")
+def clear_data_cache():
+    """Clear in-memory data cache — forces fresh data fetch for all stocks.
+    Use this after deploying fixes to get updated trust scores immediately.
+    """
+    from data.cache import clear_cache
+    clear_cache()
+    return {"status": "cache cleared"}
+
+
 # ── SEARCH ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/rates")
@@ -134,8 +144,16 @@ def add_portfolio(req: AddPositionRequest):
     already_exists = db.ticker_in_portfolio(ticker)
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
+    # For tickers without exchange suffix, use price currency to infer market.
+    # e.g. user types "INFY" (NYSE ADR, USD) vs "INFY.NS" (NSE India, INR).
+    if "." not in ticker:
+        pc = (price_data.get("currency") or "").upper()
+        if pc == "INR":
+            market = "IN"
+        elif pc in ("EUR", "SEK"):
+            market = "EU"
     from portfolio.tracker import _detect_currency
-    currency = _detect_currency(ticker)
+    currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes)
     return {"status": "added", "ticker": ticker, "already_had_position": already_exists}
@@ -178,8 +196,14 @@ def add_watchlist(req: WatchlistRequest):
     already_exists = db.ticker_in_watchlist(ticker)
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
+    if "." not in ticker:
+        pc = (price_data.get("currency") or "").upper()
+        if pc == "INR":
+            market = "IN"
+        elif pc in ("EUR", "SEK"):
+            market = "EU"
     from portfolio.tracker import _detect_currency
-    currency = _detect_currency(ticker)
+    currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_to_watchlist(ticker, req.notes)
     return {"status": "added", "ticker": ticker, "already_exists": already_exists}
@@ -359,6 +383,9 @@ def picks():
     highs = [r for r in result if not r["is_dip"]]
     highs.sort(key=lambda x: -x["trust"]["total_score"])
     final = highs + dips
+    # Exclude stocks already in portfolio — picks are for discovery, not review of owned stocks
+    portfolio_tickers = {p["ticker"] for p in portfolio}
+    final = [r for r in final if r["ticker"] not in portfolio_tickers]
     cs("picks:result", final)
     return final
 

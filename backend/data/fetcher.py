@@ -138,8 +138,11 @@ def _yf_quotesummary(ticker: str) -> dict:
 
 
 def _yf_lib_fundamentals(ticker: str) -> dict:
-    """Use yfinance Python library for better international stock data (.ST, .AS, .L etc.).
-    Only called when Finnhub + Yahoo quoteSummary HTTP calls both fail to return data.
+    """Use yfinance Python library for international stock fundamentals (.ST, .AS, .L etc.).
+
+    NOTE: yfinance 0.2+ moved price fields (regularMarketPrice, currentPrice) OUT of
+    info and into fast_info. Do NOT check for price fields — check fundamental fields only.
+    This was the root cause of Stockholm stocks scoring 2/100 (always returned {} before).
     """
     key = f"yf_lib:{ticker}"
     cached = cache_get(key, TTL_FUNDAMENTALS)
@@ -149,15 +152,33 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
         import yfinance as yf
         t = yf.Ticker(ticker)
         info = t.info or {}
-        if not info.get("regularMarketPrice") and not info.get("currentPrice"):
+        # Extract fundamentals — do NOT gate on price fields (not in info in yfinance 0.2+)
+        market_cap = int(info.get("marketCap") or 0)
+        if not market_cap:
+            # yfinance 0.2+ puts market cap in fast_info
+            try:
+                market_cap = int(getattr(t.fast_info, "market_cap", 0) or 0)
+            except Exception:
+                pass
+        revenue_growth = float(info.get("revenueGrowth") or 0)
+        profit_margins = float(info.get("profitMargins") or 0)
+        gross_margins  = float(info.get("grossMargins") or 0)
+        # Verify we got at least ONE useful fundamental value
+        has_data = bool(
+            market_cap
+            or abs(revenue_growth) > 0.001
+            or abs(profit_margins) > 0.001
+            or abs(gross_margins) > 0.001
+        )
+        if not has_data:
             cache_set(key, {})
             return {}
         result = {
-            "revenue_growth":  round(float(info.get("revenueGrowth") or 0), 4),
-            "profit_margins":  round(float(info.get("profitMargins") or 0), 4),
-            "gross_margins":   round(float(info.get("grossMargins") or 0), 4),
-            "gaap_profitable": (info.get("profitMargins") or 0) > 0,
-            "market_cap":      int(info.get("marketCap") or 0),
+            "revenue_growth":  round(revenue_growth, 4),
+            "profit_margins":  round(profit_margins, 4),
+            "gross_margins":   round(gross_margins, 4),
+            "gaap_profitable": profit_margins > 0,
+            "market_cap":      market_cap,
             "pe_ratio":        round(float(p), 2) if (p := info.get("trailingPE") or info.get("forwardPE")) else None,
             "w52_high":        info.get("fiftyTwoWeekHigh"),
             "w52_low":         info.get("fiftyTwoWeekLow"),
@@ -168,6 +189,46 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
     except Exception:
         cache_set(key, {})
         return {}
+
+
+def _yf_earnings_date(ticker: str) -> str | None:
+    """Next earnings date from Yahoo Finance calendarEvents module.
+    Fallback when Finnhub free tier doesn't cover a stock's earnings calendar.
+    Works for US, EU, and Indian stocks.
+    """
+    from datetime import datetime as _dt2
+    cache_key = f"yf_earn:{ticker}"
+    cached = cache_get(cache_key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached if cached else None
+    try:
+        session, crumb = _get_yf_auth()
+        url = (
+            f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+            f"?modules=calendarEvents"
+        )
+        if crumb:
+            url += f"&crumb={crumb}"
+        r = (session or requests).get(url, headers=_HEADERS, timeout=8)
+        if r.status_code == 200:
+            res = r.json().get("quoteSummary", {}).get("result") or []
+            if res:
+                today_ts = _dt2.now().timestamp()
+                earn_dates = (
+                    res[0].get("calendarEvents", {})
+                    .get("earnings", {})
+                    .get("earningsDate", [])
+                )
+                for d in earn_dates:
+                    ts = d.get("raw") if isinstance(d, dict) else d
+                    if ts and float(ts) > today_ts:
+                        date_str = _dt2.utcfromtimestamp(float(ts)).strftime("%Y-%m-%d")
+                        cache_set(cache_key, date_str)
+                        return date_str
+    except Exception:
+        pass
+    cache_set(cache_key, "")
+    return None
 
 
 def _is_us_stock(ticker: str) -> bool:
@@ -533,16 +594,27 @@ def get_fundamentals(ticker: str) -> dict:
         except Exception:
             pass
 
-    # yfinance Python library fallback — most reliable for international stocks (.ST, .AS, .L etc.)
-    # Only runs when fundamentals are still missing after all HTTP-based sources
+    # yfinance Python library — always run for international stocks.
+    # Fixes .ST/.AS coverage gap: Finnhub free tier misses Swedish/Dutch etc. stocks,
+    # and the old price-field guard in _yf_lib_fundamentals was always returning {} on
+    # yfinance 0.2+ (price fields moved to fast_info). Now fixed.
     is_intl = any(ticker.endswith(s) for s in [".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC"])
-    still_missing = not (result["market_cap"] or 0) > 0 or abs(result["revenue_growth"]) < 0.001
-    if is_intl and still_missing:
+    if is_intl:
         yf_data = _yf_lib_fundamentals(ticker)
         if yf_data:
             for k, v in yf_data.items():
-                if v and not result.get(k):
+                if v is not None and not result.get(k):
                     result[k] = v
+            # gaap_profitable: yf might confirm profitable even if our default is False
+            if yf_data.get("gaap_profitable") and not result["gaap_profitable"]:
+                result["gaap_profitable"] = True
+
+    # Yahoo Finance calendarEvents fallback for next earnings date.
+    # Works for all markets — covers gaps where Finnhub free tier returns nothing.
+    if not result["next_earnings_date"]:
+        yf_date = _yf_earnings_date(ticker)
+        if yf_date:
+            result["next_earnings_date"] = yf_date
 
     cache_set(key, result)
     return result

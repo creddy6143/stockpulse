@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, clearDataCache } from "./api/client";
 const BASE = process.env.REACT_APP_API_URL || '';
 
 const CSS = `
@@ -1410,6 +1410,10 @@ function AddModal({onClose, onAdded}) {
         <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 16px"}}/>
         <div className="modal-title">Add Stock</div>
         <div className="modal-sub">Add to your portfolio or watchlist</div>
+        <div style={{fontSize:10,color:"var(--t3)",marginBottom:10,lineHeight:1.5}}>
+          🇮🇳 Indian stocks need suffix: <span style={{fontFamily:"var(--mono)"}}>INFY.NS</span> (NSE) · <span style={{fontFamily:"var(--mono)"}}>RELIANCE.BO</span> (BSE)<br/>
+          🇪🇺 European: <span style={{fontFamily:"var(--mono)"}}>ASML.AS</span> · <span style={{fontFamily:"var(--mono)"}}>SAP.DE</span> · <span style={{fontFamily:"var(--mono)"}}>MILDEF.ST</span>
+        </div>
 
         {/* Portfolio / Watchlist toggle */}
         <div className="modal-seg">
@@ -1574,7 +1578,12 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
           <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,color:"var(--t1)"}}>Smart Picks</span>
           <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--emerald)",background:"var(--emerald2)",border:"1px solid #a7f3d0",padding:"2px 7px",borderRadius:8,fontWeight:600}}>{acc} · 90d</span>
         </div>
-        <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{loading?"Loading…":`${PICKS.length} active`}</span>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{loading?"Loading…":`${PICKS.length} active`}</span>
+          <button onClick={()=>{clearDataCache().catch(()=>{});if(onRefreshPicks)onRefreshPicks();}}
+            title="Clear cache and refresh all scores"
+            style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",background:"none",border:"1px solid var(--t4)",borderRadius:6,padding:"2px 6px",cursor:"pointer"}}>↻</button>
+        </div>
       </div>
 
       {/* Add stock to picks universe */}
