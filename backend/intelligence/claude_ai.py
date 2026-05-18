@@ -15,25 +15,25 @@ _anthropic_client = None
 # All other stocks use _default_verdict() — no stale hardcoded text.
 _BLOCKED_VERDICTS = {
     "TNXP": {
-        "verdict": "Auto-disqualified: 8 reverse splits. This stock has a history of destroying value through dilution. Exit any position immediately.",
+        "verdict": "Flagged: 8 reverse splits on record — a pattern historically associated with ongoing shareholder dilution. This is one of the risk signals our system tracks closely. Not financial advice — review your own situation carefully.",
         "recommendation": "strong_sell", "confidence_pct": 95,
-        "stop_loss_explanation": "Exit immediately — do not hold.",
+        "stop_loss_explanation": "Historically, holders of stocks with this many reverse splits have seen continued value erosion. Consider what your personal exit criteria are.",
         "time_horizon": "short (days)",
-        "key_risk": "Continued dilution and reverse splits.",
+        "key_risk": "Repeated reverse splits have historically diluted existing shareholders significantly each time.",
     },
     "XGN": {
-        "verdict": "Auto-disqualified: board resigned before earnings. This is one of the strongest warning signs that exist. Exit any position at the earliest opportunity.",
+        "verdict": "Flagged: entire board resigned within 30 days of an earnings report — historically one of the strongest negative signals in corporate governance. This pattern warrants careful review of your position.",
         "recommendation": "strong_sell", "confidence_pct": 92,
-        "stop_loss_explanation": "Exit at market open. Do not wait.",
+        "stop_loss_explanation": "Board resignations before earnings have historically preceded significant negative results. Review your position with your own risk tolerance in mind.",
         "time_horizon": "short (days)",
-        "key_risk": "Insider knowledge of bad results is the most likely explanation for a board resignation.",
+        "key_risk": "Unexpected board resignations before earnings have historically signalled serious undisclosed problems.",
     },
     "NKLA": {
-        "verdict": "Auto-disqualified: SEC fraud conviction, CEO and CFO resigned, Chapter 11 bankruptcy. No recovery path exists.",
+        "verdict": "Flagged: SEC fraud conviction, executive departures, and Chapter 11 bankruptcy filing — all three of the most serious corporate distress signals simultaneously. This is for informational purposes only.",
         "recommendation": "strong_sell", "confidence_pct": 99,
-        "stop_loss_explanation": "Exit immediately. This company is in bankruptcy.",
+        "stop_loss_explanation": "In Chapter 11 bankruptcy, equity holders are typically last in the recovery priority queue. Review your situation with that in mind.",
         "time_horizon": "short (days)",
-        "key_risk": "Total loss of capital in bankruptcy proceedings.",
+        "key_risk": "In bankruptcy proceedings, equity typically has little or no recovery value once creditors are paid.",
     },
 }
 
@@ -184,28 +184,26 @@ Give a plain English verdict following the system rules."""
     if parsed:
         return parsed
 
-    # For manually-blocked stocks: return the base verdict but if there's a
-    # significant price move today, surface it as the EXIT WINDOW (not a reason to hold).
+    # For manually-blocked stocks: show today's price move as context alongside the signal.
     blocked = _BLOCKED_VERDICTS.get(clean)
     if blocked:
         change_pct = float(price_data.get("change_pct", 0) or 0)
         if change_pct >= 5:
-            # Big up day — use it as context: exit at a better price
+            # Big up day — note the move but keep signal-based framing
             result = dict(blocked)
             result["verdict"] = (
-                f"Up {change_pct:.0f}% today — this pop is your exit window. "
+                f"Up {change_pct:.0f}% today — a short-term catalyst is driving this move. "
                 f"{blocked['verdict']}"
             )
             result["stop_loss_explanation"] = (
-                f"Exit now while price is elevated {change_pct:+.0f}%. "
-                f"Do not wait for it to reverse — the underlying problems have not changed."
+                f"Price is elevated {change_pct:+.0f}% today. "
+                f"The underlying risk signals have not changed — weigh this carefully against your own situation."
             )
             return result
         elif change_pct <= -5:
-            # Big down day — reinforce urgency
             result = dict(blocked)
             result["verdict"] = (
-                f"Down {abs(change_pct):.0f}% today — confirms the exit signal. "
+                f"Down {abs(change_pct):.0f}% today. "
                 f"{blocked['verdict']}"
             )
             return result
@@ -315,20 +313,20 @@ def _build_user_context(situation_type: str, stock_data: dict) -> str:
 def _default_verdict(ticker: str, trust_score: int) -> dict:
     if trust_score < 40:
         return {
-            "verdict": "Trust score too low for a bullish thesis. Review fundamentals before acting.",
+            "verdict": "Multiple risk signals detected — the data does not support a bullish case at this score. Review the fundamentals carefully before making any decision.",
             "recommendation": "sell",
             "confidence_pct": 60,
-            "stop_loss_explanation": "Exit if it falls 10% further from current price.",
+            "stop_loss_explanation": "Historically, stocks at this score level that fall a further 10% have rarely recovered quickly. Consider what your personal risk threshold is.",
             "time_horizon": "short (days)",
-            "key_risk": "Fundamental deterioration.",
+            "key_risk": "Fundamental deterioration across multiple metrics.",
         }
     return {
-        "verdict": "Quality metrics suggest a hold. Monitor next earnings for confirmation.",
+        "verdict": "Quality signals are mixed — the data suggests monitoring rather than adding. Watch next earnings for clearer direction.",
         "recommendation": "hold",
         "confidence_pct": 55,
-        "stop_loss_explanation": "Exit if it falls 20% from current price.",
+        "stop_loss_explanation": "A 20% decline from current price would represent a significant move against this position — consider at what point you'd want to reassess.",
         "time_horizon": "medium (weeks)",
-        "key_risk": "Market-wide correction could pressure this stock regardless of fundamentals.",
+        "key_risk": "A market-wide correction could affect this stock regardless of its own fundamentals.",
     }
 
 
@@ -336,12 +334,12 @@ def _default_playbook(situation_type: str, ticker: str, stock_data: dict) -> str
     defaults = {
         "crash_decision": (
             f"The fall in {ticker} may be market-driven rather than company-specific. "
-            f"Check if the business fundamentals remain intact before deciding to hold or exit. "
-            f"If the core business is still executing, hold with a stop loss 20% below current price."
+            f"Checking whether the business fundamentals remain intact is worth doing before making any decision. "
+            f"If the core business is still executing well, many investors in this situation set a personal review level around 20% below current price."
         ),
         "exit_now": (
-            f"{ticker} has been flagged for immediate exit. Historical data shows these warning signs "
-            f"precede further declines in most cases. Exit at market open to protect remaining capital."
+            f"{ticker} has multiple serious risk signals flagged. Historically, these warning signs have preceded further declines in similar situations. "
+            f"This is for informational purposes — review your own position and risk tolerance carefully."
         ),
         "profit_decision": (
             f"{ticker} is showing strong gains. Consider taking partial profits — sell 30-40% to lock "
