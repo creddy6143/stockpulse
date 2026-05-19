@@ -311,57 +311,264 @@ def mark_read(alert_id: int):
 
 # ── SMART PICKS ───────────────────────────────────────────────────────────────
 
-# Curated high-quality universe — 120 stocks across 11 GICS sectors.
-# Selection criteria: multi-year revenue growth, profitability or clear path to it,
-# manageable debt, consistent earnings, strong moat or sector tailwind.
+# ── GICS SECTOR UNIVERSE (~325 stocks: US S&P500/Nasdaq100 + Europe + India) ──
+# GICS standard sector names used throughout. No "Other" — every stock maps to
+# one of the 11 official GICS sectors.
 _SECTOR_MAP: dict[str, str] = {
-    # Technology
-    "MSFT":"Technology","AAPL":"Technology","NVDA":"Technology","AVGO":"Technology",
-    "AMD":"Technology","QCOM":"Technology","TXN":"Technology","AMAT":"Technology",
-    "KLAC":"Technology","CRWD":"Technology","AXON":"Technology","NET":"Technology",
-    "DDOG":"Technology","ZS":"Technology","SNOW":"Technology","PLTR":"Technology",
-    "MNDY":"Technology","HUBS":"Technology","NOW":"Technology","ADBE":"Technology",
-    # Communications
-    "GOOGL":"Communications","META":"Communications","NFLX":"Communications",
-    "SPOT":"Communications","DIS":"Communications","TMUS":"Communications",
-    "TTD":"Communications","PINS":"Communications","ROKU":"Communications",
-    # Consumer Discretionary
+    # ── Information Technology ─────────────────────────────────────────────────
+    # US — mega-cap platforms + semis + software + hardware
+    "MSFT":"Information Technology","AAPL":"Information Technology",
+    "NVDA":"Information Technology","AVGO":"Information Technology",
+    "AMD":"Information Technology","QCOM":"Information Technology",
+    "TXN":"Information Technology","AMAT":"Information Technology",
+    "KLAC":"Information Technology","LRCX":"Information Technology",
+    "MRVL":"Information Technology","ON":"Information Technology",
+    "CRWD":"Information Technology","AXON":"Information Technology",
+    "NET":"Information Technology","DDOG":"Information Technology",
+    "ZS":"Information Technology","SNOW":"Information Technology",
+    "PLTR":"Information Technology","PANW":"Information Technology",
+    "FTNT":"Information Technology","HUBS":"Information Technology",
+    "NOW":"Information Technology","ADBE":"Information Technology",
+    "CRM":"Information Technology","INTU":"Information Technology",
+    "WDAY":"Information Technology","ANSS":"Information Technology",
+    "CDNS":"Information Technology","SNPS":"Information Technology",
+    "ACN":"Information Technology","CTSH":"Information Technology",
+    "IBM":"Information Technology","CSCO":"Information Technology",
+    "ORCL":"Information Technology","INTC":"Information Technology",
+    "MU":"Information Technology","STX":"Information Technology",
+    "WDC":"Information Technology","GLW":"Information Technology",
+    "TEL":"Information Technology","APH":"Information Technology",
+    "MNDY":"Information Technology","PTC":"Information Technology",
+    "EPAM":"Information Technology","HPQ":"Information Technology",
+    "DELL":"Information Technology","JNPR":"Information Technology",
+    "FFIV":"Information Technology","NTAP":"Information Technology",
+    # Europe
+    "ASML.AS":"Information Technology","SAP.DE":"Information Technology",
+    "CAP.PA":"Information Technology",
+    # India
+    "TCS.NS":"Information Technology","INFY.NS":"Information Technology",
+    "HCLTECH.NS":"Information Technology","WIPRO.NS":"Information Technology",
+    "TECHM.NS":"Information Technology","LTIM.NS":"Information Technology",
+    "COFORGE.NS":"Information Technology","PERSISTENT.NS":"Information Technology",
+    "OFSS.NS":"Information Technology","MPHASIS.NS":"Information Technology",
+
+    # ── Health Care ─────────────────────────────────────────────────────────────
+    # US — large pharma + managed care + devices + life science tools
+    "LLY":"Health Care","ABBV":"Health Care","JNJ":"Health Care",
+    "MRK":"Health Care","UNH":"Health Care","ISRG":"Health Care",
+    "DXCM":"Health Care","ABT":"Health Care","TMO":"Health Care",
+    "DHR":"Health Care","REGN":"Health Care","VRTX":"Health Care",
+    "AMGN":"Health Care","GILD":"Health Care","BMY":"Health Care",
+    "CI":"Health Care","CVS":"Health Care","HUM":"Health Care",
+    "MDT":"Health Care","SYK":"Health Care","EW":"Health Care",
+    "ZBH":"Health Care","BDX":"Health Care","IQV":"Health Care",
+    "IDXX":"Health Care","RMD":"Health Care","BSX":"Health Care",
+    "GEHC":"Health Care","HCA":"Health Care","LH":"Health Care",
+    "HOLX":"Health Care","PODD":"Health Care","ALGN":"Health Care",
+    "BAX":"Health Care","RVTY":"Health Care","MRNA":"Health Care",
+    "BIIB":"Health Care","ILMN":"Health Care","A":"Health Care",
+    # Europe
+    "AZN.L":"Health Care","GSK.L":"Health Care","BAYN.DE":"Health Care",
+    "NOVN.SW":"Health Care",
+    # India
+    "SUNPHARMA.NS":"Health Care","DRREDDY.NS":"Health Care",
+    "CIPLA.NS":"Health Care","DIVISLAB.NS":"Health Care",
+    "APOLLOHOSP.NS":"Health Care","MANKIND.NS":"Health Care",
+
+    # ── Financials ──────────────────────────────────────────────────────────────
+    # US — banks + payments + insurance + exchanges + asset managers
+    "JPM":"Financials","V":"Financials","MA":"Financials",
+    "BAC":"Financials","GS":"Financials","MS":"Financials",
+    "BLK":"Financials","SPGI":"Financials","ICE":"Financials",
+    "CME":"Financials","AXP":"Financials","COF":"Financials",
+    "WFC":"Financials","C":"Financials","USB":"Financials",
+    "PNC":"Financials","TFC":"Financials","SCHW":"Financials",
+    "CB":"Financials","AON":"Financials","MMC":"Financials",
+    "PGR":"Financials","TRV":"Financials","ALL":"Financials",
+    "MET":"Financials","PRU":"Financials","MCO":"Financials",
+    "MSCI":"Financials","FDS":"Financials","TROW":"Financials",
+    "RJF":"Financials","WTW":"Financials","AFL":"Financials",
+    "AIG":"Financials","DFS":"Financials","SYF":"Financials",
+    # Europe
+    "HSBA.L":"Financials","BNP.PA":"Financials","SAN.MC":"Financials",
+    "ING.AS":"Financials","DBK.DE":"Financials","ISP.MI":"Financials",
+    # India
+    "HDFCBANK.NS":"Financials","ICICIBANK.NS":"Financials",
+    "KOTAKBANK.NS":"Financials","AXISBANK.NS":"Financials",
+    "SBIN.NS":"Financials","BAJFINANCE.NS":"Financials",
+    "BAJAJFINSV.NS":"Financials","SHRIRAMFIN.NS":"Financials",
+    "HDFCLIFE.NS":"Financials","SBILIFE.NS":"Financials",
+    "INDUSINDBK.NS":"Financials","ICICIGI.NS":"Financials",
+
+    # ── Consumer Discretionary ───────────────────────────────────────────────────
+    # US — e-commerce + restaurants + retail + autos + homebuilders + travel
     "AMZN":"Consumer Discretionary","TSLA":"Consumer Discretionary",
     "NKE":"Consumer Discretionary","LULU":"Consumer Discretionary",
     "SBUX":"Consumer Discretionary","MCD":"Consumer Discretionary",
     "BKNG":"Consumer Discretionary","TJX":"Consumer Discretionary",
     "ROST":"Consumer Discretionary","DRI":"Consumer Discretionary",
-    # Consumer Staples
+    "CMG":"Consumer Discretionary","ORLY":"Consumer Discretionary",
+    "AZO":"Consumer Discretionary","HD":"Consumer Discretionary",
+    "LOW":"Consumer Discretionary","DHI":"Consumer Discretionary",
+    "LEN":"Consumer Discretionary","PHM":"Consumer Discretionary",
+    "NVR":"Consumer Discretionary","MAR":"Consumer Discretionary",
+    "HLT":"Consumer Discretionary","ABNB":"Consumer Discretionary",
+    "EXPE":"Consumer Discretionary","DECK":"Consumer Discretionary",
+    "TPR":"Consumer Discretionary","RL":"Consumer Discretionary",
+    "F":"Consumer Discretionary","GM":"Consumer Discretionary",
+    "APTV":"Consumer Discretionary","BWA":"Consumer Discretionary",
+    # Europe
+    "MC.PA":"Consumer Discretionary","BMW.DE":"Consumer Discretionary",
+    "MBG.DE":"Consumer Discretionary",
+    # India
+    "MARUTI.NS":"Consumer Discretionary","TATAMOTORS.NS":"Consumer Discretionary",
+    "TITAN.NS":"Consumer Discretionary","TRENT.NS":"Consumer Discretionary",
+    "EICHERMOT.NS":"Consumer Discretionary","HEROMOTOCO.NS":"Consumer Discretionary",
+    "BAJAJ-AUTO.NS":"Consumer Discretionary",
+
+    # ── Consumer Staples ─────────────────────────────────────────────────────────
+    # US — personal care + food + beverage + tobacco + household
     "PG":"Consumer Staples","KO":"Consumer Staples","PEP":"Consumer Staples",
     "COST":"Consumer Staples","WMT":"Consumer Staples","MDLZ":"Consumer Staples",
     "CL":"Consumer Staples","EL":"Consumer Staples","CHD":"Consumer Staples",
-    # Healthcare
-    "LLY":"Healthcare","ABBV":"Healthcare","JNJ":"Healthcare","MRK":"Healthcare",
-    "UNH":"Healthcare","ISRG":"Healthcare","DXCM":"Healthcare","ABT":"Healthcare",
-    "TMO":"Healthcare","DHR":"Healthcare","REGN":"Healthcare","VRTX":"Healthcare",
-    # Financials
-    "JPM":"Financials","V":"Financials","MA":"Financials","BAC":"Financials",
-    "GS":"Financials","MS":"Financials","BLK":"Financials","SPGI":"Financials",
-    "ICE":"Financials","CME":"Financials","AXP":"Financials","COF":"Financials",
-    # Industrials
-    "CAT":"Industrials","DE":"Industrials","HON":"Industrials","RTX":"Industrials",
-    "LMT":"Industrials","GE":"Industrials","UPS":"Industrials","FDX":"Industrials",
-    "ETN":"Industrials","PH":"Industrials","ROK":"Industrials","FAST":"Industrials",
-    # Energy
-    "XOM":"Energy","CVX":"Energy","COP":"Energy","EOG":"Energy","SLB":"Energy",
-    "PSX":"Energy","MPC":"Energy","VLO":"Energy","OKE":"Energy","WMB":"Energy",
-    # Materials
+    "GIS":"Consumer Staples","HSY":"Consumer Staples","KMB":"Consumer Staples",
+    "CLX":"Consumer Staples","PM":"Consumer Staples","MO":"Consumer Staples",
+    "SYY":"Consumer Staples","KR":"Consumer Staples","TSN":"Consumer Staples",
+    "HRL":"Consumer Staples","K":"Consumer Staples","SJM":"Consumer Staples",
+    "CAG":"Consumer Staples","CPB":"Consumer Staples","MKC":"Consumer Staples",
+    # Europe
+    "ULVR.L":"Consumer Staples","DANO.PA":"Consumer Staples",
+    # India
+    "HINDUNILVR.NS":"Consumer Staples","ITC.NS":"Consumer Staples",
+    "NESTLEIND.NS":"Consumer Staples","BRITANNIA.NS":"Consumer Staples",
+    "DABUR.NS":"Consumer Staples","MARICO.NS":"Consumer Staples",
+    "TATACONSUM.NS":"Consumer Staples","COLPAL.NS":"Consumer Staples",
+    "GODREJCP.NS":"Consumer Staples",
+
+    # ── Industrials ─────────────────────────────────────────────────────────────
+    # US — aerospace + defence + machinery + rail + waste + logistics
+    "CAT":"Industrials","DE":"Industrials","HON":"Industrials",
+    "RTX":"Industrials","LMT":"Industrials","GE":"Industrials",
+    "UPS":"Industrials","FDX":"Industrials","ETN":"Industrials",
+    "PH":"Industrials","ROK":"Industrials","FAST":"Industrials",
+    "MMM":"Industrials","EMR":"Industrials","ITW":"Industrials",
+    "DOV":"Industrials","GWW":"Industrials","CTAS":"Industrials",
+    "WM":"Industrials","RSG":"Industrials","NSC":"Industrials",
+    "UNP":"Industrials","CSX":"Industrials","DAL":"Industrials",
+    "UAL":"Industrials","LUV":"Industrials","GNRC":"Industrials",
+    "CARR":"Industrials","TT":"Industrials","ROP":"Industrials",
+    "OTIS":"Industrials","JCI":"Industrials","IR":"Industrials",
+    "HUBB":"Industrials","NOC":"Industrials","GD":"Industrials",
+    "BA":"Industrials","HII":"Industrials","LDOS":"Industrials",
+    "SAIC":"Industrials","CACI":"Industrials","EXPD":"Industrials",
+    # Europe
+    "SIE.DE":"Industrials","AIR.PA":"Industrials","RR.L":"Industrials",
+    # India
+    "LT.NS":"Industrials","POWERGRID.NS":"Industrials","NTPC.NS":"Industrials",
+    "ADANIPORTS.NS":"Industrials","BEL.NS":"Industrials","HAL.NS":"Industrials",
+    "COALINDIA.NS":"Industrials","ADANIENT.NS":"Industrials",
+
+    # ── Energy ──────────────────────────────────────────────────────────────────
+    # US — integrated + exploration + refining + midstream + services
+    "XOM":"Energy","CVX":"Energy","COP":"Energy","EOG":"Energy",
+    "SLB":"Energy","PSX":"Energy","MPC":"Energy","VLO":"Energy",
+    "OKE":"Energy","WMB":"Energy","KMI":"Energy","DVN":"Energy",
+    "HAL":"Energy","BKR":"Energy","HES":"Energy","APA":"Energy",
+    "MRO":"Energy","FANG":"Energy","OXY":"Energy",
+    # Europe
+    "SHEL.L":"Energy","BP.L":"Energy","TTE.PA":"Energy","ENI.MI":"Energy",
+    # India
+    "RELIANCE.NS":"Energy","ONGC.NS":"Energy","BPCL.NS":"Energy",
+
+    # ── Materials ────────────────────────────────────────────────────────────────
+    # US — chemicals + metals + mining + construction materials
     "LIN":"Materials","APD":"Materials","SHW":"Materials","ECL":"Materials",
     "NEM":"Materials","FCX":"Materials","NUE":"Materials","ALB":"Materials",
-    # Real Estate
-    "AMT":"Real Estate","PLD":"Real Estate","EQIX":"Real Estate","CCI":"Real Estate",
-    "SPG":"Real Estate","O":"Real Estate","PSA":"Real Estate","EXR":"Real Estate",
-    # Utilities
+    "DOW":"Materials","PPG":"Materials","CF":"Materials","MOS":"Materials",
+    "VMC":"Materials","MLM":"Materials","STLD":"Materials","RS":"Materials",
+    "IP":"Materials","PKG":"Materials","CE":"Materials","DD":"Materials",
+    # Europe
+    "RIO.L":"Materials","GLEN.L":"Materials","AAL.L":"Materials",
+    "BASF.DE":"Materials",
+    # India
+    "TATASTEEL.NS":"Materials","JSWSTEEL.NS":"Materials",
+    "HINDALCO.NS":"Materials","ULTRACEMCO.NS":"Materials",
+    "GRASIM.NS":"Materials","ASIANPAINT.NS":"Materials",
+
+    # ── Real Estate ─────────────────────────────────────────────────────────────
+    # US — cell towers + industrial + data centres + retail + residential
+    "AMT":"Real Estate","PLD":"Real Estate","EQIX":"Real Estate",
+    "CCI":"Real Estate","SPG":"Real Estate","O":"Real Estate",
+    "PSA":"Real Estate","EXR":"Real Estate","WELL":"Real Estate",
+    "ARE":"Real Estate","BXP":"Real Estate","VICI":"Real Estate",
+    "IRM":"Real Estate","EGP":"Real Estate","KIM":"Real Estate",
+
+    # ── Utilities ────────────────────────────────────────────────────────────────
+    # US — electric + gas + water
     "NEE":"Utilities","DUK":"Utilities","SO":"Utilities","D":"Utilities",
     "AEP":"Utilities","EXC":"Utilities","SRE":"Utilities","XEL":"Utilities",
+    "WEC":"Utilities","AWK":"Utilities","PEG":"Utilities","ETR":"Utilities",
+    "ES":"Utilities","CMS":"Utilities","LNT":"Utilities","EVRG":"Utilities",
+    # Europe
+    "ENEL.MI":"Utilities","RWE.DE":"Utilities",
+
+    # ── Communication Services ────────────────────────────────────────────────────
+    # US — internet platforms + streaming + telecom + media
+    "GOOGL":"Communication Services","META":"Communication Services",
+    "NFLX":"Communication Services","SPOT":"Communication Services",
+    "DIS":"Communication Services","TMUS":"Communication Services",
+    "TTD":"Communication Services","PINS":"Communication Services",
+    "ROKU":"Communication Services","SNAP":"Communication Services",
+    "T":"Communication Services","VZ":"Communication Services",
+    "CHTR":"Communication Services","WBD":"Communication Services",
+    "FOXA":"Communication Services","FOX":"Communication Services",
+    "OMC":"Communication Services","IPG":"Communication Services",
+    "LYV":"Communication Services","EA":"Communication Services",
+    "ATVI":"Communication Services","MTCH":"Communication Services",
+    # Europe
+    "VOD.L":"Communication Services","DTE.DE":"Communication Services",
+    "BT-A.L":"Communication Services","TEF.MC":"Communication Services",
+    # India
+    "BHARTIARTL.NS":"Communication Services",
 }
 
 _CURATED_UNIVERSE: list[str] = list(_SECTOR_MAP.keys())
+
+# yfinance sector name → GICS standard name mapping.
+# Used as fallback when a ticker is not in _SECTOR_MAP (e.g. user-added stocks).
+_YF_TO_GICS: dict[str, str] = {
+    "Technology":             "Information Technology",
+    "Financial Services":     "Financials",
+    "Financial":              "Financials",
+    "Healthcare":             "Health Care",
+    "Communication Services": "Communication Services",
+    "Consumer Cyclical":      "Consumer Discretionary",
+    "Consumer Defensive":     "Consumer Staples",
+    "Basic Materials":        "Materials",
+    "Industrials":            "Industrials",
+    "Energy":                 "Energy",
+    "Real Estate":            "Real Estate",
+    "Utilities":              "Utilities",
+    # GICS names passed through unchanged
+    "Information Technology": "Information Technology",
+    "Health Care":            "Health Care",
+    "Financials":             "Financials",
+    "Consumer Discretionary": "Consumer Discretionary",
+    "Consumer Staples":       "Consumer Staples",
+    "Materials":              "Materials",
+}
+
+
+def _get_sector(ticker: str, fundamentals: dict) -> str:
+    """Resolve GICS sector for a ticker.
+    Priority: hardcoded _SECTOR_MAP → yfinance info.sector → 'Diversified'.
+    NEVER returns 'Other'.
+    """
+    s = _SECTOR_MAP.get(ticker)
+    if s:
+        return s
+    yf_sector = fundamentals.get("sector") or ""
+    return _YF_TO_GICS.get(yf_sector, yf_sector or "Diversified")
 
 # Mapping from disqualify_reason keywords → plain English unblock condition
 _UNBLOCK_CONDITIONS: dict[str, str] = {
@@ -423,7 +630,7 @@ def _score_one_ticker(ticker: str) -> dict | None:
             "verdict": verdict,
             "patterns": patterns,
             "is_dip": is_dip,
-            "sector": _SECTOR_MAP.get(ticker, "Other"),
+            "sector": _get_sector(ticker, fundamentals),
             # Surface verification metadata so frontend can show confidence badge
             "verification": trust.get("verification"),
         }
@@ -452,11 +659,22 @@ def picks():
         | set(_CURATED_UNIVERSE)
     )
 
+    # Parallel scan — 5 workers keeps yfinance free-tier 429 rate-limits at bay.
+    # More workers = faster but causes "Too Many Requests" and empty result sets.
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+    print(f"[PICKS] Scanning {len(all_tickers)} tickers …", flush=True)
     result = []
-    for ticker in all_tickers:
-        entry = _score_one_ticker(ticker)
-        if entry:
-            result.append(entry)
+    workers = min(5, len(all_tickers))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(_score_one_ticker, t): t for t in all_tickers}
+        for future in _as_completed(futures):
+            try:
+                entry = future.result()
+                if entry:
+                    result.append(entry)
+            except Exception:
+                pass
+    print(f"[PICKS] {len(result)} passed all gates out of {len(all_tickers)} scanned", flush=True)
 
     # Sort: high trust first, then alphabetically by ticker for deterministic order.
     # Deterministic sort prevents results from changing on every refresh when scores tie.
@@ -470,6 +688,7 @@ def picks():
     dips  = [r for r in dips  if r["ticker"] not in portfolio_tickers]
     # Cap main picks at Top 15 to keep the list curated, not overwhelming
     final = highs[:15] + dips[:3]
+    print(f"[PICKS] Final: {len(final)} picks ({len(highs[:15])} main + {len(dips[:3])} dips)", flush=True)
     cs("picks:result", final)
     return final
 

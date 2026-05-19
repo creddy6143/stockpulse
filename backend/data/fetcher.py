@@ -184,6 +184,7 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
             "w52_high":        info.get("fiftyTwoWeekHigh"),
             "w52_low":         info.get("fiftyTwoWeekLow"),
             "earnings_growth": round(float(info.get("earningsGrowth") or 0), 4),
+            "sector":          info.get("sector") or None,
         }
         cache_set(key, result)
         return result
