@@ -1,7 +1,13 @@
-"""All AI API calls — Groq (primary) → Gemini (fallback) → Anthropic (last resort)."""
+"""All AI API calls — Groq (primary) → Gemini (fallback) → Anthropic (last resort).
+
+Every AI-generated text passes through verify_ai_text before being returned
+or cached. This ensures AI output is specific to the stock and not generic
+boilerplate — part of the Real Money Test verification layer.
+"""
 import os
 import json
 from .prompts import SYSTEM_PROMPT, STRATEGY_SYSTEM_PROMPT, build_strategy_user_prompt
+from .verification import verify_ai_text
 from data.cache import cache_get, cache_set, TTL_STRATEGY
 
 _groq_client = None
@@ -188,6 +194,13 @@ Give a plain English verdict following the system rules."""
     text = _call_ai(SYSTEM_PROMPT, user_prompt, max_tokens=500)
     parsed = _parse_json(text)
     if parsed:
+        # Verify the verdict text passes the Real Money Test before caching/returning
+        verdict_text = parsed.get("verdict", "")
+        approved, verified_text = verify_ai_text(ticker, verdict_text, "verdict")
+        if not approved:
+            parsed["verdict"] = verified_text   # replace with fallback message
+        elif verified_text != verdict_text:
+            parsed["verdict"] = verified_text   # use cleaned version
         if clean not in _BLOCKED_VERDICTS:
             cache_set(_verdict_cache_key, parsed)
         return parsed
@@ -282,7 +295,11 @@ def generate_strategy_playbook(
     )
 
     text = _call_ai(STRATEGY_SYSTEM_PROMPT, prompt, max_tokens=350)
-    result = text if text else _default_playbook(situation_type, ticker, stock_data)
+    raw = text if text else _default_playbook(situation_type, ticker, stock_data)
+
+    # Verify the playbook is specific to this stock, not generic boilerplate
+    approved, result = verify_ai_text(ticker, raw, "strategy_playbook")
+    # Even if approved=False we use the fallback message (result) — never crash
 
     cache_set(cache_key, result)
     return result

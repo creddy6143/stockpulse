@@ -269,10 +269,19 @@ const mapPosition = (pos, earningsByTicker) => {
     else if (pnlPct > 30) verdict = `Up ${pnlPct.toFixed(0)}% from entry. Consider a trailing stop to protect gains.`;
     else verdict = `Trust ${scoreStr} — ${pos.grade}. Hold and monitor.`;
   }
+  // Verification layer — use display_score (suppressed → null → shows "?")
+  const verif = pos.verification || {};
+  const displayTrust = pos.display_score !== undefined ? pos.display_score : pos.trust_score;
+  const displayGrade = pos.display_grade || pos.grade;
   return {
     id: pos.id, ticker: pos.ticker, flag, price: pos.current_price, change: pos.change_pct,
     name: fmp?.name || pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
-    rec, rcls, trust: pos.trust_score, grade: pos.grade,
+    rec, rcls,
+    trust: displayTrust,        // null when suppressed → shows "?" in CompactRow
+    grade: displayGrade,
+    verifConfidence: verif.confidence || "HIGH",
+    verifCaveat: verif.caveat || null,
+    verifSuppressed: verif.suppressed || false,
     dataSource: pos.data_source || null, fmpProfile: fmp,
     pnl: pos.pnl || 0, pnl_pct: pos.pnl_pct || 0,
     value_sek: pos.value_sek || 0,
@@ -285,25 +294,31 @@ const mapPosition = (pos, earningsByTicker) => {
   };
 };
 
-const mapWatchlistItem = item => ({
-  ticker: item.ticker, flag: getFlag(item.market, item.ticker),
-  price: item.current_price, change: item.change_pct,
-  name: item.fmp_profile?.name || item.name || item.ticker, trust: item.trust_score,
-  grade: item.grade || "",
-  dataSource: item.data_source || null,
-  fmpProfile: item.fmp_profile || null,
-  isSpeculative: item.is_speculative || false,
-  signal: item.signal || "Still watching",
-  reason: item.signal || "Still watching",
-  // Real analyst upside from API (was hardcoded "—")
-  potential: item.analyst_upside_str || "—",
-  entry: item.analyst_entry || "—",
-  // Analyst consensus for tooltip
-  analystBuy: item.analyst_buy || 0,
-  analystHold: item.analyst_hold || 0,
-  analystSell: item.analyst_sell || 0,
-  analystTarget: item.analyst_target || null,
-});
+const mapWatchlistItem = item => {
+  const verif = item.verification || {};
+  const displayTrust = item.display_score !== undefined ? item.display_score : item.trust_score;
+  return {
+    ticker: item.ticker, flag: getFlag(item.market, item.ticker),
+    price: item.current_price, change: item.change_pct,
+    name: item.fmp_profile?.name || item.name || item.ticker,
+    trust: displayTrust,
+    grade: item.display_grade || item.grade || "",
+    verifConfidence: verif.confidence || "HIGH",
+    verifCaveat: verif.caveat || null,
+    verifSuppressed: verif.suppressed || false,
+    dataSource: item.data_source || null,
+    fmpProfile: item.fmp_profile || null,
+    isSpeculative: item.is_speculative || false,
+    signal: item.signal || "Still watching",
+    reason: item.signal || "Still watching",
+    potential: item.analyst_upside_str || "—",
+    entry: item.analyst_entry || "—",
+    analystBuy: item.analyst_buy || 0,
+    analystHold: item.analyst_hold || 0,
+    analystSell: item.analyst_sell || 0,
+    analystTarget: item.analyst_target || null,
+  };
+};
 
 const mapAlert = alert => {
   const t = alert.alert_type || "signal";
@@ -1214,10 +1229,19 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit}) {
           )}
         </div>
         <div style={{textAlign:"center"}}>
-          <span onClick={e=>{e.stopPropagation();setShowScore(true);}} title="Tap for score breakdown"
-            style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:c,cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>
-            {s.trust ?? "?"}
+          <span onClick={e=>{e.stopPropagation();setShowScore(true);}} title={
+            s.verifConfidence==="SUPPRESSED" ? "Score suppressed — data insufficient for reliable display" :
+            s.verifConfidence==="MEDIUM" ? `Medium confidence${s.verifCaveat?` — ${s.verifCaveat}`:""}` :
+            "Tap for score breakdown"
+          }
+            style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:
+              s.verifConfidence==="SUPPRESSED"?"var(--t3)":
+              s.verifConfidence==="MEDIUM"?"var(--amber)":c,
+              cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>
+            {s.verifConfidence==="SUPPRESSED" ? "—" : (s.trust ?? "?")}
           </span>
+          {s.verifConfidence==="MEDIUM"&&<div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--amber)",marginTop:1}}>~verify</div>}
+          {s.verifConfidence==="SUPPRESSED"&&<div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",marginTop:1}}>review</div>}
         </div>
         <div style={{textAlign:"right"}}>
           <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:isDataUnavailable?"var(--t3)":recColor,background:isDataUnavailable?"transparent":recBg,padding:"3px 5px",borderRadius:4}}>{recLabel}</span>
@@ -1225,6 +1249,16 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit}) {
       </div>
       {open&&(
         <div style={{padding:"9px 12px 11px",background:"rgba(91,114,248,.02)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
+          {s.verifConfidence==="SUPPRESSED"&&(
+            <div style={{fontSize:10,color:"var(--amber)",background:"var(--amber2)",borderRadius:7,padding:"6px 10px",marginBottom:8,fontFamily:"var(--mono)",lineHeight:1.5}}>
+              ⚠ Score suppressed — data insufficient for reliable display. P&L tracking continues.
+            </div>
+          )}
+          {s.verifConfidence==="MEDIUM"&&s.verifCaveat&&(
+            <div style={{fontSize:9,color:"var(--amber)",marginBottom:6,fontFamily:"var(--mono)"}}>
+              ~ {s.verifCaveat}
+            </div>
+          )}
           <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:8,borderLeft:"2.5px solid",borderLeftColor:dot,paddingLeft:9}}>{s.verdict}</div>
           {isDataUnavailable && s.fmpProfile && <FmpProfileCard p={s.fmpProfile} />}
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap",marginTop: isDataUnavailable && s.fmpProfile ? 8 : 0}}>
@@ -1284,8 +1318,19 @@ function CompactWatchRow({s, dot, onRemove}) {
           <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",marginTop:2}}>{s.entry}</div>
         </div>
         <div style={{textAlign:"right"}}>
-          <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:thirdColor}}>{thirdVal}</span>
-          <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:1}}>{thirdLabel}</div>
+          <span title={
+            s.verifConfidence==="SUPPRESSED"?"Score suppressed — data insufficient":
+            s.verifConfidence==="MEDIUM"?`Medium confidence${s.verifCaveat?` — ${s.verifCaveat}`:""}`:""
+          } style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:
+            s.verifConfidence==="SUPPRESSED"?"var(--t3)":
+            s.verifConfidence==="MEDIUM"&&!hasRealUpside?"var(--amber)":thirdColor}}>
+            {s.verifConfidence==="SUPPRESSED"&&!hasRealUpside ? "—" : thirdVal}
+          </span>
+          <div style={{fontFamily:"var(--mono)",fontSize:7,color:
+            s.verifConfidence==="MEDIUM"&&!hasRealUpside?"var(--amber)":"var(--t3)",marginTop:1}}>
+            {s.verifConfidence==="SUPPRESSED"&&!hasRealUpside?"review":
+             s.verifConfidence==="MEDIUM"&&!hasRealUpside?"~verify":thirdLabel}
+          </div>
         </div>
       </div>
       {open&&(

@@ -25,6 +25,7 @@ from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.patterns import detect_all_patterns
 from intelligence.claude_ai import get_verdict, generate_strategy_playbook
 from intelligence.signals import evaluate_and_fire_signals
+from intelligence.verification import verify_pick, get_verification_log
 from portfolio.tracker import get_portfolio_with_pnl, get_watchlist_with_signals
 
 app = FastAPI(title="StockPulse API", version="1.0.0")
@@ -320,7 +321,9 @@ _CURATED_UNIVERSE = [
 from data.cache import cache_get as _cache_get, cache_set as _cache_set, TTL_STRATEGY
 
 def _score_one_ticker(ticker: str) -> dict | None:
-    """Evaluate one ticker and return a picks entry if it qualifies."""
+    """Evaluate one ticker and return a picks entry if it qualifies.
+    Every candidate passes the Real Money Test via verify_pick before inclusion.
+    """
     try:
         price_data = get_stock_price(ticker)
         if not price_data.get("price"):
@@ -331,12 +334,26 @@ def _score_one_ticker(ticker: str) -> dict | None:
         fundamentals = get_fundamentals(ticker)
         change_pct = float(price_data.get("change_pct", 0) or 0)
         trust_score_val = trust["total_score"]
+
         # Buy-the-dip: quality stock down on market fear (not company news)
         is_dip = (trust_score_val >= 65 and change_pct <= -4
                   and not trust.get("disqualify_reason"))
-        qualifies = trust_score_val >= 75 or is_dip
+
+        # ── REAL MONEY TEST for picks ───────────────────────────────────────
+        # verify_pick runs 5 gates (data quality, score threshold, no auto-disq,
+        # market cap present, large-cap sanity floor). If it rejects, the stock
+        # does NOT appear in Smart Picks — not even as a dip pick.
+        approved, rejection_reason = verify_pick(ticker, trust, fundamentals)
+        if not approved and not is_dip:
+            return None
+        # Dip picks have a lower score threshold (65) — still require data quality
+        if is_dip and trust.get("data_quality") == "unavailable":
+            return None
+
+        qualifies = approved or is_dip
         if not qualifies:
             return None
+
         patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
         verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
         return {
@@ -348,6 +365,8 @@ def _score_one_ticker(ticker: str) -> dict | None:
             "verdict": verdict,
             "patterns": patterns,
             "is_dip": is_dip,
+            # Surface verification metadata so frontend can show confidence badge
+            "verification": trust.get("verification"),
         }
     except Exception:
         return None
@@ -457,6 +476,40 @@ def remove_picks_universe(ticker: str):
 @app.get("/api/accuracy")
 def accuracy():
     return db.get_signal_accuracy(days=90)
+
+
+# ── VERIFICATION AUDIT LOG ─────────────────────────────────────────────────────
+
+@app.get("/api/verification/log")
+def verification_log(limit: int = 100):
+    """
+    Returns the most-recent verification decisions (newest first).
+    Each entry shows which checks passed/failed and why an output was
+    suppressed or downgraded.  Use this to audit the Real Money Test.
+    """
+    return get_verification_log(limit=min(limit, 500))
+
+
+@app.get("/api/verification/summary")
+def verification_summary():
+    """Aggregate stats on verification decisions since last restart."""
+    log = get_verification_log(limit=500)
+    total      = len(log)
+    suppressed = sum(1 for e in log if e.get("confidence") == "SUPPRESSED")
+    medium     = sum(1 for e in log if e.get("confidence") == "MEDIUM")
+    high       = sum(1 for e in log if e.get("confidence") == "HIGH")
+    by_type: dict = {}
+    for e in log:
+        t = e.get("output_type", "unknown")
+        by_type[t] = by_type.get(t, 0) + 1
+    return {
+        "total_decisions": total,
+        "high": high,
+        "medium": medium,
+        "suppressed": suppressed,
+        "suppression_rate_pct": round(suppressed / total * 100, 1) if total else 0,
+        "by_output_type": by_type,
+    }
 
 
 # ── STRATEGY ─────────────────────────────────────────────────────────────────

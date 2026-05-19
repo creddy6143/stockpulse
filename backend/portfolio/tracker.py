@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from database.db import get_portfolio, get_watchlist
 from data.fetcher import get_stock_price, get_exchange_rates, get_analyst_data, get_fundamentals, get_fmp_profile
 from intelligence.trust_score import get_trust_score_with_fallback
+from intelligence.verification import verify_watchlist_signal
 
 
 def _detect_currency(ticker: str) -> str:
@@ -90,11 +91,17 @@ def _build_position(pos: dict, rates: dict) -> dict:
         "market": pos.get("market", "US"),
         "currency": currency,
         "trust_score": trust["total_score"],
+        # display_score is None when verification suppressed the result.
+        # Use this for the UI — trust_score is kept for internal logic.
+        "display_score": trust.get("display_score", trust["total_score"]),
+        "display_grade": trust.get("display_grade", trust["grade"]),
         "grade": trust["grade"],
         "auto_disqualified": trust["auto_disqualified"],
         "disqualify_reason": trust["disqualify_reason"],
         "data_source": trust.get("data_source"),
         "data_quality": trust.get("data_quality", "full"),
+        "verified_rec": trust.get("verified_rec"),
+        "verification": trust.get("verification"),
         "group": group,
         # FMP profile enrichment — populated for Data Unavailable stocks
         "fmp_profile": _extract_fmp_profile(get_fundamentals(ticker))
@@ -217,6 +224,13 @@ def _build_watchlist_item(item: dict) -> dict:
         else:
             signal = "Still watching"
 
+    # ── REAL MONEY TEST — watchlist signal verification ────────────────────
+    # Catches cases where signal and wl_group are internally inconsistent
+    # (e.g. "ready" group with score < 70, or "avoid" with high score).
+    signal, wl_group, _correction = verify_watchlist_signal(
+        ticker, trust, signal, wl_group
+    )
+
     return {
         "id": item["id"],
         "ticker": ticker,
@@ -224,10 +238,14 @@ def _build_watchlist_item(item: dict) -> dict:
         "current_price": price,
         "change_pct": price_data.get("change_pct", 0),
         "trust_score": trust["total_score"],
+        # display_score is None when verification suppressed the score
+        "display_score": trust.get("display_score", trust["total_score"]),
+        "display_grade": trust.get("display_grade", trust["grade"]),
         "grade": trust["grade"],
         "is_speculative": trust.get("is_speculative", False),
         "data_quality": trust.get("data_quality", "full"),
         "data_source": trust.get("data_source"),
+        "verification": trust.get("verification"),
         "wl_group": wl_group,
         "signal": signal,
         "added_at": item.get("added_at"),
