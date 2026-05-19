@@ -102,3 +102,10 @@ export const clearDataCache = () => request('/api/cache/clear', { method: 'POST'
 export const getEarnings = () => request('/api/earnings');
 export const searchTicker = (q) => request(`/api/search?q=${encodeURIComponent(q)}`);
 export const clearAllPortfolio = () => request('/api/portfolio/all', { method: 'DELETE' });
+
+// ── PRICE ALERTS ─────────────────────────────────────────────────────────────
+
+export const getPriceAlerts = () => request('/api/price-alerts');
+export const createPriceAlert = (data) => request('/api/price-alerts', {method:'POST', body:JSON.stringify(data)});
+export const deletePriceAlert = (id) => request(`/api/price-alerts/${id}`, {method:'DELETE'});
+export const togglePriceAlert = (id, isActive) => request(`/api/price-alerts/${id}`, {method:'PUT', body:JSON.stringify({is_active:isActive})});

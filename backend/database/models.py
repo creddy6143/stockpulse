@@ -95,6 +95,19 @@ CREATE TABLE IF NOT EXISTS picks_universe (
   ticker TEXT UNIQUE NOT NULL,
   added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS price_alerts (
+  id INTEGER PRIMARY KEY,
+  ticker TEXT NOT NULL,
+  alert_name TEXT,
+  alert_type TEXT NOT NULL,
+  threshold REAL,
+  entry_low REAL,
+  entry_high REAL,
+  is_active BOOLEAN DEFAULT TRUE,
+  triggered_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

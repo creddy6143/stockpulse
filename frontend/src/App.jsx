@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, clearDataCache } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, clearDataCache, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert } from "./api/client";
 const BASE = process.env.REACT_APP_API_URL || '';
 
 const CSS = `
@@ -195,6 +195,12 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm);overscroll-behav
 .score-pillar-bar{flex:2;height:6px;background:rgba(15,23,42,.06);border-radius:3px;overflow:hidden}
 .score-pillar-fill{height:100%;border-radius:3px;transition:width .4s ease}
 .score-pillar-val{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);width:36px;text-align:right}
+.vix-scroll{display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.vix-scroll::-webkit-scrollbar{display:none}
+.vix-card{flex:0 0 calc(33.3% - 4px);background:var(--white);border-radius:var(--rm);padding:10px 10px;box-shadow:var(--shadowsm);border:1px solid rgba(15,23,42,.06);min-width:90px}
+.alert-panel-overlay{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:300;display:flex;flex-direction:column;justify-content:flex-end;backdrop-filter:blur(4px);max-width:400px;margin:0 auto}
+.alert-panel-box{background:var(--bg);border-radius:22px 22px 0 0;padding:18px 16px 36px;max-height:80vh;overflow-y:auto;scrollbar-width:none;animation:slideUp .3s cubic-bezier(.32,.72,0,1)}
+.alert-panel-box::-webkit-scrollbar{display:none}
 `;
 
 // ── UTILITIES ────────────────────────────────────────
@@ -322,9 +328,9 @@ const mapWatchlistItem = item => {
 
 const mapAlert = alert => {
   const t = alert.alert_type || "signal";
-  const icons = {urgent:"🚨", signal:"🚀", earnings:"📅", watchlist_entry:"👁"};
-  const confs = {urgent:"URGENT", signal:"HIGH", earnings:"INFO", watchlist_entry:"MED"};
-  const ccs  = {urgent:"ch", signal:"ch", earnings:"cm", watchlist_entry:"cm"};
+  const icons = {urgent:"🚨", signal:"🚀", earnings:"📅", watchlist_entry:"👁", price_alert:"🔔"};
+  const confs = {urgent:"URGENT", signal:"HIGH", earnings:"INFO", watchlist_entry:"MED", price_alert:"ALERT"};
+  const ccs  = {urgent:"ch", signal:"ch", earnings:"cm", watchlist_entry:"cm", price_alert:"cm"};
   const created = alert.created_at ? new Date(alert.created_at) : new Date();
   const diffMin = Math.round((Date.now() - created.getTime()) / 60000);
   const time = diffMin < 1 ? "just now" : diffMin < 60 ? `${diffMin}m ago` : diffMin < 1440 ? `${Math.round(diffMin/60)}h ago` : "Earlier";
@@ -380,10 +386,11 @@ const mapPick = pick => {
     risk: total >= 80 ? "LOW-MED" : "MEDIUM", horizon: verdict.time_horizon || "12 months",
     is_dip: pick.is_dip || false,
     change_pct: pick.change_pct || 0,
+    sector: pick.sector || "Other",
   };
 };
 
-const mapDisq = d => ({ticker: d.ticker, score: d.trust_score||0, reason: d.reason||"Auto-disqualified by safety check."});
+const mapDisq = d => ({ticker: d.ticker, name: d.name||d.ticker, score: d.trust_score||0, reason: d.reason||"Auto-disqualified by safety check.", unblock_condition: d.unblock_condition||null});
 const mapStrategy = item => ({...item, col: item.color || "var(--indigo)"});
 
 const buildDetailData = resp => {
@@ -663,9 +670,17 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
             </div>
           </div>}
 
-          {/* AI */}
+          {/* AI Analysis */}
           <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,marginBottom:10,border:"1px solid rgba(91,114,248,.06)"}}>
-            <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:12}}>🤖 AI Analysis</div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+              <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>🤖 AI Analysis</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                {["Finnhub","yfinance"].map(src=>(
+                  <span key={src} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",background:"var(--card2)",padding:"2px 5px",borderRadius:3}}>{src}</span>
+                ))}
+                {(ticker.endsWith(".NS")||ticker.endsWith(".BO"))&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",background:"var(--card2)",padding:"2px 5px",borderRadius:3}}>NSE</span>}
+              </div>
+            </div>
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
               <Ring score={trust} col={c} size={60}/>
               <div>
@@ -673,20 +688,31 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
                 <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>3 pillars · Updated today</div>
               </div>
             </div>
-            <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.65,padding:"10px 12px",background:"var(--card2)",borderRadius:8,borderLeft:"3px solid var(--indigo)"}}>
+            <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.65,padding:"10px 12px",background:"var(--card2)",borderRadius:8,borderLeft:`3px solid ${c}`}}>
               {vLoading
                 ? <span style={{color:"var(--t3)"}}>Analysing with AI… <span style={{animation:"pr 1s infinite",display:"inline-block"}}>●</span></span>
                 : (verdict?.verdict || (d && d.verdict) || "Analysis unavailable — check back shortly.")}
             </div>
             {!vLoading && verdict?.recommendation && (
-              <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:4,
                   background:verdict.recommendation.includes("buy")?"var(--emerald2)":verdict.recommendation.includes("sell")?"var(--rose2)":"var(--amber2)",
                   color:verdict.recommendation.includes("buy")?"var(--emerald)":verdict.recommendation.includes("sell")?"var(--rose)":"var(--amber)"}}>
                   {verdict.recommendation.replace("_"," ").toUpperCase()}
                 </span>
                 {verdict.confidence_pct && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",padding:"3px 6px"}}>{verdict.confidence_pct}% confidence</span>}
-                {verdict.key_risk && <span style={{fontSize:9,color:"var(--t3)",padding:"3px 0"}}>Risk: {verdict.key_risk}</span>}
+              </div>
+            )}
+            {!vLoading && verdict?.key_risk && (
+              <div style={{marginTop:10,paddingTop:9,borderTop:"1px solid var(--t4)"}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Key Risk</div>
+                <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.5}}>{verdict.key_risk}</div>
+              </div>
+            )}
+            {!vLoading && verdict?.stop_loss_explanation && (
+              <div style={{marginTop:8}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Stop Loss</div>
+                <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.5}}>{verdict.stop_loss_explanation}</div>
               </div>
             )}
           </div>
@@ -1025,15 +1051,24 @@ function PortfolioArc({positions, summary}) {
 function HomeScreen({positions, summary, signals, earnings, market, onEarnings}) {
   const [sigOpen,setSigOpen] = useState(null);
   const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
+  const upcomingEarnings = (earnings||[]).filter(e=>e.date!=="Today"&&e.date!=="—");
   const vix = market?.vix?.price || 0;
   const vixLabel = vix >= 25 ? "🔴 Alert" : vix >= 15 ? "🟡 Choppy" : "🟢 Calm";
   const vixColor = vix >= 25 ? "var(--rose)" : vix >= 15 ? "var(--amber)" : "var(--emerald)";
   const vixSub = vix >= 25 ? "High fear — caution advised" : vix >= 15 ? "Some volatility — selective" : "Below 15 — signals reliable";
+  const vstoxx = market?.vstoxx?.price || 0;
+  const indiaVix = market?.india_vix?.price || 0;
+  const vstoxxLabel = vstoxx >= 30 ? "🔴 Alert" : vstoxx >= 20 ? "🟡 Choppy" : "🟢 Calm";
+  const vstoxxColor = vstoxx >= 30 ? "var(--rose)" : vstoxx >= 20 ? "var(--amber)" : "var(--emerald)";
+  const indiaVixLabel = indiaVix >= 25 ? "🔴 Alert" : indiaVix >= 15 ? "🟡 Choppy" : "🟢 Calm";
+  const indiaVixColor = indiaVix >= 25 ? "var(--rose)" : indiaVix >= 15 ? "var(--amber)" : "var(--emerald)";
+  const sessions = market?.market_sessions || {};
+  const openCount = [sessions.us, sessions.eu, sessions.in].filter(s=>s?.state==="open").length;
   const indices = [
-    {flag:"🇺🇸", name:"S&P 500",    d:market?.sp500},
-    {flag:"🇺🇸", name:"Nasdaq",     d:market?.nasdaq},
-    {flag:"🇪🇺", name:"DAX",        d:market?.dax},
-    {flag:"🇮🇳", name:"India (NSE)",d:market?.nifty},
+    {flag:"🇺🇸", name:"S&P 500",    d:market?.sp500, sessKey:"us"},
+    {flag:"🇺🇸", name:"Nasdaq",     d:market?.nasdaq, sessKey:"us"},
+    {flag:"🇪🇺", name:"DAX",        d:market?.dax, sessKey:"eu"},
+    {flag:"🇮🇳", name:"India (NSE)",d:market?.nifty, sessKey:"in"},
   ];
   const sigList = signals && signals.length > 0 ? signals : [];
   return (
@@ -1070,6 +1105,23 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
             ))}
           </div>
         )}
+        {todayEarnings.length===0 && upcomingEarnings.length>0 && (
+          <div style={{padding:"8px 14px 10px"}}>
+            {upcomingEarnings.slice(0,2).map((e,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:7,marginBottom:i<1?5:0}}>
+                <span style={{fontSize:10}}>{e.flag}</span>
+                <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:11,color:"var(--t2)"}}>{e.ticker}</span>
+                <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",background:"var(--card2)",padding:"2px 5px",borderRadius:3}}>{e.date}</span>
+                <span style={{fontSize:9,color:"var(--t3)",flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.note?.split('.')[0]}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {todayEarnings.length===0 && upcomingEarnings.length===0 && (
+          <div style={{padding:"8px 14px 10px",fontSize:10,color:"var(--t3)",fontStyle:"italic"}}>
+            No earnings this week for your tracked stocks
+          </div>
+        )}
       </div>
       <div className="card">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 14px 10px",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
@@ -1101,31 +1153,53 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
         <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>Market Conditions</span>
-        <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Live · yfinance</span>
+        <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>
+          {openCount > 0 ? `${openCount}/3 open` : "All closed"} · yfinance
+        </span>
       </div>
-      <div className="mkt-grid">
-        <div className="mkt-card g">
-          <div className="mk-label">Fear Index (VIX)</div>
-          <div style={{display:"flex",alignItems:"baseline",gap:6}}>
-            <div className="mk-val" style={{color:vixColor}}>{vix > 0 ? vix.toFixed(1) : "—"}</div>
-            <span style={{fontFamily:"var(--mono)",fontSize:10,color:vixColor,fontWeight:600}}>{vix > 0 ? vixLabel : ""}</span>
-          </div>
-          <div className="mk-sub">{vix > 0 ? vixSub : "Loading…"}</div>
-        </div>
-        <div className="mkt-card b">
-          <div className="mk-label">Markets Today</div>
-          {indices.map((m,i)=>{
-            const chg = m.d?.change_pct;
-            const up = chg != null ? chg >= 0 : true;
-            const val = chg != null ? `${up?"+":""}${chg.toFixed(1)}%` : "—";
-            return (
-              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4}}>
-                <span style={{fontSize:10,color:"var(--t2)"}}>{m.flag} {m.name}</span>
-                <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:up?"var(--emerald)":"var(--rose)"}}>{val}</span>
+      {/* 3 VIX cards — scrollable row */}
+      <div className="vix-scroll">
+        {[
+          {label:"US VIX", sub:vixSub, val:vix, color:vixColor, badge:vixLabel, sess:sessions.us},
+          {label:"EU VSTOXX", sub:"EURO STOXX Volatility", val:vstoxx, color:vstoxxColor, badge:vstoxxLabel, sess:sessions.eu},
+          {label:"India VIX", sub:"NSE Nifty Volatility", val:indiaVix, color:indiaVixColor, badge:indiaVixLabel, sess:sessions.in},
+        ].map((v,i)=>(
+          <div key={i} className="vix-card">
+            <div className="mk-label">{v.label}</div>
+            <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+              <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:v.val>0?v.color:"var(--t3)",lineHeight:1.1}}>
+                {v.val > 0 ? v.val.toFixed(1) : "—"}
               </div>
-            );
-          })}
-        </div>
+              {v.val > 0 && <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:v.color}}>{v.badge}</span>}
+            </div>
+            <div style={{fontSize:8,color:"var(--t3)",marginTop:2,lineHeight:1.3}}>{v.sub}</div>
+            {v.sess && (
+              <div style={{fontFamily:"var(--mono)",fontSize:7,color:v.sess.state==="open"?"var(--emerald)":"var(--t3)",marginTop:3}}>
+                {v.sess.label}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {/* Markets Today — session-aware */}
+      <div className="mkt-card b" style={{marginBottom:14}}>
+        <div className="mk-label">Markets Today</div>
+        {indices.map((m,i)=>{
+          const chg = m.d?.change_pct;
+          const up = chg != null ? chg >= 0 : true;
+          const val = chg != null ? `${up?"+":""}${chg.toFixed(1)}%` : "—";
+          const sess = sessions[m.sessKey];
+          const isOpen = sess?.state === "open";
+          return (
+            <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4}}>
+              <span style={{fontSize:10,color:"var(--t2)"}}>{m.flag} {m.name}</span>
+              {isOpen || !sess
+                ? <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:up?"var(--emerald)":"var(--rose)"}}>{val}</span>
+                : <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{sess?.label||"Closed"}</span>
+              }
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1171,7 +1245,7 @@ function FmpProfileCard({p}) {
 }
 
 // ── COMPACT TABLE ROW (portfolio) ────────────────────
-function CompactRow({s, dot, onDetail, onRemove, onEdit}) {
+function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
   const [open, setOpen] = useState(false);
   const [showScore, setShowScore] = useState(false);
   const c = tc(s.trust, s.grade);
@@ -1269,6 +1343,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit}) {
           </div>
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:2,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
+            <button onClick={(e)=>{e.stopPropagation();onSetAlert&&onSetAlert(s.ticker,s.price,null,null);}} title="Set price alert" style={{flex:"0 0 36px",padding:"8px",borderRadius:8,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontSize:13,cursor:"pointer"}}>🔔</button>
             <button onClick={()=>onEdit&&onEdit(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Edit</button>
             {s.rec==="SELL"
               ?<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
@@ -1281,7 +1356,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit}) {
   );
 }
 
-function CompactWatchRow({s, dot, onRemove}) {
+function CompactWatchRow({s, dot, onRemove, onSetAlert}) {
   const [open, setOpen] = useState(false);
   const c = tc(s.trust, s.grade);
   const cc = dot;
@@ -1311,7 +1386,11 @@ function CompactWatchRow({s, dot, onRemove}) {
             <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12,color:"var(--t1)"}}>{s.ticker}</span>
             {s.isSpeculative && <span style={{fontSize:7,fontWeight:700,color:"var(--violet)",background:"rgba(124,58,237,.1)",padding:"1px 4px",borderRadius:3}}>SPEC</span>}
           </div>
-          <div style={{fontSize:9,color:"var(--t3)",marginTop:1}}>{s.name}</div>
+          <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginTop:1}}>
+            {s.price > 0
+              ? <>{cu(s.ticker)}{(s.price).toFixed(2)}<span style={{color:s.change>=0?"var(--emerald)":"var(--rose)",marginLeft:4}}>{s.change>=0?"+":""}{(s.change||0).toFixed(1)}%</span></>
+              : s.name}
+          </div>
         </div>
         <div style={{minWidth:0}}>
           <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:cc,background:cbg,padding:"2px 6px",borderRadius:4,display:"inline-block",maxWidth:"100%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.signal}</span>
@@ -1372,10 +1451,22 @@ function CompactWatchRow({s, dot, onRemove}) {
               Data: {s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}
             </div>
           )}
-          <div style={{marginTop:9}}>
+          {s.price > 0 && s.entry && s.entry !== "—" && (
+            <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginTop:6}}>
+              Current <span style={{color:"var(--t1)",fontWeight:700}}>{cu(s.ticker)}{s.price.toFixed(2)}</span>
+              <span style={{color:s.change>=0?"var(--emerald)":"var(--rose)",marginLeft:4}}>{s.change>=0?"+":""}{(s.change||0).toFixed(1)}%</span>
+              <span style={{color:"var(--t4)",margin:"0 6px"}}>→</span>
+              Entry Zone <span style={{color:"var(--sky)",fontWeight:600}}>{s.entry}</span>
+            </div>
+          )}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:9}}>
+            <button onClick={(e)=>{e.stopPropagation();onSetAlert&&onSetAlert(s.ticker,s.price,null,null);}}
+              style={{padding:"8px",borderRadius:8,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              🔔 Set Alert
+            </button>
             <button onClick={()=>onRemove&&onRemove(s)}
-              style={{width:"100%",padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>
-              Remove from Watchlist
+              style={{padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              Remove
             </button>
           </div>
         </div>
@@ -1425,10 +1516,82 @@ function PivotSection({title, accentColor, slices}) {
       {slice.items.length===0
         ? <div style={{padding:"12px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:"var(--t3)"}}>No stocks in this category</div>
         : slice.items.map(s=>slice.isWatch
-            ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove}/>
-            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} onEdit={slice.onEdit}/>
+            ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove} onSetAlert={slice.onSetAlert}/>
+            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} onEdit={slice.onEdit} onSetAlert={slice.onSetAlert}/>
           )
       }
+    </div>
+  );
+}
+
+// ── PRICE ALERT MODAL ────────────────────────────────
+function PriceAlertModal({ticker, currentPrice, entryLow, entryHigh, onClose, onSaved}) {
+  const [alertType, setAlertType] = useState("price_below");
+  const [threshold, setThreshold] = useState(String(entryLow ? entryLow.toFixed(2) : (currentPrice * 0.95).toFixed(2)));
+  const [alertName, setAlertName] = useState(`${ticker} alert`);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const alertTypes = [
+    {v:"price_below", l:"Price drops below"},
+    {v:"price_above", l:"Price rises above"},
+    {v:"entry_zone",  l:"Enters entry zone"},
+    {v:"trust_drop",  l:"Trust score drops below 50"},
+  ];
+  const handleTypeChange = (type) => {
+    setAlertType(type);
+    if (type === "price_below") setThreshold(String(entryLow ? entryLow.toFixed(2) : (currentPrice * 0.95).toFixed(2)));
+    else if (type === "price_above") setThreshold(String((currentPrice * 1.08).toFixed(2)));
+    else if (type === "trust_drop") setThreshold("50");
+  };
+  const submit = async () => {
+    setErr("");
+    setSaving(true);
+    try {
+      await createPriceAlert({
+        ticker,
+        alert_type: alertType,
+        alert_name: alertName || `${ticker} alert`,
+        threshold: alertType !== "entry_zone" ? +threshold : null,
+        entry_low: alertType === "entry_zone" ? (entryLow || null) : null,
+        entry_high: alertType === "entry_zone" ? (entryHigh || null) : null,
+      });
+      onSaved && onSaved();
+      onClose();
+    } catch { setErr("Could not save alert. Try again."); }
+    setSaving(false);
+  };
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 16px"}}/>
+        <div className="modal-title">🔔 Set Price Alert</div>
+        <div className="modal-sub">{ticker} · Current: {cu(ticker)}{currentPrice > 0 ? currentPrice.toFixed(2) : "—"}</div>
+        <div className="modal-label">Alert Type</div>
+        <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:14}}>
+          {alertTypes.map(t=>(
+            <button key={t.v} onClick={()=>handleTypeChange(t.v)}
+              style={{textAlign:"left",padding:"9px 12px",borderRadius:9,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:12,fontWeight:600,transition:"all .15s",
+                borderColor:alertType===t.v?"var(--indigo)":"var(--t4)",
+                background:alertType===t.v?"rgba(91,114,248,.06)":"var(--white)",
+                color:alertType===t.v?"var(--indigo)":"var(--t2)"}}>
+              {t.l}
+            </button>
+          ))}
+        </div>
+        {alertType !== "entry_zone" && (<>
+          <div className="modal-label">Threshold {alertType==="trust_drop"?"(score)":`(${cu(ticker)})`}</div>
+          <input className="modal-inp" type="number" value={threshold} onChange={e=>setThreshold(e.target.value)} placeholder="Value"/>
+        </>)}
+        {alertType === "entry_zone" && entryLow && entryHigh && (
+          <div style={{background:"var(--card2)",borderRadius:9,padding:"9px 12px",marginBottom:12,fontFamily:"var(--mono)",fontSize:12,color:"var(--sky)"}}>
+            Zone: {cu(ticker)}{entryLow.toFixed(0)} – {cu(ticker)}{entryHigh.toFixed(0)}
+          </div>
+        )}
+        <div className="modal-label" style={{marginTop:4}}>Alert Name (optional)</div>
+        <input className="modal-inp" type="text" value={alertName} onChange={e=>setAlertName(e.target.value)} placeholder={`${ticker} alert`}/>
+        {err && <div className="modal-err">{err}</div>}
+        <button className="modal-submit" onClick={submit} disabled={saving}>{saving?"Saving…":"Save Alert"}</button>
+      </div>
     </div>
   );
 }
@@ -1731,7 +1894,7 @@ function AddModal({onClose, onAdded}) {
 }
 
 // ── STOCKS SCREEN ────────────────────────────────────
-function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd}) {
+function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd, onSetAlert}) {
   const [f, setF] = useState("All");
   const [showAdd, setShowAdd] = useState(false);
   const [confirm, setConfirm] = useState(null);   // {message, onConfirm} or null
@@ -1763,14 +1926,14 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
   const fWR=byC(WR), fWW=byC(WW), fWA=byC(WA);
 
   const myStocksSlices = [
-    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail, onRemove:handleRemove, onEdit:handleEdit},
-    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail, onRemove:handleRemove, onEdit:handleEdit},
-    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail, onRemove:handleRemove, onEdit:handleEdit},
+    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert},
+    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert},
+    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert},
   ];
   const watchlistSlices = [
-    {label:"Ready",   color:"var(--emerald)", items:fWR, isWatch:true, onRemove:handleRemoveWL},
-    {label:"Waiting", color:"var(--amber)",   items:fWW, isWatch:true, onRemove:handleRemoveWL},
-    {label:"Avoid",   color:"var(--rose)",    items:fWA, isWatch:true, onRemove:handleRemoveWL},
+    {label:"Ready",   color:"var(--emerald)", items:fWR, isWatch:true, onRemove:handleRemoveWL, onSetAlert},
+    {label:"Waiting", color:"var(--amber)",   items:fWW, isWatch:true, onRemove:handleRemoveWL, onSetAlert},
+    {label:"Avoid",   color:"var(--rose)",    items:fWA, isWatch:true, onRemove:handleRemoveWL, onSetAlert},
   ];
 
   return (
@@ -1823,25 +1986,44 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
 
 
 // ── SMART PICKS ──────────────────────────────────────
-function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
+function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks, onSetAlert}) {
   const [exp,setExp] = useState(null);
   const [addQ,setAddQ] = useState("");
   const [addMsg,setAddMsg] = useState("");
   const [adding,setAdding] = useState(false);
+  const [sectF,setSectF] = useState("All");
+  const [trackedSet,setTrackedSet] = useState(new Set());
   const PICKS = picks || [];
   const DISQ = disq || [];
   const acc = accuracy || "—";
 
-  const handleAdd = () => {
-    const t = addQ.trim().toUpperCase();
+  useEffect(()=>{
+    getPicksUniverse().then(v=>setTrackedSet(new Set(v||[]))).catch(()=>{});
+  }, [picks]);
+
+  // Sectors that have qualifying picks only
+  const sectors = ["All", ...Array.from(new Set(PICKS.map(p=>p.sector||"Other"))).sort()];
+  const filteredPicks = sectF === "All" ? PICKS : PICKS.filter(p=>(p.sector||"Other")===sectF);
+  // Group by sector when showing All
+  const sectorGroups = sectF === "All"
+    ? Object.entries(PICKS.reduce((acc,p)=>{ const s=p.sector||"Other"; (acc[s]=acc[s]||[]).push(p); return acc; },{})).sort(([a],[b])=>a.localeCompare(b))
+    : null;
+
+  const handleAdd = (directTicker) => {
+    const t = (directTicker || addQ).trim().toUpperCase();
     if (!t) return;
-    if (PICKS.some(p=>p.ticker===t) || DISQ.some(d=>d.ticker===t)) {
+    if (!directTicker && (PICKS.some(p=>p.ticker===t) || DISQ.some(d=>d.ticker===t))) {
       setAddMsg(`${t} is already tracked`);
       return;
     }
     setAdding(true);
     addPicksUniverse(t)
-      .then(()=>{ setAddQ(""); setAddMsg(`${t} added — refreshing picks…`); if(onRefreshPicks) onRefreshPicks(); })
+      .then(()=>{
+        setTrackedSet(prev=>new Set([...prev,t]));
+        if (!directTicker) setAddQ("");
+        setAddMsg(`${t} added — will appear when score ≥ 75`);
+        if(onRefreshPicks) onRefreshPicks();
+      })
       .catch(()=>setAddMsg("Could not add — check ticker spelling"))
       .finally(()=>setAdding(false));
   };
@@ -1849,7 +2031,10 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
   const handleRemove = (ticker, e) => {
     e.stopPropagation();
     removePicksUniverse(ticker)
-      .then(()=>{ if(onRefreshPicks) onRefreshPicks(); })
+      .then(()=>{
+        setTrackedSet(prev=>{ const n=new Set(prev); n.delete(ticker); return n; });
+        if(onRefreshPicks) onRefreshPicks();
+      })
       .catch(()=>{});
   };
 
@@ -1883,17 +2068,113 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
       </div>
       {addMsg&&<div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",marginBottom:8,paddingLeft:4}}>{addMsg}</div>}
 
+      {/* Sector filter pills */}
+      {PICKS.length > 0 && (
+        <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto",scrollbarWidth:"none",paddingBottom:2}}>
+          {sectors.map(s=>(
+            <button key={s} onClick={()=>{setSectF(s);setExp(null);}}
+              style={{padding:"3px 9px",borderRadius:14,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:9,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,transition:"all .15s",
+                borderColor:sectF===s?"var(--indigo)":"var(--t4)",
+                background:sectF===s?"linear-gradient(135deg,var(--indigo),var(--sky))":"var(--white)",
+                color:sectF===s?"#fff":"var(--t3)"}}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Loading skeleton */}
       {loading&&PICKS.length===0&&(
         <div style={{background:"var(--white)",borderRadius:12,padding:"20px",textAlign:"center",marginBottom:10,color:"var(--t3)",fontSize:11,fontFamily:"var(--mono)"}}>
           <span style={{display:"inline-block",width:12,height:12,border:"2px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginRight:8}}/>
-          Scanning {30}+ quality stocks…
+          Scanning 120+ quality stocks…
         </div>
       )}
 
-      {/* Picks card */}
+      {/* Picks card — grouped by sector when "All", flat when filtered */}
+      {sectF !== "All" && filteredPicks.length === 0 && (
+        <div style={{background:"var(--white)",borderRadius:12,padding:"16px",textAlign:"center",color:"var(--t3)",fontSize:11,fontFamily:"var(--mono)",marginBottom:10}}>
+          No qualifying picks in {sectF} right now
+        </div>
+      )}
+
+      {/* Sector grouped view */}
+      {sectF === "All" && sectorGroups && sectorGroups.map(([sector, sectorPicks])=>(
+        <div key={sector} style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",background:"rgba(15,23,42,.02)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
+            <div style={{width:3,height:10,borderRadius:1,background:"var(--indigo)",flexShrink:0}}/>
+            <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:10,color:"var(--t2)",textTransform:"uppercase",letterSpacing:.5}}>{sector}</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--indigo)",marginLeft:4}}>{sectorPicks.length}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",padding:"4px 12px",background:"rgba(15,23,42,.015)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
+            {["Stock","Rec","AI","Upside",""].map((h,i)=>(
+              <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.6,textAlign:i>=2?"center":"left"}}>{h}</span>
+            ))}
+          </div>
+          {sectorPicks.map((s,i)=>{
+            const open = exp === `${sector}:${i}`;
+            const c=tc(s.trust);
+            const recColor=s.rcls==="rr-sb"?"var(--indigo)":s.rcls==="rr-b"?"var(--emerald)":"var(--amber)";
+            const recBg=s.rcls==="rr-sb"?"#eef2ff":s.rcls==="rr-b"?"var(--emerald2)":"var(--amber2)";
+            return (
+              <div key={s.ticker}>
+                <div onClick={()=>setExp(open?null:`${sector}:${i}`)}
+                  style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",alignItems:"center",padding:"7px 12px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?"rgba(91,114,248,.018)":"transparent",transition:"background .15s",gap:4}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      <div style={{width:5,height:5,borderRadius:"50%",background:recColor,flexShrink:0}}/>
+                      <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
+                      {trackedSet.has(s.ticker)&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 4px",borderRadius:3}}>✓</span>}
+                    </div>
+                    <div style={{fontSize:8,color:"var(--t3)",marginTop:1,paddingLeft:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+                  </div>
+                  <div><span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:600,color:recColor,background:recBg,padding:"2px 6px",borderRadius:4}}>{s.rec}</span></div>
+                  <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span></div>
+                  <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"var(--emerald)"}}>{s.potential}</span></div>
+                  <div style={{textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                    <span style={{fontSize:8,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+                    <button onClick={(e)=>handleRemove(s.ticker,e)} style={{fontSize:8,color:"var(--t3)",background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
+                  </div>
+                </div>
+                {open&&(
+                  <div style={{padding:"8px 12px 10px",background:"rgba(91,114,248,.018)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
+                    <div style={{height:2,borderRadius:1,background:s.grad,marginBottom:7}}/>
+                    <div style={{display:"flex",gap:0,marginBottom:8,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
+                      {[{l:"Business",v:s.b,m:s.bm,c:"#5b72f8"},{l:"Smart $",v:s.s,m:s.sm,c:"#7c3aed"},{l:"Momentum",v:s.m,m:s.mm,c:"#059669"}].map((p,j)=>(
+                        <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
+                          <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:1}}>{p.l}</div>
+                          <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:"var(--t3)"}}>/{p.m}</span></div>
+                          <div style={{height:2,background:"var(--t4)",borderRadius:1,marginTop:2,overflow:"hidden"}}><div style={{height:"100%",background:p.c,width:`${p.v/p.m*100}%`}}/></div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginBottom:8}}>
+                      {s.sigs.slice(0,3).map((sig,j)=>(
+                        <div key={j} style={{display:"flex",gap:6,fontSize:10,color:"var(--t2)",marginBottom:3,lineHeight:1.4}}>
+                          <span style={{color:c,fontSize:7,flexShrink:0,marginTop:3}}>●</span>{sig}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
+                      {[{l:"Upside",v:s.potential,c:"var(--emerald)"},{l:"Entry",v:s.entry,c:"var(--sky)"},{l:"Risk",v:s.risk,c:"var(--amber)"},{l:"When",v:s.horizon,c:"var(--t2)"}].map((st,j)=>(
+                        <div key={j} style={{background:"var(--card2)",borderRadius:6,padding:"4px 5px",textAlign:"center"}}>
+                          <div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",textTransform:"uppercase",marginBottom:2}}>{st.l}</div>
+                          <div style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:st.c,lineHeight:1.3}}>{st.v}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {onSetAlert && <button onClick={(e)=>{e.stopPropagation();onSetAlert(s.ticker,0,null,null);}} style={{fontSize:10,padding:"6px 10px",borderRadius:7,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontWeight:600,cursor:"pointer"}}>🔔 Set Alert</button>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+
+      {/* Flat view when sector filter active */}
+      {sectF !== "All" && filteredPicks.length > 0 && (
       <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10}}>
-        {/* Subtle column headers */}
         <div style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",
           padding:"4px 12px",background:"rgba(15,23,42,.015)",
           borderBottom:"1px solid rgba(15,23,42,.05)"}}>
@@ -1904,7 +2185,7 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
           ))}
         </div>
 
-        {PICKS.map((s,i)=>{
+        {filteredPicks.map((s,i)=>{
           const open=exp===i;
           const c=tc(s.trust);
           const recColor=s.rcls==="rr-sb"?"var(--indigo)":s.rcls==="rr-b"?"var(--emerald)":"var(--amber)";
@@ -1970,7 +2251,7 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
                     ))}
                   </div>
                   {/* Stats - 4 in one row */}
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
                     {[{l:"Upside",v:s.potential,c:"var(--emerald)"},{l:"Entry",v:s.entry,c:"var(--sky)"},{l:"Risk",v:s.risk,c:"var(--amber)"},{l:"When",v:s.horizon,c:"var(--t2)"}].map((st,j)=>(
                       <div key={j} style={{background:"var(--card2)",borderRadius:6,padding:"4px 5px",textAlign:"center"}}>
                         <div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",textTransform:"uppercase",marginBottom:2}}>{st.l}</div>
@@ -1978,12 +2259,14 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
                       </div>
                     ))}
                   </div>
+                  {onSetAlert && <button onClick={(e)=>{e.stopPropagation();onSetAlert(s.ticker,0,null,null);}} style={{fontSize:10,padding:"6px 10px",borderRadius:7,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontWeight:600,cursor:"pointer"}}>🔔 Set Alert</button>}
                 </div>
               )}
             </div>
           );
         })}
       </div>
+      )}
 
       {/* Blocked — quiet section */}
       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
@@ -1993,11 +2276,17 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks}) {
       </div>
       <div style={{background:"var(--white)",borderRadius:10,overflow:"hidden",border:"1px solid rgba(225,29,72,.09)"}}>
         {DISQ.map((d,i)=>(
-          <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
-            borderBottom:i<DISQ.length-1?"1px solid rgba(15,23,42,.04)":"none"}}>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--rose)",width:36,flexShrink:0}}>{d.ticker}</span>
-            <span style={{fontSize:9,color:"var(--t3)",flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.reason}</span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"rgba(225,29,72,.4)",flexShrink:0}}>{d.score}</span>
+          <div key={i} style={{padding:"9px 12px",borderBottom:i<DISQ.length-1?"1px solid rgba(15,23,42,.04)":"none"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--rose)",width:40,flexShrink:0}}>{d.ticker}</span>
+              <span style={{fontSize:9,color:"var(--t3)",flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.reason}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"rgba(225,29,72,.4)",flexShrink:0}}>{d.score}</span>
+            </div>
+            {d.unblock_condition && (
+              <div style={{fontFamily:"var(--dm)",fontSize:8,color:"var(--t3)",marginTop:3,paddingLeft:48,fontStyle:"italic"}}>
+                Unblocks when: {d.unblock_condition}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -2123,6 +2412,8 @@ export default function App() {
   const [tab,setTab] = useState(0);
   const [sel,setSel] = useState(null);
   const [showEarnings,setShowEarnings] = useState(false);
+  const [alertSubject,setAlertSubject] = useState(null); // {ticker,price,entryLow,entryHigh} or null
+  const [showBellPanel,setShowBellPanel] = useState(false);
 
   // ── Real data state ──
   const [portfolio, setPortfolio] = useState({positions:[], summary:{}});
@@ -2135,6 +2426,9 @@ export default function App() {
   const [accuracy, setAccuracy] = useState("—");
   const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[]});
   const [earnings, setEarnings] = useState([]);
+  const [priceAlerts, setPriceAlerts] = useState([]);
+  const loadPriceAlerts = () => getPriceAlerts().then(v=>setPriceAlerts(v||[])).catch(()=>{});
+  const handleSetAlert = (ticker, price, entryLow, entryHigh) => setAlertSubject({ticker, price: price||0, entryLow, entryHigh});
   const refreshData = () => {
     Promise.allSettled([getPortfolio(), getWatchlist()]).then(([pR, wR]) => {
       if(pR.status==="fulfilled") setPortfolio(pR.value||{positions:[],summary:{}});
@@ -2155,6 +2449,7 @@ export default function App() {
     getWatchlist().then(v => { setWatchlistRaw(v||[]); }).catch(()=>{});
     getEarnings().then(v => { setEarnings((v||[]).map(mapEarnings)); }).catch(()=>{});
     getAccuracy().then(v => { setAccuracy(v?.accuracy_pct!=null?`${v.accuracy_pct}%`:"—"); }).catch(()=>{});
+    loadPriceAlerts();
 
     // PRIORITY 3 — Smart Picks + Strategy (heavy, load in background after page is visible)
     setTimeout(() => {
@@ -2204,8 +2499,8 @@ export default function App() {
 
   const screens = [
     <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
-    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData}/>,
-    <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy} loading={picksLoading} onRefreshPicks={()=>{setPicksLoading(true);getPicks().then(v=>setPicks((v||[]).map(mapPick))).catch(()=>{}).finally(()=>setPicksLoading(false));}}/>,
+    <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} onSetAlert={handleSetAlert}/>,
+    <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy} loading={picksLoading} onSetAlert={handleSetAlert} onRefreshPicks={()=>{setPicksLoading(true);getPicks().then(v=>setPicks((v||[]).map(mapPick))).catch(()=>{}).finally(()=>setPicksLoading(false));}}/>,
     <StrategyScreen strategyData={strategyData} onDetail={setSel}/>,
   ];
   const tabDefs = [
@@ -2234,7 +2529,7 @@ export default function App() {
               <div className="mpdot" style={{background:mktDotColor}}/>
               <span className="mptext">{mktLabel}</span>
             </div>
-            <div className="bell">🔔{unreadCount>0&&<div className="bell-b">{unreadCount}</div>}</div>
+            <div className="bell" onClick={()=>setShowBellPanel(true)} style={{cursor:"pointer"}}>🔔{unreadCount>0&&<div className="bell-b">{unreadCount}</div>}</div>
           </div>
         </div>
       </div>
@@ -2279,6 +2574,65 @@ export default function App() {
         />
       )}
       {showEarnings&&<EarningsIntel earnings={earnings} onClose={()=>setShowEarnings(false)}/>}
+      {alertSubject&&(
+        <PriceAlertModal
+          ticker={alertSubject.ticker}
+          currentPrice={alertSubject.price}
+          entryLow={alertSubject.entryLow}
+          entryHigh={alertSubject.entryHigh}
+          onClose={()=>setAlertSubject(null)}
+          onSaved={loadPriceAlerts}
+        />
+      )}
+      {showBellPanel&&(
+        <div className="alert-panel-overlay" onClick={()=>setShowBellPanel(false)}>
+          <div className="alert-panel-box" onClick={e=>e.stopPropagation()}>
+            <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 14px"}}/>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+              <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15}}>Notifications</div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{priceAlerts.filter(a=>a.is_active).length} price alerts active</span>
+                <button onClick={()=>setShowBellPanel(false)} style={{background:"var(--card2)",border:"none",borderRadius:7,padding:"4px 8px",fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",cursor:"pointer"}}>Close</button>
+              </div>
+            </div>
+            {alerts.length===0&&priceAlerts.length===0&&(
+              <div style={{textAlign:"center",padding:"20px 0",fontFamily:"var(--mono)",fontSize:11,color:"var(--t3)"}}>No notifications</div>
+            )}
+            {priceAlerts.filter(a=>a.is_active).length>0&&(
+              <>
+                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Active Price Alerts</div>
+                {priceAlerts.filter(a=>a.is_active).map((a,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:"var(--white)",borderRadius:9,marginBottom:6,border:"1px solid var(--t4)"}}>
+                    <span style={{fontSize:14}}>🔔</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{a.ticker}</div>
+                      <div style={{fontSize:10,color:"var(--t2)",marginTop:1}}>{a.alert_name||a.alert_type.replace(/_/g," ")}</div>
+                    </div>
+                    <button onClick={()=>deletePriceAlert(a.id).then(loadPriceAlerts).catch(()=>{})}
+                      style={{fontSize:10,color:"var(--rose)",background:"var(--rose2)",border:"1px solid #fca5a5",borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"var(--mono)"}}>✕</button>
+                  </div>
+                ))}
+              </>
+            )}
+            {alerts.filter(a=>!a.is_read).length>0&&(
+              <>
+                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1,marginTop:12,marginBottom:8}}>Unread Alerts</div>
+                {alerts.filter(a=>!a.is_read).slice(0,10).map((a,i)=>(
+                  <div key={i} style={{padding:"9px 12px",background:"var(--white)",borderRadius:9,marginBottom:6,border:"1px solid var(--t4)"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7}}>
+                      <span style={{fontSize:13}}>{a.alert_type==="urgent"?"🚨":a.alert_type==="price_alert"?"🔔":"💡"}</span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:11}}>{a.ticker||"System"}</div>
+                        <div style={{fontSize:10,color:"var(--t2)",marginTop:1,lineHeight:1.4}}>{a.message}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

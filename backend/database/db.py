@@ -313,3 +313,69 @@ def ticker_in_watchlist(ticker: str) -> bool:
     ).fetchone()
     conn.close()
     return row is not None
+
+
+# ── PRICE ALERTS ──────────────────────────────────────────────────────────────
+
+def get_price_alerts(ticker=None):
+    conn = get_connection()
+    if ticker:
+        rows = conn.execute(
+            "SELECT * FROM price_alerts WHERE ticker=? ORDER BY created_at DESC", (ticker,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM price_alerts ORDER BY created_at DESC"
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_price_alert(ticker, alert_type, threshold=None, entry_low=None,
+                       entry_high=None, alert_name=None):
+    conn = get_connection()
+    cursor = conn.execute(
+        """INSERT INTO price_alerts
+           (ticker, alert_type, threshold, entry_low, entry_high, alert_name)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (ticker, alert_type, threshold, entry_low, entry_high, alert_name),
+    )
+    alert_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return alert_id
+
+
+def delete_price_alert(alert_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM price_alerts WHERE id=?", (alert_id,))
+    conn.commit()
+    conn.close()
+
+
+def toggle_price_alert(alert_id, is_active):
+    conn = get_connection()
+    conn.execute("UPDATE price_alerts SET is_active=? WHERE id=?", (is_active, alert_id))
+    conn.commit()
+    conn.close()
+
+
+def mark_price_alert_triggered(alert_id):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE price_alerts SET triggered_at=?, is_active=0 WHERE id=?",
+        (datetime.utcnow().isoformat(), alert_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def recent_alert_exists(ticker: str, hours: int = 24) -> bool:
+    """True if an alert for this ticker was created within the last N hours."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM alerts WHERE ticker=? AND created_at >= datetime('now', ?) LIMIT 1",
+        (ticker, f"-{hours} hours"),
+    ).fetchone()
+    conn.close()
+    return row is not None

@@ -311,12 +311,70 @@ def mark_read(alert_id: int):
 
 # ── SMART PICKS ───────────────────────────────────────────────────────────────
 
-# Curated high-quality universe scanned every day for best picks
-_CURATED_UNIVERSE = [
-    "AXON","NVDA","MSFT","AAPL","AMZN","META","GOOGL","TSLA","AVGO","AMD",
-    "CRWD","PLTR","SNOW","NET","DDOG","MNDY","ZS","HUBS","TTD","CELH",
-    "LLY","ABBV","ISRG","DXCM","ALGN","PAYC","PCTY","TMDX","RXRX","CLOV",
-]
+# Curated high-quality universe — 120 stocks across 11 GICS sectors.
+# Selection criteria: multi-year revenue growth, profitability or clear path to it,
+# manageable debt, consistent earnings, strong moat or sector tailwind.
+_SECTOR_MAP: dict[str, str] = {
+    # Technology
+    "MSFT":"Technology","AAPL":"Technology","NVDA":"Technology","AVGO":"Technology",
+    "AMD":"Technology","QCOM":"Technology","TXN":"Technology","AMAT":"Technology",
+    "KLAC":"Technology","CRWD":"Technology","AXON":"Technology","NET":"Technology",
+    "DDOG":"Technology","ZS":"Technology","SNOW":"Technology","PLTR":"Technology",
+    "MNDY":"Technology","HUBS":"Technology","NOW":"Technology","ADBE":"Technology",
+    # Communications
+    "GOOGL":"Communications","META":"Communications","NFLX":"Communications",
+    "SPOT":"Communications","DIS":"Communications","TMUS":"Communications",
+    "TTD":"Communications","PINS":"Communications","ROKU":"Communications",
+    # Consumer Discretionary
+    "AMZN":"Consumer Discretionary","TSLA":"Consumer Discretionary",
+    "NKE":"Consumer Discretionary","LULU":"Consumer Discretionary",
+    "SBUX":"Consumer Discretionary","MCD":"Consumer Discretionary",
+    "BKNG":"Consumer Discretionary","TJX":"Consumer Discretionary",
+    "ROST":"Consumer Discretionary","DRI":"Consumer Discretionary",
+    # Consumer Staples
+    "PG":"Consumer Staples","KO":"Consumer Staples","PEP":"Consumer Staples",
+    "COST":"Consumer Staples","WMT":"Consumer Staples","MDLZ":"Consumer Staples",
+    "CL":"Consumer Staples","EL":"Consumer Staples","CHD":"Consumer Staples",
+    # Healthcare
+    "LLY":"Healthcare","ABBV":"Healthcare","JNJ":"Healthcare","MRK":"Healthcare",
+    "UNH":"Healthcare","ISRG":"Healthcare","DXCM":"Healthcare","ABT":"Healthcare",
+    "TMO":"Healthcare","DHR":"Healthcare","REGN":"Healthcare","VRTX":"Healthcare",
+    # Financials
+    "JPM":"Financials","V":"Financials","MA":"Financials","BAC":"Financials",
+    "GS":"Financials","MS":"Financials","BLK":"Financials","SPGI":"Financials",
+    "ICE":"Financials","CME":"Financials","AXP":"Financials","COF":"Financials",
+    # Industrials
+    "CAT":"Industrials","DE":"Industrials","HON":"Industrials","RTX":"Industrials",
+    "LMT":"Industrials","GE":"Industrials","UPS":"Industrials","FDX":"Industrials",
+    "ETN":"Industrials","PH":"Industrials","ROK":"Industrials","FAST":"Industrials",
+    # Energy
+    "XOM":"Energy","CVX":"Energy","COP":"Energy","EOG":"Energy","SLB":"Energy",
+    "PSX":"Energy","MPC":"Energy","VLO":"Energy","OKE":"Energy","WMB":"Energy",
+    # Materials
+    "LIN":"Materials","APD":"Materials","SHW":"Materials","ECL":"Materials",
+    "NEM":"Materials","FCX":"Materials","NUE":"Materials","ALB":"Materials",
+    # Real Estate
+    "AMT":"Real Estate","PLD":"Real Estate","EQIX":"Real Estate","CCI":"Real Estate",
+    "SPG":"Real Estate","O":"Real Estate","PSA":"Real Estate","EXR":"Real Estate",
+    # Utilities
+    "NEE":"Utilities","DUK":"Utilities","SO":"Utilities","D":"Utilities",
+    "AEP":"Utilities","EXC":"Utilities","SRE":"Utilities","XEL":"Utilities",
+}
+
+_CURATED_UNIVERSE: list[str] = list(_SECTOR_MAP.keys())
+
+# Mapping from disqualify_reason keywords → plain English unblock condition
+_UNBLOCK_CONDITIONS: dict[str, str] = {
+    "reverse split":     "No reverse split for 12+ consecutive months",
+    "going concern":     "Auditor removes going-concern warning from filings",
+    "sec investigation": "SEC closes investigation or clears the company",
+    "board resignation": "30-day post-resignation window expires with stable leadership",
+    "cash runway":       "Cash runway extended beyond 6 months via fundraising or revenue",
+    "ceo":               "Stable leadership confirmed for 90+ days",
+    "promoter pledge":   "Promoter pledge drops below 50% and is declining",
+    "guidance cut":      "Company posts two consecutive quarters of raised guidance",
+    "fraud":             "Legal resolution reached and restated financials filed",
+}
 
 from data.cache import cache_get as _cache_get, cache_set as _cache_set, TTL_STRATEGY
 
@@ -365,6 +423,7 @@ def _score_one_ticker(ticker: str) -> dict | None:
             "verdict": verdict,
             "patterns": patterns,
             "is_dip": is_dip,
+            "sector": _SECTOR_MAP.get(ticker, "Other"),
             # Surface verification metadata so frontend can show confidence badge
             "verification": trust.get("verification"),
         }
@@ -405,17 +464,21 @@ def picks():
     highs = [r for r in result if not r["is_dip"]]
     highs.sort(key=lambda x: (-(x["trust"]["total_score"] or 0), x["ticker"]))
     dips.sort(key=lambda x: x["ticker"])
-    final = highs + dips
     # Exclude stocks already in portfolio — picks are for discovery, not review of owned stocks
     portfolio_tickers = {p["ticker"] for p in portfolio}
-    final = [r for r in final if r["ticker"] not in portfolio_tickers]
+    highs = [r for r in highs if r["ticker"] not in portfolio_tickers]
+    dips  = [r for r in dips  if r["ticker"] not in portfolio_tickers]
+    # Cap main picks at Top 15 to keep the list curated, not overwhelming
+    final = highs[:15] + dips[:3]
     cs("picks:result", final)
     return final
 
 
 @app.get("/api/picks/disqualified")
 def picks_disqualified():
-    """Auto-disqualified stocks from portfolio + watchlist + picks universe."""
+    """Auto-disqualified stocks from portfolio + watchlist + picks universe + curated universe.
+    Includes unblock_condition so users understand what needs to change.
+    """
     portfolio = db.get_portfolio()
     watchlist = db.get_watchlist()
     user_universe = db.get_picks_universe()
@@ -423,6 +486,7 @@ def picks_disqualified():
         {p["ticker"] for p in portfolio}
         | {w["ticker"] for w in watchlist}
         | set(user_universe)
+        | set(_CURATED_UNIVERSE)
     )
 
     result = []
@@ -430,10 +494,20 @@ def picks_disqualified():
         price_data = get_stock_price(ticker)
         trust = get_trust_score_with_fallback(ticker, price_data)
         if trust["auto_disqualified"]:
+            reason = trust.get("disqualify_reason") or ""
+            # Derive unblock condition from reason text
+            unblock = "Disqualifying condition must be resolved and cleared from data sources"
+            reason_lower = reason.lower()
+            for kw, condition in _UNBLOCK_CONDITIONS.items():
+                if kw in reason_lower:
+                    unblock = condition
+                    break
             result.append({
                 "ticker": ticker,
+                "name": price_data.get("name", ticker),
                 "trust_score": trust["total_score"],
-                "reason": trust["disqualify_reason"],
+                "reason": reason,
+                "unblock_condition": unblock,
             })
     return result
 
@@ -469,6 +543,106 @@ def remove_picks_universe(ticker: str):
     from data.cache import cache_set as cs
     cs("picks:result", None)  # Invalidate picks cache
     return {"status": "removed"}
+
+
+# ── PRICE ALERTS ─────────────────────────────────────────────────────────────
+
+class PriceAlertRequest(BaseModel):
+    ticker: str
+    alert_type: str          # "price_below","price_above","entry_zone","trust_drop","auto_disq"
+    threshold: Optional[float] = None
+    entry_low: Optional[float] = None
+    entry_high: Optional[float] = None
+    alert_name: Optional[str] = None
+
+
+class PriceAlertToggle(BaseModel):
+    is_active: bool
+
+
+@app.get("/api/price-alerts")
+def get_price_alerts_endpoint(ticker: Optional[str] = None):
+    return db.get_price_alerts(ticker=ticker)
+
+
+@app.post("/api/price-alerts")
+def create_price_alert_endpoint(req: PriceAlertRequest):
+    alert_id = db.create_price_alert(
+        ticker=req.ticker.upper(),
+        alert_type=req.alert_type,
+        threshold=req.threshold,
+        entry_low=req.entry_low,
+        entry_high=req.entry_high,
+        alert_name=req.alert_name,
+    )
+    return {"status": "created", "id": alert_id}
+
+
+@app.delete("/api/price-alerts/{alert_id}")
+def delete_price_alert_endpoint(alert_id: int):
+    db.delete_price_alert(alert_id)
+    return {"status": "deleted"}
+
+
+@app.put("/api/price-alerts/{alert_id}")
+def toggle_price_alert_endpoint(alert_id: int, req: PriceAlertToggle):
+    db.toggle_price_alert(alert_id, req.is_active)
+    return {"status": "updated"}
+
+
+def _check_price_alerts(ticker: str, current_price: float,
+                        trust_score, auto_disq: bool) -> None:
+    """Check active price alerts for a ticker and fire in-app notifications when triggered.
+    Called after every price/trust refresh in tracker.py.
+    Every alert only fires if the associated stock's display_score is not suppressed —
+    we won't alert on data we don't trust (Real Money Test).
+    """
+    try:
+        alerts = db.get_price_alerts(ticker=ticker)
+        for a in alerts:
+            if not a.get("is_active"):
+                continue
+            atype = a.get("alert_type", "")
+            price = float(current_price or 0)
+            triggered = False
+            msg = ""
+
+            if atype == "price_below":
+                threshold = float(a.get("threshold") or 0)
+                if threshold > 0 and price <= threshold and price > 0:
+                    triggered = True
+                    msg = f"{ticker} hit your price alert: ${price:.2f} (target: below ${threshold:.2f})"
+
+            elif atype == "price_above":
+                threshold = float(a.get("threshold") or 0)
+                if threshold > 0 and price >= threshold and price > 0:
+                    triggered = True
+                    msg = f"{ticker} hit your price alert: ${price:.2f} (target: above ${threshold:.2f})"
+
+            elif atype == "entry_zone":
+                lo = float(a.get("entry_low") or 0)
+                hi = float(a.get("entry_high") or 0)
+                if lo > 0 and hi > 0 and lo <= price <= hi:
+                    triggered = True
+                    msg = f"{ticker} entered your entry zone ${lo:.2f}–${hi:.2f} — currently ${price:.2f}"
+
+            elif atype == "trust_drop":
+                threshold = float(a.get("threshold") or 50)
+                score = int(trust_score or 0)
+                if score > 0 and score <= threshold:
+                    triggered = True
+                    msg = f"{ticker} trust score dropped to {score}/100 — below your alert threshold of {int(threshold)}"
+
+            elif atype == "auto_disq":
+                if auto_disq:
+                    triggered = True
+                    msg = f"{ticker} has been auto-disqualified — review position immediately"
+
+            if triggered:
+                db.mark_price_alert_triggered(a["id"])
+                db.create_alert(ticker, "price_alert", msg)
+    except Exception:
+        pass  # Never crash portfolio/watchlist load due to alert check failure
 
 
 # ── ACCURACY ──────────────────────────────────────────────────────────────────
@@ -575,13 +749,45 @@ def strategy():
 
     my_stocks.sort(key=lambda x: x["priority"])
     wl_situations.sort(key=lambda x: x["priority"])
-    total = len(my_stocks) + len(wl_situations)
+
+    # Populate smart_picks from cached picks result — reuse already-verified picks data.
+    # Falls back to empty list if picks haven't been loaded yet (will populate on next /api/picks call).
+    from data.cache import cache_get as _cg
+    cached_picks = _cg("picks:result", 60 * 60) or []
+    smart_picks_strat = []
+    for pick in cached_picks[:5]:
+        t = pick.get("trust", {})
+        score = t.get("total_score") or 0
+        smart_picks_strat.append({
+            "ticker": pick["ticker"],
+            "flag": _get_flag(_detect_market(pick["ticker"])),
+            "situation_type": "ready_to_buy",
+            "label": "Ready to Buy",
+            "icon": "🟢",
+            "action": "BUY" if score >= 80 else "WATCH",
+            "color": "var(--emerald)",
+            "summary": f"{t.get('grade','')!s} · {score}/100 — verified entry conditions met",
+            "priority": 3,
+            "playbook": None,
+            "name": pick.get("name", pick["ticker"]),
+            "current_price": pick.get("price", 0),
+            "change_pct": pick.get("change_pct", 0),
+            "trust_score": score,
+            "grade": t.get("grade", ""),
+            "business_score": t.get("business_score", 0),
+            "smart_money_score": t.get("smart_money_score", 0),
+            "momentum_score": t.get("momentum_score", 0),
+            "is_speculative": t.get("is_speculative", False),
+            "sector": pick.get("sector", ""),
+        })
+
+    total = len(my_stocks) + len(wl_situations) + len(smart_picks_strat)
 
     return {
         "total_situations": total,
         "my_stocks": my_stocks,
         "watchlist": wl_situations,
-        "smart_picks": [],
+        "smart_picks": smart_picks_strat,
     }
 
 

@@ -12,7 +12,7 @@ import os
 import time as _time
 import requests
 import finnhub
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .cache import (cache_get, cache_set,
                      TTL_PRICE, TTL_MARKET, TTL_RATES, TTL_FUNDAMENTALS,
                      TTL_ANALYST, TTL_INSIDER, TTL_HISTORY, TTL_NEWS,
@@ -370,10 +370,98 @@ def _detect_currency(ticker: str) -> str:
     return "USD"
 
 
+def _get_market_sessions() -> dict:
+    """Returns open/closed status for US, EU, and India markets.
+    All countdown times expressed in Stockholm timezone (CET/CEST).
+    """
+    try:
+        import pytz
+        stockholm = pytz.timezone("Europe/Stockholm")
+        us_tz     = pytz.timezone("America/New_York")
+        eu_tz     = pytz.timezone("Europe/Berlin")
+        in_tz     = pytz.timezone("Asia/Kolkata")
+
+        now_utc = datetime.now(timezone.utc)
+
+        def _session_info(now_local, open_h, open_m, close_h, close_m, tz_name):
+            """Compute state + label for a market given local time and hours."""
+            wd = now_local.weekday()   # 0=Mon … 6=Sun
+            t  = now_local.hour * 60 + now_local.minute
+
+            # Convert open/close to minutes since midnight
+            open_min  = open_h  * 60 + open_m
+            close_min = close_h * 60 + close_m
+
+            if wd >= 5:   # Weekend
+                # Next open: Monday in Stockholm time
+                days_to_mon = (7 - wd) % 7 or 7
+                next_open = (now_local + timedelta(days=days_to_mon)).replace(
+                    hour=open_h, minute=open_m, second=0, microsecond=0
+                )
+            elif t < open_min:
+                next_open = now_local.replace(
+                    hour=open_h, minute=open_m, second=0, microsecond=0
+                )
+            elif t >= close_min:
+                # Next business day
+                days_ahead = 3 if wd == 4 else 1   # Friday → Monday
+                next_open = (now_local + timedelta(days=days_ahead)).replace(
+                    hour=open_h, minute=open_m, second=0, microsecond=0
+                )
+            else:
+                next_open = None   # currently open
+
+            if wd >= 5 or t < open_min or t >= close_min:
+                state = "closed"
+                if next_open:
+                    # Convert to Stockholm for display
+                    next_open_sthlm = next_open.astimezone(stockholm)
+                    delta_min = int((next_open_sthlm - now_utc.astimezone(stockholm)).total_seconds() / 60)
+                    if delta_min < 60:
+                        label = f"Closed · Opens in {delta_min}m"
+                    else:
+                        h, m = divmod(delta_min, 60)
+                        label = f"Closed · Opens in {h}h {m}m"
+                else:
+                    label = "Closed"
+            else:
+                state = "open"
+                close_min_left = close_min - t
+                label = "Open"
+                next_open = None
+
+            return {
+                "state": state,
+                "label": label,
+                "opens_in_min": None if state == "open" else (
+                    int((next_open.astimezone(stockholm) - now_utc.astimezone(stockholm)).total_seconds() / 60)
+                    if next_open else None
+                ),
+            }
+
+        us_local = now_utc.astimezone(us_tz)
+        eu_local = now_utc.astimezone(eu_tz)
+        in_local = now_utc.astimezone(in_tz)
+
+        return {
+            "us": _session_info(us_local, 9, 30, 16, 0,  "US"),
+            "eu": _session_info(eu_local, 9,  0, 17, 30, "EU"),
+            "in": _session_info(in_local, 9, 15, 15, 30, "India"),
+        }
+    except Exception:
+        # If pytz unavailable or any error, return safe defaults
+        return {
+            "us": {"state": "unknown", "label": "—", "opens_in_min": None},
+            "eu": {"state": "unknown", "label": "—", "opens_in_min": None},
+            "in": {"state": "unknown", "label": "—", "opens_in_min": None},
+        }
+
+
 def get_market_data() -> dict:
-    """Returns VIX + 4 major market indices.
-    Primary: Yahoo Finance real indices via cookie+crumb (^VIX, ^GSPC, ^IXIC, ^GDAXI, ^NSEI).
-    Fallback: Finnhub ETF proxies (VXX/1.5, SPY, QQQ, EWG, INDA).
+    """Returns VIX + VSTOXX + India VIX + 4 market indices + session status.
+    Primary: Yahoo Finance real indices via cookie+crumb.
+    Fallback: Finnhub ETF proxies.
+    Includes market_sessions (open/closed per market) so UI can show session state.
     """
     key = "market_data"
     cached = cache_get(key, TTL_MARKET)
@@ -382,13 +470,15 @@ def get_market_data() -> dict:
 
     result = {}
 
-    # Primary: Yahoo Finance real indices
+    # Primary: Yahoo Finance real indices (includes volatility indices)
     yf_map = {
-        "vix":    "^VIX",
-        "sp500":  "^GSPC",
-        "nasdaq": "^IXIC",
-        "dax":    "^GDAXI",
-        "nifty":  "^NSEI",
+        "vix":       "^VIX",
+        "vstoxx":    "^V2TX",      # European Volatility Index
+        "india_vix": "^INDIAVIX",  # India NSE VIX
+        "sp500":     "^GSPC",
+        "nasdaq":    "^IXIC",
+        "dax":       "^GDAXI",
+        "nifty":     "^NSEI",
     }
     for name, sym in yf_map.items():
         meta = _yf_chart(sym)
@@ -406,6 +496,7 @@ def get_market_data() -> dict:
         "nasdaq": ("QQQ",  1.0),
         "dax":    ("EWG",  1.0),
         "nifty":  ("INDA", 1.0),
+        # No Finnhub fallback for VSTOXX / India VIX — leave as 0 if yf fails
     }
     if fh:
         for name, (sym, div) in etf_fallbacks.items():
@@ -418,7 +509,7 @@ def get_market_data() -> dict:
                 except Exception:
                     result[name] = {"price": 0, "change_pct": 0}
 
-    # Ensure all keys exist
+    # Ensure all keys exist (vstoxx/india_vix may be 0 if yf doesn't carry them)
     for name in yf_map:
         result.setdefault(name, {"price": 0, "change_pct": 0})
 
@@ -431,6 +522,7 @@ def get_market_data() -> dict:
         status = {"label": "Market Alert",  "dot": "alert",  "color": "rose"}
 
     result["status"] = status
+    result["market_sessions"] = _get_market_sessions()
     cache_set(key, result)
     return result
 

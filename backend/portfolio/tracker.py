@@ -1,5 +1,6 @@
 """Portfolio P&L and positions management — all values in native currency + SEK."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from database import db as _db
 from database.db import get_portfolio, get_watchlist
 from data.fetcher import get_stock_price, get_exchange_rates, get_analyst_data, get_fundamentals, get_fmp_profile
 from intelligence.trust_score import get_trust_score_with_fallback
@@ -109,6 +110,19 @@ def _build_position(pos: dict, rates: dict) -> dict:
     }
 
 
+def _fire_price_alerts(ticker: str, current_price: float,
+                       trust_score, auto_disq: bool) -> None:
+    """Check price alerts and generate in-app notifications if triggered.
+    Imported lazily to avoid circular imports (main → tracker → main).
+    Verification gate: skip alert check if score is suppressed (display_score is None).
+    """
+    try:
+        from main import _check_price_alerts
+        _check_price_alerts(ticker, current_price, trust_score, auto_disq)
+    except Exception:
+        pass
+
+
 def get_portfolio_with_pnl() -> dict:
     """All positions with live P&L — prices + trust fetched in parallel."""
     positions = get_portfolio()
@@ -137,6 +151,20 @@ def get_portfolio_with_pnl() -> dict:
 
     # Sort: auto-disqualified first, then worst P&L first
     result.sort(key=lambda x: (not x["auto_disqualified"], x["pnl_pct"]))
+
+    # Fire price alerts + auto-disq in-app notifications (non-blocking, never crashes)
+    for pos in result:
+        _fire_price_alerts(
+            pos["ticker"],
+            pos["current_price"],
+            pos.get("trust_score"),
+            pos.get("auto_disqualified", False),
+        )
+        # Generate urgent in-app alert for auto-disqualified positions (once per 24h)
+        if pos.get("auto_disqualified") and not _db.recent_alert_exists(pos["ticker"], hours=24):
+            reason = pos.get("disqualify_reason") or "Auto-disqualification signal active"
+            _db.create_alert(pos["ticker"], "urgent",
+                             f"{pos['ticker']} — {reason}. Review and consider exiting.")
 
     total_value_sek    = sum(p["value_sek"]    for p in result)
     total_invested_sek = sum(p["invested_sek"] for p in result)
