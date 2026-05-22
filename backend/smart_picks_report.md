@@ -1,110 +1,104 @@
 # StockPulse — Smart Picks Scan Report
 
-**Generated:** 2026-05-20 03:24 UTC
-**Universe:** 410 tickers · 11 GICS sectors
-**Final verified picks:** 6 main + 0 dip
+**Generated:** 2026-05-22 17:00  
+**Universe:** 410 tickers · 11 GICS sectors  
+**Fetched successfully:** 397/410 (97%)  
+**Fetch failures:** 13  
+**Final picks:** 13 main + 0 dip  
 
 ---
 
-## Important: yfinance Rate-Limit Note
+## Data Fetch Results
 
-This standalone scan runs ALL 410 tickers in parallel without a warm cache.
-yfinance free-tier throttles bulk parallel requests with HTTP 429 errors after ~30
-simultaneous calls. As a result, ~350/410 tickers returned incomplete data and were
-skipped (not because they failed filter gates, but because the API refused the data).
+| | Count | % of Universe |
+|---|---:|:---:|
+| Tickers scanned | 410 | 100% |
+| Price fetched successfully | 397 | 97% |
+| Fetch failures (rate-limited / delisted) | 13 | 3% |
 
-**In production this does not happen:** The FastAPI server's in-memory cache (15-min TTL)
-means each ticker is fetched once and reused. Portfolio/watchlist views pre-warm the
-cache organically. The `/api/picks` endpoint fires at most once per 60 minutes.
-
-The 6 picks below are **fully verified** — they had complete data and passed all gates.
+**Failed tickers (sample):** ANSS, JNPR, LTIM.NS, MMC, DFS, TATAMOTORS.NS, K, DANO.PA, HES, MRO, BASF.DE, IPG, ATVI
 
 ---
 
-## Filter Gate Pass Rates (cold-scan — uncached)
+## Filter Gate Pass Rates
 
-| Gate | Count | Notes |
-|------|------:|-------|
-| Universe scanned | 410 | 11 GICS sectors |
-| Price data returned | 397 | 13 delisted/unavailable |
-| Fundamentals complete (no 429) | ~50 est. | ~350 skipped due to rate-limit |
-| Not auto-disqualified | — | see note above |
-| Trust score ≥ 75 (of complete data) | 6 | all 6 passed verify_pick() |
-| **Final verified picks** | **6** | honest count — no standards lowered |
-
----
-
-## Final 6 Picks — sorted by trust score
-
-| # | Ticker | Name | Sector | Score | Grade | Price | Change |
-|---|--------|------|--------|------:|-------|------:|-------:|
-| 1 | **IRM** | Iron Mountain | Real Estate | 78 | Strong | $123.52 | -0.3% |
-| 2 | **WELL** | Welltower | Real Estate | 77 | Strong | $218.00 | +2.5% |
-| 3 | **DDOG** | Datadog | Information Technology | 76 | Strong | $215.15 | +3.0% |
-| 4 | **AMD** | Advanced Micro Devices | Information Technology | 75 | Strong | $414.05 | -1.6% |
-| 5 | **NVDA** | NVIDIA | Information Technology | 75 | Strong | $220.61 | -0.8% |
-| 6 | **PLTR** | Palantir Technologies | Information Technology | 75 | Strong | $135.26 | +0.1% |
-
-### Why these 6?
-
-- **IRM (78)** — Real Estate / data centre REIT. Strong dividend, consistent FFO growth, institutional accumulation.
-- **WELL (77)** — Senior housing REIT. Demographic tailwind (aging population), revenue growing, no going-concern flags.
-- **DDOG (76)** — Cloud monitoring. Revenue growth 25%+, no dilution flags, analyst majority BUY, approaching profitability.
-- **AMD (75)** — Semis. AI GPU ramp (MI300X), revenue growth re-accelerating after 2023 trough, insider net positive.
-- **NVDA (75)** — Semis. Dominant AI infrastructure position; data centre revenue growing >4× YoY. High PE baked in.
-- **PLTR (75)** — AI/gov software. First-time GAAP profitable, US commercial revenue +70% YoY, large-enterprise wins.
+| Gate | Passed | % of Universe |
+|------|-------:|:-------------:|
+| Universe scanned              |  410 | 100%  |
+| 1 · Price data returned       |  397 |  96%  |
+| 2 · Not auto-disqualified     |  382 |  93%  |
+| 3 · Trust score ≥ 75          |   13 |   3%  |
+| 4 · verify_pick() P1–P5 passed|   13 |   3%  |
+| **Final top-15 picks**        | **13**  | —     |
+| Buy-the-dip picks (≥65, –4%+) |    0 | —     |
 
 ---
 
-## Sector Distribution
+## Final Top 15 Picks (main · sorted by trust score)
+
+| # | Ticker | Name | Sector | Score | Grade | Price | Chg% |
+|---|--------|------|--------|------:|-------|------:|-----:|
+|  1 | **APH** | APH | Information Technology | 86 | Strong | $124.86 | +1.5% |
+|  2 | **STX** | STX | Information Technology | 83 | Strong | $810.46 | +7.9% |
+|  3 | **LLY** | LLY | Health Care | 80 | Strong | $1041.65 | +2.2% |
+|  4 | **MU** | MU | Information Technology | 80 | Strong | $762.10 | +4.1% |
+|  5 | **IRM** | IRM | Real Estate | 78 | Strong | $127.33 | +1.2% |
+|  6 | **WDC** | WDC | Information Technology | 77 | Strong | $486.46 | +5.8% |
+|  7 | **WELL** | WELL | Real Estate | 77 | Strong | $216.01 | -1.2% |
+|  8 | **DDOG** | DDOG | Information Technology | 76 | Strong | $218.04 | +2.7% |
+|  9 | **PODD** | PODD | Health Care | 76 | Strong | $156.89 | +0.2% |
+| 10 | **AMD** | AMD | Information Technology | 75 | Strong | $449.59 | +0.5% |
+| 11 | **NVDA** | NVDA | Information Technology | 75 | Strong | $219.51 | -1.8% |
+| 12 | **PLTR** | PLTR | Information Technology | 75 | Strong | $137.41 | +0.2% |
+| 13 | **ROKU** | ROKU | Communication Services | 75 | Strong | $125.08 | +0.7% |
+
+---
+
+## Buy-the-Dip Picks (trust ≥ 65, down ≥ 4% today)
+
+_No dip picks today — no qualifying stocks down ≥ 4%._
+
+---
+
+## Sector Distribution of Picks
 
 | Sector | Count |
 |--------|------:|
-| Information Technology | 4 |
+| Information Technology | 8 |
+| Health Care | 2 |
 | Real Estate | 2 |
+| Communication Services | 1 |
 
 ---
 
-## No "Other" Category
+## Auto-Disqualified (blocked from picks)
 
-Every pick has a proper GICS sector. The `_get_sector()` function resolves sector via:
-1. Hardcoded `_SECTOR_MAP` (410 tickers, all 11 GICS sectors)
-2. yfinance `info.sector` → mapped through `_YF_TO_GICS` dict
-3. Final fallback: "Diversified" (never "Other")
+Stocks that failed at Gate 2 — auto-disqualified regardless of score.
 
-User-added tickers not in the map (e.g. STX) now resolve via yfinance sector data.
-
----
-
-## Buy-the-Dip Picks
-
-_None today — no qualifying stocks (trust ≥ 65) down ≥ 4%._
+| Ticker | Score | Reason |
+|--------|------:|--------|
+| MRNA | 0 | Severe losses with declining revenue — going concern risk |
 
 ---
 
-## Verification Gates (applied to all 6 picks)
+## Verification Notes
 
-| Gate | Rule |
-|------|------|
-| P1 | `data_quality` ≠ `unavailable` |
-| P2 | `total_score ≥ 75` |
-| P3 | `auto_disqualified = False` |
-| P4 | `market_cap > 0` |
-| P5 | Score ≥ 90 requires `market_cap > $1B` |
+Every pick passed the following gates before inclusion:
 
-All 6 picks passed P1–P5 in `verify_pick()`.
+- **P1 — Data quality**: `data_quality` not `unavailable`
+- **P2 — Score threshold**: `total_score ≥ 75`
+- **P3 — No auto-disqualification**: `auto_disqualified = False`
+- **P4 — Market cap present**: `market_cap > 0`
+- **P5 — Large-cap sanity floor**: score ≥ 90 requires market cap > $1 B
 
----
+Dip picks (trust ≥ 65, down ≥ 4%) bypass P2 threshold but must still pass P1/P3.
 
-## Production Scan Behaviour
+## Rate Limiting Strategy
 
-The live `/api/picks` endpoint:
-- Scans portfolio + watchlist + user-added picks universe + 410-ticker curated universe
-- Uses **5 parallel workers** (reduced from 20 to avoid 429s)
-- Result cached for **60 minutes** — no churn on repeated page loads
-- Serves the cached result instantly on subsequent calls within the TTL window
-- Print logs: `[PICKS] Scanning N tickers …` and `[PICKS] N passed all gates` visible in server logs
+- Finnhub: token bucket 50 calls/min (free tier limit = 60)
+- yfinance Python lib: serialised lock + 0.8s gap between calls
+- Yahoo Finance REST: semaphore(3) concurrent + exponential backoff on 429
+- Scan: batches of 50 tickers, 2 workers, 20s pause between batches
+- Disk cache: fundamentals + insider data persisted 24h to .scan_cache.json
 
----
-
-_Report generated 2026-05-20 03:24 UTC_
+_Report generated 2026-05-22 17:00_

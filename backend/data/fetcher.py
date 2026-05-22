@@ -7,9 +7,18 @@ Primary sources:
 
 Yahoo Finance cookie+crumb auth lets us get real ^VIX, ^GSPC, ^IXIC, ^GDAXI, ^NSEI.
 Falls back to Finnhub ETF proxies (SPY, QQQ, EWG, INDA, VXX) if Yahoo is blocked.
+
+Rate limiting:
+  - Finnhub free tier: 60 calls/min. We use a token bucket capped at 50/min (safety margin).
+    All Finnhub client calls go through _fh_call() which acquires a token first.
+  - yfinance Python library: no published limit but bursts trigger 429s. Serialised via
+    _YF_LIB_LOCK so only one thread calls yfinance at a time, with 0.8s between calls.
+  - Yahoo Finance REST (v8/v10): max 3 concurrent requests via _YF_REST_SEM.
+    Both endpoints retry with exponential backoff (1s → 5s → 15s) on HTTP 429.
 """
 import os
 import time as _time
+import threading
 import requests
 import finnhub
 from datetime import datetime, timedelta, timezone
@@ -26,6 +35,73 @@ _fh_client = None
 _yf_session = None
 _yf_crumb = None
 _yf_crumb_ts = 0.0
+
+# ── Rate limiters ─────────────────────────────────────────────────────────────
+
+class _TokenBucket:
+    """Thread-safe token bucket for API rate limiting."""
+    def __init__(self, rate_per_min: float):
+        self._rate = rate_per_min / 60.0   # tokens per second
+        self._tokens = float(rate_per_min) # start full
+        self._max = float(rate_per_min)
+        self._last = _time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self):
+        with self._lock:
+            now = _time.monotonic()
+            elapsed = now - self._last
+            self._last = now
+            self._tokens = min(self._max, self._tokens + elapsed * self._rate)
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                return
+            # Not enough tokens — calculate exact wait and sleep outside the lock
+            wait = (1.0 - self._tokens) / self._rate
+            self._tokens = 0.0
+        _time.sleep(wait)
+
+
+# Finnhub: 50 calls/min (free tier limit is 60; 50 gives a safety margin)
+_FH_LIMITER = _TokenBucket(rate_per_min=50)
+
+# yfinance Python library: serialise to 1 concurrent call + 0.8s gap
+_YF_LIB_LOCK = threading.Semaphore(1)
+_YF_LIB_LAST = [0.0]           # mutable so the inner func can update it
+_YF_LIB_GAP = 0.8              # seconds between yfinance lib calls
+
+# Yahoo Finance REST (v8/v10): max 3 concurrent requests
+_YF_REST_SEM = threading.Semaphore(3)
+
+
+def _fh_call(method, *args, **kwargs):
+    """Execute a Finnhub client method with rate limiting.
+    Usage: _fh_call(fh.quote, symbol)  →  fh.quote(symbol) after acquiring a token.
+    """
+    _FH_LIMITER.acquire()
+    return method(*args, **kwargs)
+
+
+def _yf_rest_get(url: str, session=None, timeout=10) -> requests.Response | None:
+    """GET a Yahoo Finance REST URL with semaphore + exponential backoff on 429."""
+    with _YF_REST_SEM:
+        for attempt, wait in enumerate([0, 1, 5, 15]):
+            if wait:
+                _time.sleep(wait)
+            try:
+                r = (session or requests).get(url, headers=_HEADERS, timeout=timeout)
+                if r.status_code == 200:
+                    return r
+                if r.status_code == 429:
+                    if attempt < 3:
+                        continue  # retry with longer wait
+                    return None
+                if r.status_code in (401, 403, 404):
+                    return None   # no point retrying auth/not-found errors
+            except requests.RequestException:
+                if attempt >= 2:
+                    return None
+        return None
 
 _HEADERS = {
     "User-Agent": (
@@ -71,18 +147,17 @@ def _get_yf_auth() -> tuple:
 
 
 def _yf_chart(symbol: str) -> dict:
-    """Yahoo Finance v8 chart. Tries cookie+crumb auth first, then unauthenticated."""
+    """Yahoo Finance v8 chart. Tries cookie+crumb auth first, then unauthenticated.
+    Uses _yf_rest_get which enforces the shared semaphore and retries on 429."""
     session, crumb = _get_yf_auth()
     base = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=5m"
-    for url in [
-        f"{base}&crumb={crumb}" if crumb else None,
-        base,
-    ]:
+    urls = [f"{base}&crumb={crumb}" if crumb else None, base]
+    for url in urls:
         if url is None:
             continue
         try:
-            r = (session or requests).get(url, headers=_HEADERS, timeout=10)
-            if r.status_code == 200:
+            r = _yf_rest_get(url, session=session, timeout=10)
+            if r is not None:
                 results = r.json().get("chart", {}).get("result")
                 if results:
                     return results[0].get("meta", {})
@@ -94,7 +169,7 @@ def _yf_chart(symbol: str) -> dict:
 def _yf_quotesummary(ticker: str) -> dict:
     """Yahoo Finance v10 quoteSummary — returns rich fundamentals + analyst target price.
     More reliable than Finnhub for international stocks (.ST, .AS, .L etc.).
-    Uses cookie+crumb auth. Returns merged financialData + defaultKeyStatistics dict.
+    Uses cookie+crumb auth and _yf_rest_get (semaphore + 429 backoff).
     """
     key = f"yf_qs:{ticker}"
     cached = cache_get(key, TTL_FUNDAMENTALS)
@@ -107,29 +182,27 @@ def _yf_quotesummary(ticker: str) -> dict:
         f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
         f"?modules={modules}&corsDomain=finance.yahoo.com"
     )
-    for url in [
-        f"{base}&crumb={crumb}" if crumb else None,
-        base,
-    ]:
+    urls = [f"{base}&crumb={crumb}" if crumb else None, base]
+    for url in urls:
         if url is None:
             continue
         try:
-            r = (session or requests).get(url, headers=_HEADERS, timeout=10)
-            if r.status_code == 200:
-                qs = r.json().get("quoteSummary", {})
-                if qs.get("error"):
-                    break
-                results = qs.get("result") or []
-                if results:
-                    fd = results[0].get("financialData", {})
-                    ks = results[0].get("defaultKeyStatistics", {})
-                    # Merge both modules into one flat dict of raw values
-                    merged = {}
-                    for d in (fd, ks):
-                        for k, v in d.items():
-                            merged[k] = v.get("raw") if isinstance(v, dict) else v
-                    cache_set(key, merged)
-                    return merged
+            r = _yf_rest_get(url, session=session, timeout=10)
+            if r is None:
+                continue
+            qs = r.json().get("quoteSummary", {})
+            if qs.get("error"):
+                break
+            results = qs.get("result") or []
+            if results:
+                fd = results[0].get("financialData", {})
+                ks = results[0].get("defaultKeyStatistics", {})
+                merged = {}
+                for d in (fd, ks):
+                    for k, v in d.items():
+                        merged[k] = v.get("raw") if isinstance(v, dict) else v
+                cache_set(key, merged, ttl=TTL_FUNDAMENTALS)
+                return merged
         except Exception:
             continue
 
@@ -141,6 +214,10 @@ def _yf_quotesummary(ticker: str) -> dict:
 def _yf_lib_fundamentals(ticker: str) -> dict:
     """Use yfinance Python library for international stock fundamentals (.ST, .AS, .L etc.).
 
+    Serialised via _YF_LIB_LOCK: only one thread calls yfinance at a time, with a
+    minimum 0.8s gap between calls. This prevents the burst 429s that caused 85% of
+    the 410-ticker universe to fail in parallel scans.
+
     NOTE: yfinance 0.2+ moved price fields (regularMarketPrice, currentPrice) OUT of
     info and into fast_info. Do NOT check for price fields — check fundamental fields only.
     This was the root cause of Stockholm stocks scoring 2/100 (always returned {} before).
@@ -149,48 +226,61 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
     cached = cache_get(key, TTL_FUNDAMENTALS)
     if cached is not None:
         return cached
-    try:
-        import yfinance as yf
-        t = yf.Ticker(ticker)
-        info = t.info or {}
-        # Extract fundamentals — do NOT gate on price fields (not in info in yfinance 0.2+)
-        market_cap = int(info.get("marketCap") or 0)
-        if not market_cap:
-            # yfinance 0.2+ puts market cap in fast_info
-            try:
-                market_cap = int(getattr(t.fast_info, "market_cap", 0) or 0)
-            except Exception:
-                pass
-        revenue_growth = float(info.get("revenueGrowth") or 0)
-        profit_margins = float(info.get("profitMargins") or 0)
-        gross_margins  = float(info.get("grossMargins") or 0)
-        # Verify we got at least ONE useful fundamental value
-        has_data = bool(
-            market_cap
-            or abs(revenue_growth) > 0.001
-            or abs(profit_margins) > 0.001
-            or abs(gross_margins) > 0.001
-        )
-        if not has_data:
+
+    with _YF_LIB_LOCK:
+        # Enforce minimum gap between consecutive yfinance calls
+        since_last = _time.monotonic() - _YF_LIB_LAST[0]
+        if since_last < _YF_LIB_GAP:
+            _time.sleep(_YF_LIB_GAP - since_last)
+        _YF_LIB_LAST[0] = _time.monotonic()
+
+        # Re-check cache inside lock — another thread may have fetched while we waited
+        cached2 = cache_get(key, TTL_FUNDAMENTALS)
+        if cached2 is not None:
+            return cached2
+
+        try:
+            import yfinance as yf
+            t = yf.Ticker(ticker)
+            info = t.info or {}
+            # Extract fundamentals — do NOT gate on price fields (not in info in yfinance 0.2+)
+            market_cap = int(info.get("marketCap") or 0)
+            if not market_cap:
+                # yfinance 0.2+ puts market cap in fast_info
+                try:
+                    market_cap = int(getattr(t.fast_info, "market_cap", 0) or 0)
+                except Exception:
+                    pass
+            revenue_growth = float(info.get("revenueGrowth") or 0)
+            profit_margins = float(info.get("profitMargins") or 0)
+            gross_margins  = float(info.get("grossMargins") or 0)
+            # Verify we got at least ONE useful fundamental value
+            has_data = bool(
+                market_cap
+                or abs(revenue_growth) > 0.001
+                or abs(profit_margins) > 0.001
+                or abs(gross_margins) > 0.001
+            )
+            if not has_data:
+                cache_set(key, {})
+                return {}
+            result = {
+                "revenue_growth":  round(revenue_growth, 4),
+                "profit_margins":  round(profit_margins, 4),
+                "gross_margins":   round(gross_margins, 4),
+                "gaap_profitable": profit_margins > 0,
+                "market_cap":      market_cap,
+                "pe_ratio":        round(float(p), 2) if (p := info.get("trailingPE") or info.get("forwardPE")) else None,
+                "w52_high":        info.get("fiftyTwoWeekHigh"),
+                "w52_low":         info.get("fiftyTwoWeekLow"),
+                "earnings_growth": round(float(info.get("earningsGrowth") or 0), 4),
+                "sector":          info.get("sector") or None,
+            }
+            cache_set(key, result, ttl=TTL_FUNDAMENTALS)
+            return result
+        except Exception:
             cache_set(key, {})
             return {}
-        result = {
-            "revenue_growth":  round(revenue_growth, 4),
-            "profit_margins":  round(profit_margins, 4),
-            "gross_margins":   round(gross_margins, 4),
-            "gaap_profitable": profit_margins > 0,
-            "market_cap":      market_cap,
-            "pe_ratio":        round(float(p), 2) if (p := info.get("trailingPE") or info.get("forwardPE")) else None,
-            "w52_high":        info.get("fiftyTwoWeekHigh"),
-            "w52_low":         info.get("fiftyTwoWeekLow"),
-            "earnings_growth": round(float(info.get("earningsGrowth") or 0), 4),
-            "sector":          info.get("sector") or None,
-        }
-        cache_set(key, result)
-        return result
-    except Exception:
-        cache_set(key, {})
-        return {}
 
 
 def _yf_earnings_date(ticker: str) -> str | None:
@@ -306,10 +396,10 @@ def get_stock_price(ticker: str) -> dict:
     fh = _finnhub()
     fh_sym = _finnhub_symbol(ticker)
 
-    # Primary: Finnhub
+    # Primary: Finnhub (rate-limited via _fh_call)
     if fh and fh_sym:
         try:
-            q = fh.quote(fh_sym)
+            q = _fh_call(fh.quote, fh_sym)
             price = float(q.get("c") or 0)
             if price > 0:
                 prev = float(q.get("pc") or price)
@@ -503,7 +593,7 @@ def get_market_data() -> dict:
         for name, (sym, div) in etf_fallbacks.items():
             if name not in result:
                 try:
-                    q = fh.quote(sym)
+                    q = _fh_call(fh.quote, sym)
                     price = float(q.get("c") or 0)
                     chg = float(q.get("dp") or 0)
                     result[name] = {"price": round(price / div, 2), "change_pct": round(chg, 2)}
@@ -553,7 +643,7 @@ def _finnhub_fundamentals_for(ticker: str) -> dict:
     if not fh:
         return result
     try:
-        bf = fh.company_basic_financials(ticker, "all")
+        bf = _fh_call(fh.company_basic_financials, ticker, "all")
         m = (bf or {}).get("metric", {})
         if m:
             rev = float(m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y") or 0)
@@ -584,7 +674,7 @@ def _finnhub_fundamentals_for(ticker: str) -> dict:
     try:
         fh2 = _finnhub()
         if fh2:
-            eq = fh2.company_earnings(ticker, limit=8)
+            eq = _fh_call(fh2.company_earnings, ticker, limit=8)
             if eq:
                 result["earnings_history"] = eq[:4]
                 last = eq[0]
@@ -602,7 +692,7 @@ def _finnhub_fundamentals_for(ticker: str) -> dict:
         if fh3:
             today_str  = datetime.now().strftime("%Y-%m-%d")
             ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-            cal = fh3.earnings_calendar(_from=today_str, to=ninety_str, symbol=ticker)
+            cal = _fh_call(fh3.earnings_calendar, _from=today_str, to=ninety_str, symbol=ticker)
             cal_list = (cal or {}).get("earningsCalendar", [])
             if cal_list:
                 result["next_earnings_date"] = cal_list[0].get("date")
@@ -757,7 +847,7 @@ def get_fundamentals(ticker: str) -> dict:
 
     if fh:
         try:
-            bf = fh.company_basic_financials(clean, "all")
+            bf = _fh_call(fh.company_basic_financials, clean, "all")
             m = (bf or {}).get("metric", {})
             if m:
                 # Finnhub returns values in PERCENTAGE form (e.g. 65.47 means 65.47%)
@@ -794,7 +884,7 @@ def get_fundamentals(ticker: str) -> dict:
         # Earnings history + surprise (US & EU only)
         if not ticker.endswith((".NS", ".BO")):
             try:
-                eq = fh.company_earnings(clean, limit=8)
+                eq = _fh_call(fh.company_earnings, clean, limit=8)
                 if eq:
                     result["earnings_history"] = eq[:4]
                     last = eq[0]
@@ -811,7 +901,7 @@ def get_fundamentals(ticker: str) -> dict:
             try:
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 ninety_str = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-                cal = fh.earnings_calendar(_from=today_str, to=ninety_str, symbol=clean)
+                cal = _fh_call(fh.earnings_calendar, _from=today_str, to=ninety_str, symbol=clean)
                 cal_list = (cal or {}).get("earningsCalendar", [])
                 if cal_list:
                     result["next_earnings_date"] = cal_list[0].get("date")
@@ -967,7 +1057,7 @@ def get_insider_data(ticker: str) -> dict:
     try:
         cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
         today = datetime.now().strftime("%Y-%m-%d")
-        txns = fh.stock_insider_transactions(clean, cutoff, today)
+        txns = _fh_call(fh.stock_insider_transactions, clean, cutoff, today)
         if txns and txns.get("data"):
             for t in txns["data"]:
                 change = t.get("change", 0) or 0
@@ -984,7 +1074,7 @@ def get_insider_data(ticker: str) -> dict:
         pass
 
     try:
-        bf = fh.company_basic_financials(clean, "all")
+        bf = _fh_call(fh.company_basic_financials, clean, "all")
         m = (bf or {}).get("metric", {})
         short_pct = m.get("shortInterestSharesOutstanding")
         if short_pct:
@@ -993,7 +1083,7 @@ def get_insider_data(ticker: str) -> dict:
         pass
 
     try:
-        own = fh.ownership(clean, limit=10)
+        own = _fh_call(fh.ownership, clean, limit=10)
         holders = (own or {}).get("ownership", [])
         if holders:
             total_pct = sum(float(h.get("share", 0) or 0) for h in holders[:5])
@@ -1001,7 +1091,7 @@ def get_insider_data(ticker: str) -> dict:
     except Exception:
         pass
 
-    cache_set(key, result)
+    cache_set(key, result, ttl=TTL_INSIDER)
     return result
 
 
@@ -1070,7 +1160,7 @@ def get_news(ticker: str, days: int = 7) -> list:
             from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
             to_date   = datetime.now().strftime("%Y-%m-%d")
             clean = ticker.replace(".NS", "").replace(".BO", "")
-            raw = fh.company_news(clean, _from=from_date, to=to_date)
+            raw = _fh_call(fh.company_news, clean, _from=from_date, to=to_date)
             finnhub_news = raw[:10] if raw else []
         except Exception:
             pass
