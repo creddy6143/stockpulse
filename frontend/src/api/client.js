@@ -71,6 +71,9 @@ export const markAlertRead = (id) => request(`/api/alerts/${id}/read`, { method:
 // ── PICKS ────────────────────────────────────────────────────────────────────
 
 export const getPicks = () => request('/api/picks');
+export const refreshPicksScan = () => request('/api/picks/refresh', { method: 'POST' });
+export const getPicksStatus = () => request('/api/picks/status');
+export const getPicksBySector = (sector) => request(`/api/picks/sector/${encodeURIComponent(sector)}`);
 export const getDisqualified = () => request('/api/picks/disqualified');
 export const getPicksUniverse = () => request('/api/picks/universe');
 export const addPicksUniverse = (ticker) =>

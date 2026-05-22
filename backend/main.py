@@ -2,6 +2,8 @@
 import os
 import sys
 import time as _time
+import json as _json
+import threading
 from pathlib import Path
 
 # Ensure backend directory is in path
@@ -59,6 +61,9 @@ async def timing_middleware(request: Request, call_next):
 @app.on_event("startup")
 def startup():
     init_db()
+    # Auto-trigger picks scan on startup if cache is empty or older than 23 hours.
+    # Runs in background so the server starts instantly.
+    _maybe_auto_scan()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
@@ -638,59 +643,182 @@ def _score_one_ticker(ticker: str) -> dict | None:
         return None
 
 
+# ── BACKGROUND PICKS SCAN ─────────────────────────────────────────────────────
+# The scan takes 15-20 min on the free tier. It NEVER blocks an API request.
+# Results are stored in smart_picks_cache table and read back instantly.
+
+_scan_lock = threading.Lock()
+_scan_running = False
+
+
+def _run_picks_scan_background():
+    """Full curated-universe scan — runs in a daemon thread, saves to DB when done."""
+    global _scan_running
+    if not _scan_lock.acquire(blocking=False):
+        print("[PICKS] Scan already running — skipping duplicate start", flush=True)
+        return
+    try:
+        _scan_running = True
+        db.set_scan_status("running", started_at=datetime.utcnow().isoformat())
+        print("[PICKS BG] Background scan started", flush=True)
+
+        portfolio = db.get_portfolio()
+        watchlist = db.get_watchlist()
+        user_universe = db.get_picks_universe()
+        all_tickers = list(
+            {p["ticker"] for p in portfolio}
+            | {w["ticker"] for w in watchlist}
+            | set(user_universe)
+            | set(_CURATED_UNIVERSE)
+        )
+        portfolio_tickers = {p["ticker"] for p in portfolio}
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+        from data.cache import flush_disk_cache
+
+        result = []
+        batch_size = 50
+        batch_pause = 20
+        workers = 2
+        batches = [all_tickers[i:i + batch_size] for i in range(0, len(all_tickers), batch_size)]
+        print(f"[PICKS BG] {len(all_tickers)} tickers in {len(batches)} batches", flush=True)
+
+        for batch_num, batch in enumerate(batches):
+            if batch_num > 0:
+                _time.sleep(batch_pause)
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(_score_one_ticker, t): t for t in batch}
+                for future in _as_completed(futures):
+                    try:
+                        entry = future.result()
+                        if entry:
+                            result.append(entry)
+                    except Exception:
+                        pass
+
+        flush_disk_cache()
+
+        # Exclude owned stocks; sort by trust score descending
+        all_picks = [r for r in result if r["ticker"] not in portfolio_tickers]
+        all_picks.sort(key=lambda x: (-(x["trust"]["total_score"] or 0), x["ticker"]))
+
+        # Build per-sector top-10 (using ALL qualified picks, not just global top-15)
+        sector_data: dict = {}
+        for pick in all_picks:
+            sector = pick.get("sector") or "Diversified"
+            if sector not in sector_data:
+                sector_data[sector] = []
+            if len(sector_data[sector]) < 10:
+                sector_data[sector].append(pick)
+
+        db.save_picks_cache(
+            all_picks_json=_json.dumps(all_picks),
+            sector_json=_json.dumps(sector_data),
+            tickers_scanned=len(all_tickers),
+            tickers_ok=len(result),
+        )
+        print(f"[PICKS BG] Done — {len(all_picks)} picks saved to DB", flush=True)
+
+    except Exception as e:
+        print(f"[PICKS BG] Error: {e}", flush=True)
+        db.set_scan_status("error")
+    finally:
+        _scan_running = False
+        _scan_lock.release()
+
+
+def _maybe_auto_scan():
+    """Trigger background scan if cache is empty or older than 23 hours."""
+    try:
+        cache = db.get_picks_cache()
+        stale = True
+        if cache and cache.get("updated_at") and cache.get("scan_status") == "complete":
+            try:
+                dt = datetime.fromisoformat(cache["updated_at"])
+                age_hours = (datetime.utcnow() - dt).total_seconds() / 3600
+                stale = age_hours > 23
+            except Exception:
+                stale = True
+        if stale and not _scan_running:
+            print("[PICKS] Cache stale/empty — triggering background scan", flush=True)
+            threading.Thread(target=_run_picks_scan_background, daemon=True).start()
+    except Exception as e:
+        print(f"[PICKS] Auto-scan trigger failed: {e}", flush=True)
+
+
 @app.get("/api/picks")
 def picks():
-    """AI-generated smart picks — trust >= 75 OR quality buy-the-dip opportunity.
-    Scans portfolio + watchlist + user picks universe + curated universe.
-    Result cached 30 min; verdict caching (1hr) keeps AI calls minimal.
+    """Return pre-computed smart picks from DB cache — always instant (<100ms).
+    The heavy scan runs in background; see POST /api/picks/refresh to trigger manually.
     """
-    from data.cache import cache_get as cg, cache_set as cs, TTL_STRATEGY
-    cached = cg("picks:result", 60 * 60)  # 60 min cache — prevents result churn on refresh
-    if cached is not None:
-        return cached
+    cache = db.get_picks_cache()
+    if not cache or not cache.get("all_picks_json") or cache["all_picks_json"] == "[]":
+        status_info = db.get_scan_status()
+        return {
+            "picks": [],
+            "sector_picks": {},
+            "updated_at": None,
+            "scan_status": status_info.get("scan_status", "idle"),
+            "tickers_scanned": 0,
+            "tickers_ok": 0,
+        }
 
-    portfolio = db.get_portfolio()
-    watchlist = db.get_watchlist()
-    user_universe = db.get_picks_universe()
-    all_tickers = list(
-        {p["ticker"] for p in portfolio}
-        | {w["ticker"] for w in watchlist}
-        | set(user_universe)
-        | set(_CURATED_UNIVERSE)
-    )
+    all_picks = _json.loads(cache["all_picks_json"])
+    sector_picks = _json.loads(cache["sector_json"])
 
-    # Parallel scan — 5 workers keeps yfinance free-tier 429 rate-limits at bay.
-    # More workers = faster but causes "Too Many Requests" and empty result sets.
-    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
-    print(f"[PICKS] Scanning {len(all_tickers)} tickers …", flush=True)
-    result = []
-    workers = min(5, len(all_tickers))
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_score_one_ticker, t): t for t in all_tickers}
-        for future in _as_completed(futures):
-            try:
-                entry = future.result()
-                if entry:
-                    result.append(entry)
-            except Exception:
-                pass
-    print(f"[PICKS] {len(result)} passed all gates out of {len(all_tickers)} scanned", flush=True)
+    # Global top-15 = main picks (trust ≥75) capped at 15 + dips capped at 3
+    dips = [p for p in all_picks if p.get("is_dip")]
+    mains = [p for p in all_picks if not p.get("is_dip")]
+    top_picks = mains[:15] + dips[:3]
 
-    # Sort: high trust first, then alphabetically by ticker for deterministic order.
-    # Deterministic sort prevents results from changing on every refresh when scores tie.
-    dips = [r for r in result if r["is_dip"]]
-    highs = [r for r in result if not r["is_dip"]]
-    highs.sort(key=lambda x: (-(x["trust"]["total_score"] or 0), x["ticker"]))
-    dips.sort(key=lambda x: x["ticker"])
-    # Exclude stocks already in portfolio — picks are for discovery, not review of owned stocks
-    portfolio_tickers = {p["ticker"] for p in portfolio}
-    highs = [r for r in highs if r["ticker"] not in portfolio_tickers]
-    dips  = [r for r in dips  if r["ticker"] not in portfolio_tickers]
-    # Cap main picks at Top 15 to keep the list curated, not overwhelming
-    final = highs[:15] + dips[:3]
-    print(f"[PICKS] Final: {len(final)} picks ({len(highs[:15])} main + {len(dips[:3])} dips)", flush=True)
-    cs("picks:result", final)
-    return final
+    return {
+        "picks": top_picks,
+        "sector_picks": sector_picks,
+        "updated_at": cache.get("updated_at"),
+        "scan_status": cache.get("scan_status", "complete"),
+        "tickers_scanned": cache.get("tickers_scanned", 0),
+        "tickers_ok": cache.get("tickers_ok", 0),
+    }
+
+
+@app.post("/api/picks/refresh")
+def refresh_picks():
+    """Trigger a background re-scan of the full universe. Non-blocking — returns immediately."""
+    if _scan_running:
+        return {"status": "already_running", "message": "Scan already in progress"}
+    threading.Thread(target=_run_picks_scan_background, daemon=True).start()
+    return {"status": "scan_started", "message": "Background scan started"}
+
+
+@app.get("/api/picks/status")
+def picks_scan_status():
+    """Return current scan status (idle | running | complete | error) + metadata."""
+    status = db.get_scan_status()
+    return {
+        "scan_status": status.get("scan_status", "idle"),
+        "scan_started_at": status.get("scan_started_at"),
+        "scan_completed_at": status.get("scan_completed_at"),
+        "tickers_scanned": status.get("tickers_scanned", 0),
+        "tickers_ok": status.get("tickers_ok", 0),
+        "updated_at": status.get("updated_at"),
+        "is_running": _scan_running,
+    }
+
+
+@app.get("/api/picks/sector/{sector}")
+def picks_by_sector(sector: str):
+    """Return top-10 picks for a specific GICS sector from cache."""
+    cache = db.get_picks_cache()
+    if not cache or not cache.get("sector_json") or cache["sector_json"] == "{}":
+        return {"picks": [], "sector": sector, "scan_status": "idle"}
+    sector_data = _json.loads(cache["sector_json"])
+    sector_picks = sector_data.get(sector, [])
+    return {
+        "picks": sector_picks,
+        "sector": sector,
+        "count": len(sector_picks),
+        "updated_at": cache.get("updated_at"),
+    }
 
 
 @app.get("/api/picks/disqualified")

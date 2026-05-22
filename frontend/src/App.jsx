@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, clearDataCache, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert } from "./api/client";
 const BASE = process.env.REACT_APP_API_URL || '';
 
 const CSS = `
@@ -1986,28 +1986,139 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
 
 
 // ── SMART PICKS ──────────────────────────────────────
-function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks, onSetAlert}) {
+// All 11 GICS sectors — always shown even if empty
+const ALL_GICS_SECTORS = [
+  "Information Technology",
+  "Health Care",
+  "Financials",
+  "Consumer Discretionary",
+  "Consumer Staples",
+  "Industrials",
+  "Energy",
+  "Materials",
+  "Utilities",
+  "Real Estate",
+  "Communication Services",
+];
+
+// Short labels for sector pills (space-constrained mobile)
+const SECTOR_SHORT = {
+  "Information Technology": "IT",
+  "Health Care": "Health Care",
+  "Financials": "Financials",
+  "Consumer Discretionary": "Consumer Disc",
+  "Consumer Staples": "Staples",
+  "Industrials": "Industrials",
+  "Energy": "Energy",
+  "Materials": "Materials",
+  "Utilities": "Utilities",
+  "Real Estate": "Real Estate",
+  "Communication Services": "Comm Services",
+};
+
+function fmtUpdatedAt(iso) {
+  if (!iso) return null;
+  try {
+    const dt = new Date(iso + (iso.endsWith("Z") ? "" : "Z"));
+    const diffMs = Date.now() - dt.getTime();
+    const diffH = Math.floor(diffMs / 3600000);
+    if (diffH < 1) {
+      const diffM = Math.floor(diffMs / 60000);
+      return diffM <= 1 ? "just now" : `${diffM}m ago`;
+    }
+    if (diffH < 24) return `${diffH}h ago`;
+    return `${Math.floor(diffH / 24)}d ago`;
+  } catch { return null; }
+}
+
+function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
+  const open = exp === expKey;
+  const c = tc(s.trust);
+  const recColor = s.rcls==="rr-sb"?"var(--indigo)":s.rcls==="rr-b"?"var(--emerald)":"var(--amber)";
+  const recBg = s.rcls==="rr-sb"?"#eef2ff":s.rcls==="rr-b"?"var(--emerald2)":"var(--amber2)";
+  const isDip = s.is_dip;
+  return (
+    <div>
+      <div onClick={()=>setExp(open?null:expKey)}
+        style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",
+          alignItems:"center",padding:"7px 12px",borderBottom:"1px solid rgba(15,23,42,.04)",
+          cursor:"pointer",transition:"background .15s",gap:4,
+          background:open?"rgba(91,114,248,.018)":isDip?"rgba(5,150,105,.025)":"transparent"}}>
+        <div style={{minWidth:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <div style={{width:5,height:5,borderRadius:"50%",background:isDip?"var(--emerald)":recColor,flexShrink:0}}/>
+            <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
+            {isDip&&<span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 5px",borderRadius:3}}>DIP</span>}
+            {trackedSet.has(s.ticker)&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 4px",borderRadius:3}}>✓</span>}
+          </div>
+          <div style={{fontSize:8,color:"var(--t3)",marginTop:1,paddingLeft:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+        </div>
+        <div><span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:600,color:recColor,background:recBg,padding:"2px 6px",borderRadius:4}}>{s.rec}</span></div>
+        <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span></div>
+        <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"var(--emerald)"}}>{s.potential}</span></div>
+        <div style={{textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+          <span style={{fontSize:8,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+          <button onClick={e=>{e.stopPropagation();onRemove(s.ticker,e);}} style={{fontSize:8,color:"var(--t3)",background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
+        </div>
+      </div>
+      {open&&(
+        <div style={{padding:"8px 12px 10px",background:"rgba(91,114,248,.018)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
+          <div style={{height:2,borderRadius:1,background:s.grad,marginBottom:7}}/>
+          <div style={{display:"flex",gap:0,marginBottom:8,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
+            {[{l:"Business",v:s.b,m:s.bm,c:"#5b72f8"},{l:"Smart $",v:s.s,m:s.sm,c:"#7c3aed"},{l:"Momentum",v:s.m,m:s.mm,c:"#059669"}].map((p,j)=>(
+              <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:1}}>{p.l}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:"var(--t3)"}}>/{p.m}</span></div>
+                <div style={{height:2,background:"var(--t4)",borderRadius:1,marginTop:2,overflow:"hidden"}}><div style={{height:"100%",background:p.c,width:`${p.v/p.m*100}%`}}/></div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginBottom:8}}>
+            {s.sigs.slice(0,3).map((sig,j)=>(
+              <div key={j} style={{display:"flex",gap:6,fontSize:10,color:"var(--t2)",marginBottom:3,lineHeight:1.4}}>
+                <span style={{color:c,fontSize:7,flexShrink:0,marginTop:3}}>●</span>{sig}
+              </div>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
+            {[{l:"Upside",v:s.potential,c:"var(--emerald)"},{l:"Entry",v:s.entry,c:"var(--sky)"},{l:"Risk",v:s.risk,c:"var(--amber)"},{l:"When",v:s.horizon,c:"var(--t2)"}].map((st,j)=>(
+              <div key={j} style={{background:"var(--card2)",borderRadius:6,padding:"4px 5px",textAlign:"center"}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",textTransform:"uppercase",marginBottom:2}}>{st.l}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:st.c,lineHeight:1.3}}>{st.v}</div>
+              </div>
+            ))}
+          </div>
+          {onSetAlert && <button onClick={e=>{e.stopPropagation();onSetAlert(s.ticker,0,null,null);}} style={{fontSize:10,padding:"6px 10px",borderRadius:7,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontWeight:600,cursor:"pointer"}}>🔔 Set Alert</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, onTriggerScan, onSetAlert}) {
   const [exp,setExp] = useState(null);
   const [addQ,setAddQ] = useState("");
   const [addMsg,setAddMsg] = useState("");
   const [adding,setAdding] = useState(false);
   const [sectF,setSectF] = useState("All");
   const [trackedSet,setTrackedSet] = useState(new Set());
-  const PICKS = picks || [];
+  const [scanMsg,setScanMsg] = useState("");
+
+  const PD = picksData || {picks:[], sector_picks:{}, updated_at:null, scan_status:"idle"};
+  const PICKS = PD.picks || [];
+  const SECTOR_PICKS = PD.sector_picks || {};
   const DISQ = disq || [];
   const acc = accuracy || "—";
+  const isScanning = PD.scan_status === "running";
+  const updatedLabel = fmtUpdatedAt(PD.updated_at);
+  const hasData = PICKS.length > 0 || Object.keys(SECTOR_PICKS).length > 0;
 
   useEffect(()=>{
     getPicksUniverse().then(v=>setTrackedSet(new Set(v||[]))).catch(()=>{});
-  }, [picks]);
+  }, [picksData]);
 
-  // Sectors that have qualifying picks only
-  const sectors = ["All", ...Array.from(new Set(PICKS.map(p=>p.sector||"Other"))).sort()];
-  const filteredPicks = sectF === "All" ? PICKS : PICKS.filter(p=>(p.sector||"Other")===sectF);
-  // Group by sector when showing All
-  const sectorGroups = sectF === "All"
-    ? Object.entries(PICKS.reduce((acc,p)=>{ const s=p.sector||"Other"; (acc[s]=acc[s]||[]).push(p); return acc; },{})).sort(([a],[b])=>a.localeCompare(b))
-    : null;
+  // Current picks to show based on selected sector
+  const currentPicks = sectF === "All" ? PICKS : (SECTOR_PICKS[sectF] || []);
 
   const handleAdd = (directTicker) => {
     const t = (directTicker || addQ).trim().toUpperCase();
@@ -2038,6 +2149,14 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks, onSet
       .catch(()=>{});
   };
 
+  const handleTriggerScan = () => {
+    setScanMsg("Scan started — results will appear automatically in ~20 min");
+    if(onTriggerScan) onTriggerScan();
+  };
+
+  // Count picks per sector for badge display
+  const sectorCount = (s) => (SECTOR_PICKS[s] || []).length;
+
   return (
     <div className="pad" style={{paddingTop:12}}>
 
@@ -2048,12 +2167,24 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks, onSet
           <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--emerald)",background:"var(--emerald2)",border:"1px solid #a7f3d0",padding:"2px 7px",borderRadius:8,fontWeight:600}}>{acc} · 90d</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{loading?"Loading…":`${PICKS.length} active`}</span>
-          <button onClick={()=>{clearDataCache().catch(()=>{});if(onRefreshPicks)onRefreshPicks();}}
-            title="Clear cache and refresh all scores"
-            style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",background:"none",border:"1px solid var(--t4)",borderRadius:6,padding:"2px 6px",cursor:"pointer"}}>↻</button>
+          {updatedLabel && !isScanning && (
+            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>Updated {updatedLabel}</span>
+          )}
+          {isScanning && (
+            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--indigo)",display:"flex",alignItems:"center",gap:4}}>
+              <span style={{display:"inline-block",width:8,height:8,border:"1.5px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+              Scanning…
+            </span>
+          )}
+          <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{loading?"…":`${PICKS.length}`}</span>
+          <button onClick={handleTriggerScan} disabled={isScanning}
+            title="Start a fresh scan of the full universe"
+            style={{fontFamily:"var(--mono)",fontSize:9,color:isScanning?"var(--t3)":"var(--indigo)",background:"none",border:"1px solid var(--t4)",borderRadius:6,padding:"2px 6px",cursor:isScanning?"default":"pointer",opacity:isScanning?.5:1}}>↻</button>
         </div>
       </div>
+
+      {/* Scan message */}
+      {scanMsg&&<div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",marginBottom:8,paddingLeft:4}}>{scanMsg}</div>}
 
       {/* Add stock to picks universe */}
       <div style={{background:"var(--white)",borderRadius:"var(--rm)",padding:"10px 12px",marginBottom:10,border:"1px solid rgba(91,114,248,.1)",display:"flex",gap:8,alignItems:"center"}}>
@@ -2061,235 +2192,121 @@ function SmartPicksScreen({picks, disq, accuracy, loading, onRefreshPicks, onSet
           onKeyDown={e=>e.key==="Enter"&&handleAdd()}
           placeholder="Track a stock — e.g. NVDA, AXON…"
           style={{flex:1,border:"none",outline:"none",fontFamily:"var(--dm)",fontSize:12,color:"var(--t1)",background:"none"}}/>
-        <button onClick={handleAdd} disabled={adding}
+        <button onClick={()=>handleAdd()} disabled={adding}
           style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",border:"none",padding:"5px 11px",borderRadius:6,cursor:"pointer",opacity:adding?.6:1}}>
           {adding?"…":"+ Track"}
         </button>
       </div>
       {addMsg&&<div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",marginBottom:8,paddingLeft:4}}>{addMsg}</div>}
 
-      {/* Sector filter pills */}
-      {PICKS.length > 0 && (
+      {/* First-run empty state — no data yet */}
+      {!hasData && !loading && !isScanning && (
+        <div style={{background:"var(--white)",borderRadius:12,padding:"24px 16px",textAlign:"center",marginBottom:12,border:"1px solid rgba(91,114,248,.1)"}}>
+          <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,color:"var(--t1)",marginBottom:6}}>No picks yet</div>
+          <div style={{fontFamily:"var(--dm)",fontSize:11,color:"var(--t2)",marginBottom:14,lineHeight:1.5}}>Tap the button to scan 400+ quality stocks and find the best opportunities across all 11 sectors.</div>
+          <button onClick={handleTriggerScan}
+            style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",border:"none",padding:"8px 18px",borderRadius:8,cursor:"pointer"}}>
+            Generate Picks
+          </button>
+        </div>
+      )}
+
+      {/* Scanning in progress banner */}
+      {!hasData && isScanning && (
+        <div style={{background:"var(--white)",borderRadius:12,padding:"20px",textAlign:"center",marginBottom:10,border:"1px solid rgba(91,114,248,.1)"}}>
+          <span style={{display:"inline-block",width:14,height:14,border:"2px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginRight:8,verticalAlign:"middle"}}/>
+          <span style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--t2)"}}>Generating your first picks scan — results appear here automatically</span>
+        </div>
+      )}
+
+      {/* Sector filter pills — All 11 GICS sectors always shown */}
+      {(hasData || isScanning) && (
         <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto",scrollbarWidth:"none",paddingBottom:2}}>
-          {sectors.map(s=>(
-            <button key={s} onClick={()=>{setSectF(s);setExp(null);}}
-              style={{padding:"3px 9px",borderRadius:14,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:9,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,transition:"all .15s",
-                borderColor:sectF===s?"var(--indigo)":"var(--t4)",
-                background:sectF===s?"linear-gradient(135deg,var(--indigo),var(--sky))":"var(--white)",
-                color:sectF===s?"#fff":"var(--t3)"}}>
-              {s}
-            </button>
-          ))}
+          {/* All pill */}
+          <button onClick={()=>{setSectF("All");setExp(null);}}
+            style={{padding:"3px 9px",borderRadius:14,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:9,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,transition:"all .15s",
+              borderColor:sectF==="All"?"var(--indigo)":"var(--t4)",
+              background:sectF==="All"?"linear-gradient(135deg,var(--indigo),var(--sky))":"var(--white)",
+              color:sectF==="All"?"#fff":"var(--t3)"}}>
+            All {PICKS.length > 0 && <span style={{opacity:.7}}>({PICKS.length})</span>}
+          </button>
+          {/* 11 GICS sectors */}
+          {ALL_GICS_SECTORS.map(s=>{
+            const cnt = sectorCount(s);
+            const active = sectF === s;
+            const haspicks = cnt > 0;
+            return (
+              <button key={s} onClick={()=>{setSectF(s);setExp(null);}}
+                style={{padding:"3px 9px",borderRadius:14,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:9,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,transition:"all .15s",
+                  borderColor:active?"var(--indigo)":"var(--t4)",
+                  background:active?"linear-gradient(135deg,var(--indigo),var(--sky))":"var(--white)",
+                  color:active?"#fff":"var(--t3)",
+                  opacity:hasData&&!haspicks?.55:1}}>
+                {SECTOR_SHORT[s]||s} {haspicks&&<span style={{opacity:.7}}>({cnt})</span>}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* Loading skeleton */}
-      {loading&&PICKS.length===0&&(
-        <div style={{background:"var(--white)",borderRadius:12,padding:"20px",textAlign:"center",marginBottom:10,color:"var(--t3)",fontSize:11,fontFamily:"var(--mono)"}}>
-          <span style={{display:"inline-block",width:12,height:12,border:"2px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginRight:8}}/>
-          Scanning 120+ quality stocks…
-        </div>
-      )}
-
-      {/* Picks card — grouped by sector when "All", flat when filtered */}
-      {sectF !== "All" && filteredPicks.length === 0 && (
-        <div style={{background:"var(--white)",borderRadius:12,padding:"16px",textAlign:"center",color:"var(--t3)",fontSize:11,fontFamily:"var(--mono)",marginBottom:10}}>
-          No qualifying picks in {sectF} right now
-        </div>
-      )}
-
-      {/* Sector grouped view */}
-      {sectF === "All" && sectorGroups && sectorGroups.map(([sector, sectorPicks])=>(
-        <div key={sector} style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10}}>
-          <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",background:"rgba(15,23,42,.02)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
-            <div style={{width:3,height:10,borderRadius:1,background:"var(--indigo)",flexShrink:0}}/>
-            <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:10,color:"var(--t2)",textTransform:"uppercase",letterSpacing:.5}}>{sector}</span>
-            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--indigo)",marginLeft:4}}>{sectorPicks.length}</span>
-          </div>
+      {/* Picks table */}
+      {currentPicks.length > 0 && (
+        <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10}}>
+          {/* Section header when viewing a sector */}
+          {sectF !== "All" && (
+            <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",background:"rgba(15,23,42,.02)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
+              <div style={{width:3,height:10,borderRadius:1,background:"var(--indigo)",flexShrink:0}}/>
+              <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:10,color:"var(--t2)",textTransform:"uppercase",letterSpacing:.5}}>{sectF}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--indigo)",marginLeft:4}}>Top {currentPicks.length}</span>
+            </div>
+          )}
+          {/* Column headers */}
           <div style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",padding:"4px 12px",background:"rgba(15,23,42,.015)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
             {["Stock","Rec","AI","Upside",""].map((h,i)=>(
               <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.6,textAlign:i>=2?"center":"left"}}>{h}</span>
             ))}
           </div>
-          {sectorPicks.map((s,i)=>{
-            const open = exp === `${sector}:${i}`;
-            const c=tc(s.trust);
-            const recColor=s.rcls==="rr-sb"?"var(--indigo)":s.rcls==="rr-b"?"var(--emerald)":"var(--amber)";
-            const recBg=s.rcls==="rr-sb"?"#eef2ff":s.rcls==="rr-b"?"var(--emerald2)":"var(--amber2)";
-            return (
-              <div key={s.ticker}>
-                <div onClick={()=>setExp(open?null:`${sector}:${i}`)}
-                  style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",alignItems:"center",padding:"7px 12px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?"rgba(91,114,248,.018)":"transparent",transition:"background .15s",gap:4}}>
-                  <div style={{minWidth:0}}>
-                    <div style={{display:"flex",alignItems:"center",gap:5}}>
-                      <div style={{width:5,height:5,borderRadius:"50%",background:recColor,flexShrink:0}}/>
-                      <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
-                      {trackedSet.has(s.ticker)&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 4px",borderRadius:3}}>✓</span>}
-                    </div>
-                    <div style={{fontSize:8,color:"var(--t3)",marginTop:1,paddingLeft:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
-                  </div>
-                  <div><span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:600,color:recColor,background:recBg,padding:"2px 6px",borderRadius:4}}>{s.rec}</span></div>
-                  <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span></div>
-                  <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"var(--emerald)"}}>{s.potential}</span></div>
-                  <div style={{textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                    <span style={{fontSize:8,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
-                    <button onClick={(e)=>handleRemove(s.ticker,e)} style={{fontSize:8,color:"var(--t3)",background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
-                  </div>
-                </div>
-                {open&&(
-                  <div style={{padding:"8px 12px 10px",background:"rgba(91,114,248,.018)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
-                    <div style={{height:2,borderRadius:1,background:s.grad,marginBottom:7}}/>
-                    <div style={{display:"flex",gap:0,marginBottom:8,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
-                      {[{l:"Business",v:s.b,m:s.bm,c:"#5b72f8"},{l:"Smart $",v:s.s,m:s.sm,c:"#7c3aed"},{l:"Momentum",v:s.m,m:s.mm,c:"#059669"}].map((p,j)=>(
-                        <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
-                          <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:1}}>{p.l}</div>
-                          <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:"var(--t3)"}}>/{p.m}</span></div>
-                          <div style={{height:2,background:"var(--t4)",borderRadius:1,marginTop:2,overflow:"hidden"}}><div style={{height:"100%",background:p.c,width:`${p.v/p.m*100}%`}}/></div>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{marginBottom:8}}>
-                      {s.sigs.slice(0,3).map((sig,j)=>(
-                        <div key={j} style={{display:"flex",gap:6,fontSize:10,color:"var(--t2)",marginBottom:3,lineHeight:1.4}}>
-                          <span style={{color:c,fontSize:7,flexShrink:0,marginTop:3}}>●</span>{sig}
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
-                      {[{l:"Upside",v:s.potential,c:"var(--emerald)"},{l:"Entry",v:s.entry,c:"var(--sky)"},{l:"Risk",v:s.risk,c:"var(--amber)"},{l:"When",v:s.horizon,c:"var(--t2)"}].map((st,j)=>(
-                        <div key={j} style={{background:"var(--card2)",borderRadius:6,padding:"4px 5px",textAlign:"center"}}>
-                          <div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",textTransform:"uppercase",marginBottom:2}}>{st.l}</div>
-                          <div style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:st.c,lineHeight:1.3}}>{st.v}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {onSetAlert && <button onClick={(e)=>{e.stopPropagation();onSetAlert(s.ticker,0,null,null);}} style={{fontSize:10,padding:"6px 10px",borderRadius:7,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontWeight:600,cursor:"pointer"}}>🔔 Set Alert</button>}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ))}
-
-      {/* Flat view when sector filter active */}
-      {sectF !== "All" && filteredPicks.length > 0 && (
-      <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10}}>
-        <div style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",
-          padding:"4px 12px",background:"rgba(15,23,42,.015)",
-          borderBottom:"1px solid rgba(15,23,42,.05)"}}>
-          {["Stock","Rec","AI","Upside",""].map((h,i)=>(
-            <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",
-              textTransform:"uppercase",letterSpacing:.6,
-              textAlign:i>=2?"center":"left"}}>{h}</span>
+          {currentPicks.map((s,i)=>(
+            <PickRow key={s.ticker} s={s} expKey={`${sectF}:${i}`}
+              exp={exp} setExp={setExp}
+              onSetAlert={onSetAlert} onRemove={handleRemove} trackedSet={trackedSet}/>
           ))}
         </div>
+      )}
 
-        {filteredPicks.map((s,i)=>{
-          const open=exp===i;
-          const c=tc(s.trust);
-          const recColor=s.rcls==="rr-sb"?"var(--indigo)":s.rcls==="rr-b"?"var(--emerald)":"var(--amber)";
-          const recBg=s.rcls==="rr-sb"?"#eef2ff":s.rcls==="rr-b"?"var(--emerald2)":"var(--amber2)";
-          const isDip = s.is_dip;
-          return (
-            <div key={s.ticker}>
-              <div onClick={()=>setExp(open?null:i)}
-                style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",
-                  alignItems:"center",padding:"7px 12px",
-                  borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",
-                  background:open?"rgba(91,114,248,.018)":isDip?"rgba(5,150,105,.025)":"transparent",
-                  transition:"background .15s",gap:4}}>
-                <div style={{minWidth:0}}>
-                  <div style={{display:"flex",alignItems:"center",gap:5}}>
-                    <div style={{width:5,height:5,borderRadius:"50%",background:isDip?"var(--emerald)":recColor,flexShrink:0}}/>
-                    <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
-                    {isDip&&<span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 5px",borderRadius:3}}>DIP</span>}
-                  </div>
-                  <div style={{fontSize:8,color:"var(--t3)",marginTop:1,paddingLeft:10,
-                    whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
-                </div>
-                <div>
-                  <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:600,color:recColor,
-                    background:recBg,padding:"2px 6px",borderRadius:4}}>{s.rec}</span>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"var(--emerald)"}}>{s.potential}</span>
-                </div>
-                <div style={{textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                  <span style={{fontSize:8,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
-                  <button onClick={(e)=>handleRemove(s.ticker,e)} style={{fontSize:8,color:"var(--t3)",background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
-                </div>
-              </div>
-
-              {open&&(
-                <div style={{padding:"8px 12px 10px",background:"rgba(91,114,248,.018)",
-                  borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
-                  {/* Gradient line */}
-                  <div style={{height:2,borderRadius:1,background:s.grad,marginBottom:7}}/>
-                  {/* Pillars - single connected row */}
-                  <div style={{display:"flex",gap:0,marginBottom:8,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
-                    {[{l:"Business",v:s.b,m:s.bm,c:"#5b72f8"},{l:"Smart $",v:s.s,m:s.sm,c:"#7c3aed"},{l:"Momentum",v:s.m,m:s.mm,c:"#059669"}].map((p,j)=>(
-                      <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",
-                        background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
-                        <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:1}}>{p.l}</div>
-                        <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:"var(--t3)"}}>/{p.m}</span></div>
-                        <div style={{height:2,background:"var(--t4)",borderRadius:1,marginTop:2,overflow:"hidden"}}>
-                          <div style={{height:"100%",background:p.c,width:`${p.v/p.m*100}%`}}/>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {/* Signals */}
-                  <div style={{marginBottom:8}}>
-                    {s.sigs.slice(0,3).map((sig,j)=>(
-                      <div key={j} style={{display:"flex",gap:6,fontSize:10,color:"var(--t2)",marginBottom:3,lineHeight:1.4}}>
-                        <span style={{color:c,fontSize:7,flexShrink:0,marginTop:3}}>●</span>{sig}
-                      </div>
-                    ))}
-                  </div>
-                  {/* Stats - 4 in one row */}
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
-                    {[{l:"Upside",v:s.potential,c:"var(--emerald)"},{l:"Entry",v:s.entry,c:"var(--sky)"},{l:"Risk",v:s.risk,c:"var(--amber)"},{l:"When",v:s.horizon,c:"var(--t2)"}].map((st,j)=>(
-                      <div key={j} style={{background:"var(--card2)",borderRadius:6,padding:"4px 5px",textAlign:"center"}}>
-                        <div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",textTransform:"uppercase",marginBottom:2}}>{st.l}</div>
-                        <div style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:st.c,lineHeight:1.3}}>{st.v}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {onSetAlert && <button onClick={(e)=>{e.stopPropagation();onSetAlert(s.ticker,0,null,null);}} style={{fontSize:10,padding:"6px 10px",borderRadius:7,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontWeight:600,cursor:"pointer"}}>🔔 Set Alert</button>}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {/* Empty state for sector with no picks */}
+      {sectF !== "All" && hasData && currentPicks.length === 0 && (
+        <div style={{background:"var(--white)",borderRadius:12,padding:"16px",textAlign:"center",color:"var(--t3)",fontSize:11,fontFamily:"var(--mono)",marginBottom:10}}>
+          No qualifying picks in {sectF} right now
+        </div>
       )}
 
       {/* Blocked — quiet section */}
-      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-        <div style={{width:3,height:10,borderRadius:1,background:"var(--rose)",flexShrink:0}}/>
-        <span style={{fontFamily:"var(--dm)",fontWeight:500,fontSize:10,color:"var(--t3)"}}>Blocked — AI signals won't fire on these</span>
-        <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--rose)",marginLeft:"auto",background:"var(--rose2)",padding:"1px 6px",borderRadius:6}}>{DISQ.length}</span>
-      </div>
-      <div style={{background:"var(--white)",borderRadius:10,overflow:"hidden",border:"1px solid rgba(225,29,72,.09)"}}>
-        {DISQ.map((d,i)=>(
-          <div key={i} style={{padding:"9px 12px",borderBottom:i<DISQ.length-1?"1px solid rgba(15,23,42,.04)":"none"}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--rose)",width:40,flexShrink:0}}>{d.ticker}</span>
-              <span style={{fontSize:9,color:"var(--t3)",flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.reason}</span>
-              <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"rgba(225,29,72,.4)",flexShrink:0}}>{d.score}</span>
-            </div>
-            {d.unblock_condition && (
-              <div style={{fontFamily:"var(--dm)",fontSize:8,color:"var(--t3)",marginTop:3,paddingLeft:48,fontStyle:"italic"}}>
-                Unblocks when: {d.unblock_condition}
-              </div>
-            )}
+      {DISQ.length > 0 && (
+        <>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+            <div style={{width:3,height:10,borderRadius:1,background:"var(--rose)",flexShrink:0}}/>
+            <span style={{fontFamily:"var(--dm)",fontWeight:500,fontSize:10,color:"var(--t3)"}}>Blocked — AI signals won't fire on these</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--rose)",marginLeft:"auto",background:"var(--rose2)",padding:"1px 6px",borderRadius:6}}>{DISQ.length}</span>
           </div>
-        ))}
-      </div>
+          <div style={{background:"var(--white)",borderRadius:10,overflow:"hidden",border:"1px solid rgba(225,29,72,.09)"}}>
+            {DISQ.map((d,i)=>(
+              <div key={i} style={{padding:"9px 12px",borderBottom:i<DISQ.length-1?"1px solid rgba(15,23,42,.04)":"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--rose)",width:40,flexShrink:0}}>{d.ticker}</span>
+                  <span style={{fontSize:9,color:"var(--t3)",flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.reason}</span>
+                  <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"rgba(225,29,72,.4)",flexShrink:0}}>{d.score}</span>
+                </div>
+                {d.unblock_condition && (
+                  <div style={{fontFamily:"var(--dm)",fontSize:8,color:"var(--t3)",marginTop:3,paddingLeft:48,fontStyle:"italic"}}>
+                    Unblocks when: {d.unblock_condition}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
     </div>
   );
@@ -2420,7 +2437,7 @@ export default function App() {
   const [watchlistRaw, setWatchlistRaw] = useState([]);
   const [market, setMarket] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [picks, setPicks] = useState([]);
+  const [picksData, setPicksData] = useState({picks:[], sector_picks:{}, updated_at:null, scan_status:"idle", tickers_scanned:0, tickers_ok:0});
   const [picksLoading, setPicksLoading] = useState(false);
   const [disq, setDisq] = useState([]);
   const [accuracy, setAccuracy] = useState("—");
@@ -2455,7 +2472,18 @@ export default function App() {
     setTimeout(() => {
       getDisqualified().then(v => { setDisq((v||[]).map(mapDisq)); }).catch(()=>{});
       setPicksLoading(true);
-      getPicks().then(v => { setPicks((v||[]).map(mapPick)); }).catch(()=>{}).finally(()=>setPicksLoading(false));
+      getPicks().then(v => {
+        if (v) setPicksData({
+          picks: (v.picks||[]).map(mapPick),
+          sector_picks: Object.fromEntries(
+            Object.entries(v.sector_picks||{}).map(([s,arr])=>[s,(arr||[]).map(mapPick)])
+          ),
+          updated_at: v.updated_at||null,
+          scan_status: v.scan_status||"idle",
+          tickers_scanned: v.tickers_scanned||0,
+          tickers_ok: v.tickers_ok||0,
+        });
+      }).catch(()=>{}).finally(()=>setPicksLoading(false));
     }, 500);
     setTimeout(() => {
       getStrategy().then(v => {
@@ -2500,7 +2528,40 @@ export default function App() {
   const screens = [
     <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
     <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} onSetAlert={handleSetAlert}/>,
-    <SmartPicksScreen picks={picks} disq={disq} accuracy={accuracy} loading={picksLoading} onSetAlert={handleSetAlert} onRefreshPicks={()=>{setPicksLoading(true);getPicks().then(v=>setPicks((v||[]).map(mapPick))).catch(()=>{}).finally(()=>setPicksLoading(false));}}/>,
+    <SmartPicksScreen picksData={picksData} disq={disq} accuracy={accuracy} loading={picksLoading} onSetAlert={handleSetAlert} onRefreshPicks={()=>{
+      setPicksLoading(true);
+      getPicks().then(v=>{
+        if(v) setPicksData({
+          picks:(v.picks||[]).map(mapPick),
+          sector_picks:Object.fromEntries(Object.entries(v.sector_picks||{}).map(([s,arr])=>[s,(arr||[]).map(mapPick)])),
+          updated_at:v.updated_at||null,
+          scan_status:v.scan_status||"idle",
+          tickers_scanned:v.tickers_scanned||0,
+          tickers_ok:v.tickers_ok||0,
+        });
+      }).catch(()=>{}).finally(()=>setPicksLoading(false));
+    }} onTriggerScan={()=>{
+      refreshPicksScan().catch(()=>{});
+      // Poll status every 30s while scan runs
+      const poll = setInterval(()=>{
+        getPicksStatus().then(s=>{
+          if(s.scan_status==="complete"){
+            clearInterval(poll);
+            setPicksLoading(true);
+            getPicks().then(v=>{
+              if(v) setPicksData({
+                picks:(v.picks||[]).map(mapPick),
+                sector_picks:Object.fromEntries(Object.entries(v.sector_picks||{}).map(([s2,arr])=>[s2,(arr||[]).map(mapPick)])),
+                updated_at:v.updated_at||null,
+                scan_status:v.scan_status||"idle",
+                tickers_scanned:v.tickers_scanned||0,
+                tickers_ok:v.tickers_ok||0,
+              });
+            }).catch(()=>{}).finally(()=>setPicksLoading(false));
+          }
+        }).catch(()=>{});
+      },30000);
+    }}/>,
     <StrategyScreen strategyData={strategyData} onDetail={setSel}/>,
   ];
   const tabDefs = [

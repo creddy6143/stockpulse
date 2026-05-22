@@ -108,6 +108,18 @@ CREATE TABLE IF NOT EXISTS price_alerts (
   triggered_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS smart_picks_cache (
+  id INTEGER PRIMARY KEY,
+  all_picks_json TEXT NOT NULL DEFAULT '[]',
+  sector_json TEXT NOT NULL DEFAULT '{}',
+  scan_status TEXT NOT NULL DEFAULT 'idle',
+  scan_started_at TIMESTAMP,
+  scan_completed_at TIMESTAMP,
+  tickers_scanned INTEGER DEFAULT 0,
+  tickers_ok INTEGER DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
