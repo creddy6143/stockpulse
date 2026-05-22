@@ -186,11 +186,21 @@ def get_signal_accuracy(days=90):
 
 def create_alert(ticker, alert_type, message):
     conn = get_connection()
-    conn.execute(
-        "INSERT INTO alerts (ticker, alert_type, message) VALUES (?, ?, ?)",
-        (ticker, alert_type, message),
-    )
-    conn.commit()
+    # Skip if an identical alert (same ticker + message) was created in the last 24 hours.
+    # Prevents duplicate rows when signals/portfolio checks fire repeatedly.
+    existing = conn.execute(
+        """SELECT 1 FROM alerts
+           WHERE ticker=? AND message=?
+           AND created_at >= datetime('now', '-24 hours')
+           LIMIT 1""",
+        (ticker, message),
+    ).fetchone()
+    if not existing:
+        conn.execute(
+            "INSERT INTO alerts (ticker, alert_type, message) VALUES (?, ?, ?)",
+            (ticker, alert_type, message),
+        )
+        conn.commit()
     conn.close()
 
 
@@ -200,7 +210,17 @@ def get_alerts():
         "SELECT * FROM alerts ORDER BY is_read ASC, created_at DESC LIMIT 100"
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    # Deduplicate in memory by (ticker, message): keep only the most-recent row
+    # for each unique pair so legacy duplicate rows don't surface in the UI.
+    seen = set()
+    deduped = []
+    for r in rows:
+        d = dict(r)
+        key = (d.get("ticker"), d.get("message"))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(d)
+    return deduped
 
 
 def mark_alert_read(alert_id):

@@ -326,16 +326,6 @@ const mapWatchlistItem = item => {
   };
 };
 
-const mapAlert = alert => {
-  const t = alert.alert_type || "signal";
-  const icons = {urgent:"🚨", signal:"🚀", earnings:"📅", watchlist_entry:"👁", price_alert:"🔔"};
-  const confs = {urgent:"URGENT", signal:"HIGH", earnings:"INFO", watchlist_entry:"MED", price_alert:"ALERT"};
-  const ccs  = {urgent:"ch", signal:"ch", earnings:"cm", watchlist_entry:"cm", price_alert:"cm"};
-  const created = alert.created_at ? new Date(alert.created_at) : new Date();
-  const diffMin = Math.round((Date.now() - created.getTime()) / 60000);
-  const time = diffMin < 1 ? "just now" : diffMin < 60 ? `${diffMin}m ago` : diffMin < 1440 ? `${Math.round(diffMin/60)}h ago` : "Earlier";
-  return {icon: icons[t]||"💡", ticker: alert.ticker||"—", conf: confs[t]||"SIGNAL", cc: ccs[t]||"cm", text: alert.message||"", time};
-};
 
 const fmtEarnDate = dateStr => {
   if (!dateStr) return "—";
@@ -1048,8 +1038,7 @@ function PortfolioArc({positions, summary}) {
 }
 
 // ── HOME SCREEN ──────────────────────────────────────
-function HomeScreen({positions, summary, signals, earnings, market, onEarnings}) {
-  const [sigOpen,setSigOpen] = useState(null);
+function HomeScreen({positions, summary, earnings, market, onEarnings}) {
   const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
   const upcomingEarnings = (earnings||[]).filter(e=>e.date!=="Today"&&e.date!=="—");
   const vix = market?.vix?.price || 0;
@@ -1070,7 +1059,6 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
     {flag:"🇪🇺", name:"DAX",        d:market?.dax, sessKey:"eu"},
     {flag:"🇮🇳", name:"India (NSE)",d:market?.nifty, sessKey:"in"},
   ];
-  const sigList = signals && signals.length > 0 ? signals : [];
   return (
     <div className="pad" style={{paddingTop:12}}>
       <PortfolioArc positions={positions} summary={summary}/>
@@ -1122,34 +1110,6 @@ function HomeScreen({positions, summary, signals, earnings, market, onEarnings})
             No earnings this week for your tracked stocks
           </div>
         )}
-      </div>
-      <div className="card">
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 14px 10px",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
-          <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>Today's Signals</span>
-          <span style={{fontSize:11,color:"var(--indigo)",fontWeight:500,cursor:"pointer"}}>See all →</span>
-        </div>
-        {sigList.length === 0
-          ? <div style={{padding:"12px 14px",fontSize:11,color:"var(--t3)"}}>No signals yet — loading…</div>
-          : sigList.map((s,i)=>{
-          const open = sigOpen===i;
-          return (
-            <div key={i} className="sig-card">
-              <div className="sig-row" onClick={()=>setSigOpen(open?null:i)}>
-                <span style={{fontSize:16,flexShrink:0}}>{s.icon}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:"flex",alignItems:"center",gap:6}}>
-                    <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
-                    <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,padding:"2px 7px",borderRadius:4,background:s.cc==="ch"?"var(--emerald2)":"var(--amber2)",color:s.cc==="ch"?"var(--emerald)":"var(--amber)",border:`1px solid ${s.cc==="ch"?"#a7f3d0":"#fde68a"}`}}>{s.conf}</span>
-                    <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginLeft:"auto"}}>{s.time}</span>
-                  </div>
-                  <div style={{fontSize:10,color:"var(--t2)",marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.text}</div>
-                </div>
-                <span style={{fontSize:10,color:"var(--t3)",flexShrink:0,marginLeft:6}}>{open?"▲":"▼"}</span>
-              </div>
-              {open && <div className="sig-exp">{s.text}</div>}
-            </div>
-          );
-        })}
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
         <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>Market Conditions</span>
@@ -2554,15 +2514,11 @@ export default function App() {
   const wlWatch = watchlistRaw.filter(w=>w.wl_group==="watching").map(mapWatchlistItem);
   const wlAvoid = watchlistRaw.filter(w=>w.wl_group==="avoid").map(mapWatchlistItem);
 
-  const signals = (alerts||[]).slice(0,5).map(mapAlert);
-
   // ── Market status ──
   const vix = market?.vix?.price || 0;
   const mktLabel = vix >= 25 ? "Market Alert" : vix >= 15 ? "Market Choppy" : "Market Calm";
   const mktDotColor = vix >= 25 ? "#ef4444" : vix >= 15 ? "#f59e0b" : "#4ade80";
 
-  // ── Alert banner ──
-  const urgentStock = urgent.find(p=>p.auto_disqualified);
   const unreadCount = (alerts||[]).filter(a=>!a.is_read).length;
 
   // ── Badges ──
@@ -2570,7 +2526,7 @@ export default function App() {
   const urgentCount = urgent.length;
 
   const screens = [
-    <HomeScreen positions={allPositions} summary={portfolio.summary} signals={signals} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
+    <HomeScreen positions={allPositions} summary={portfolio.summary} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
     <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} onSetAlert={handleSetAlert}/>,
     <SmartPicksScreen picksData={picksData} disq={disq} accuracy={accuracy} loading={picksLoading} onSetAlert={handleSetAlert} onRefreshPicks={()=>{
       setPicksLoading(true);
@@ -2652,18 +2608,6 @@ export default function App() {
           </div>
         </div>
       </div>
-      {urgentStock&&(
-        <div className="alert-banner">
-          <div className="ab-left">
-            <div className="ab-pulse"/>
-            <div>
-              <div className="ab-title">⚠️ {urgentStock.ticker} — Risk signals flagged</div>
-              <div className="ab-sub">{(urgentStock.verdict||"").substring(0,60)}</div>
-            </div>
-          </div>
-          <button className="ab-btn">View Analysis</button>
-        </div>
-      )}
       <div className="tabs-wrap">
         <div className="tabs">
           {tabDefs.map((t,i)=>(
