@@ -2264,7 +2264,7 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
               </div>
               {currentPicks.length < 10 && (
                 <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:3,paddingLeft:9}}>
-                  Only {currentPicks.length} stock{currentPicks.length!==1?"s":""} in this sector meet our criteria right now
+                  Only {currentPicks.length} stock{currentPicks.length!==1?"s":""} in this sector {currentPicks.length!==1?"meet":"meets"} our criteria right now
                 </div>
               )}
             </div>
