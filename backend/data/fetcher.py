@@ -254,27 +254,56 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
             revenue_growth = float(info.get("revenueGrowth") or 0)
             profit_margins = float(info.get("profitMargins") or 0)
             gross_margins  = float(info.get("grossMargins") or 0)
-            # Verify we got at least ONE useful fundamental value
+            # Fetch these BEFORE has_data check so we can include them in the gate
+            raw_target = info.get("targetMeanPrice")
+            # Verify we got at least ONE useful value from yfinance
             has_data = bool(
                 market_cap
                 or abs(revenue_growth) > 0.001
                 or abs(profit_margins) > 0.001
                 or abs(gross_margins) > 0.001
+                or raw_target  # analyst target alone is sufficient
             )
             if not has_data:
                 cache_set(key, {})
                 return {}
+            # Analyst target price — free via yfinance; Finnhub paywalls this
+            analyst_target = None
+            if raw_target:
+                try:
+                    analyst_target = round(float(raw_target), 2)
+                except (TypeError, ValueError):
+                    pass
+            # Short interest as % of float — Finnhub free tier returns 0 for this
+            short_pct = 0.0
+            raw_short = info.get("shortPercentOfFloat")
+            if raw_short:
+                try:
+                    short_pct = round(float(raw_short) * 100, 1)
+                except (TypeError, ValueError):
+                    pass
+            # Quarterly earnings growth YoY — proxy for earnings beat/miss
+            earn_qtr = 0.0
+            raw_eq = info.get("earningsQuarterlyGrowth") or info.get("earningsGrowth")
+            if raw_eq:
+                try:
+                    earn_qtr = round(float(raw_eq), 4)
+                except (TypeError, ValueError):
+                    pass
             result = {
-                "revenue_growth":  round(revenue_growth, 4),
-                "profit_margins":  round(profit_margins, 4),
-                "gross_margins":   round(gross_margins, 4),
-                "gaap_profitable": profit_margins > 0,
-                "market_cap":      market_cap,
-                "pe_ratio":        round(float(p), 2) if (p := info.get("trailingPE") or info.get("forwardPE")) else None,
-                "w52_high":        info.get("fiftyTwoWeekHigh"),
-                "w52_low":         info.get("fiftyTwoWeekLow"),
-                "earnings_growth": round(float(info.get("earningsGrowth") or 0), 4),
-                "sector":          info.get("sector") or None,
+                "revenue_growth":      round(revenue_growth, 4),
+                "profit_margins":      round(profit_margins, 4),
+                "gross_margins":       round(gross_margins, 4),
+                "gaap_profitable":     profit_margins > 0,
+                "market_cap":          market_cap,
+                "pe_ratio":            round(float(p), 2) if (p := info.get("trailingPE") or info.get("forwardPE")) else None,
+                "w52_high":            info.get("fiftyTwoWeekHigh"),
+                "w52_low":             info.get("fiftyTwoWeekLow"),
+                "earnings_growth":     round(float(info.get("earningsGrowth") or 0), 4),
+                "sector":              info.get("sector") or None,
+                "analyst_target":      analyst_target,
+                "short_interest_pct":  short_pct,
+                "earnings_qtr_growth": earn_qtr,
             }
             cache_set(key, result, ttl=TTL_FUNDAMENTALS)
             return result
@@ -990,6 +1019,16 @@ def get_fundamentals(ticker: str) -> dict:
             if not result.get("data_source") and not is_intl:
                 result["data_source"] = "yfinance:lib"
 
+    # yfinance patch for earnings_surprise_pct — Finnhub company_earnings often returns
+    # empty on Railway free tier for US stocks, costing up to 13 pts (8 business + 5 momentum).
+    # Fallback: use earningsQuarterlyGrowth (YoY earnings growth) as a proxy.
+    # Not a perfect substitute (growth vs surprise) but far better than None.
+    if result.get("earnings_surprise_pct") is None and not ticker.endswith((".NS", ".BO")):
+        yf_enrich = _yf_lib_fundamentals(ticker)   # cache hit if already called above
+        eg = yf_enrich.get("earnings_qtr_growth") or yf_enrich.get("earnings_growth") or 0
+        if eg != 0:
+            result["earnings_surprise_pct"] = round(float(eg) * 100, 1)
+
     # Yahoo Finance calendarEvents fallback for next earnings date.
     # Works for all markets — covers gaps where Finnhub free tier returns nothing.
     if not result["next_earnings_date"]:
@@ -1081,6 +1120,14 @@ def get_insider_data(ticker: str) -> dict:
             result["short_interest_pct"] = round(float(short_pct) * 100, 1)
     except Exception:
         pass
+
+    # yfinance fallback for short interest — Finnhub free tier doesn't return
+    # shortInterestSharesOutstanding; yfinance info has shortPercentOfFloat
+    if result["short_interest_pct"] == 0:
+        yf_data = _yf_lib_fundamentals(ticker)   # cached 24h — no extra HTTP call
+        yf_short = yf_data.get("short_interest_pct") or 0
+        if yf_short > 0:
+            result["short_interest_pct"] = yf_short
 
     try:
         own = _fh_call(fh.ownership, clean, limit=10)
@@ -1247,6 +1294,13 @@ def get_analyst_data(ticker: str) -> dict:
                     result["revenue_estimate"] = float(rev_est)
         except Exception:
             pass
+
+    # yfinance library fallback — works on Railway when Yahoo REST is blocked
+    if result["target_price"] is None:
+        yf_data = _yf_lib_fundamentals(ticker)   # cached 24h — no extra HTTP call if already fetched
+        at = yf_data.get("analyst_target")
+        if at:
+            result["target_price"] = at
 
     try:
         recs = fh.recommendation_trends(clean)
