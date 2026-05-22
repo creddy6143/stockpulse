@@ -219,6 +219,23 @@ def _business_score(f: dict) -> int:
     mkt_cap = f.get("market_cap", 0) or 0
     is_large = mkt_cap > 10_000_000_000  # > $10B or > ₹10B (INR)
 
+    gm = f.get("gross_margins", 0) or 0
+    pm = f.get("profit_margins", 0) or 0
+
+    # ── FINANCIAL-SECTOR PATTERN DETECTION ───────────────────────────────────
+    # Banks, insurance, and payment processors report gross_margins ≈ 0% in
+    # yfinance because they have no traditional COGS (business model, not a flaw).
+    # Penalising these stocks for "0% gross margin" produces a false 10-pt gap vs
+    # tech/retail peers.  Solution: when gross_margins is near-zero but the
+    # company is GAAP profitable with real profit margins, use profit_margins as
+    # the margin quality metric instead.
+    # Detection pattern (data-driven, no sector metadata needed):
+    #   gross_margins < 3%  AND  profit_margins > 5%  AND  GAAP profitable
+    # Matches: JPM, BAC, WFC, GS, V, MA, AXP, NEE, DUK, SO (banks + utilities)
+    # Does NOT match: loss-making fintech, pre-revenue companies (pm ≤ 0.05)
+    is_financial_model = (gm < 0.03 and pm > 0.05
+                          and f.get("gaap_profitable", False))
+
     # Revenue growth (12 pts max)
     if is_large:
         # Established companies: steady 8%+ growth = excellent for their scale
@@ -230,6 +247,15 @@ def _business_score(f: dict) -> int:
             score += 4
         elif rev > 0:
             score += 2
+        elif rev < 0 and f.get("gaap_profitable") and pm > 0.05:
+            # ── CYCLICAL DOWN-CYCLE CREDIT ────────────────────────────────────
+            # Energy/materials revenue can fall in commodity price downturns while
+            # the underlying business remains healthy (e.g. XOM revenue -5% when
+            # oil drops, but profit margins still 10%+).
+            # Maintaining profitability through a cyclical trough = business quality.
+            # Award partial credit (+3) rather than zero, so a great energy major
+            # in a down-cycle is not scored identically to a failing growth stock.
+            score += 3
     else:
         # Small/mid-cap: higher growth expected, original thresholds apply
         if rev > 0.30:
@@ -238,6 +264,8 @@ def _business_score(f: dict) -> int:
             score += 8
         elif rev > 0:
             score += 3
+        elif rev < 0 and f.get("gaap_profitable") and pm > 0.05:
+            score += 2  # smaller cyclical credit for small-cap
 
     # Profitability (10 pts)
     # BUG FIX: only award "near profitable" when we actually have data.
@@ -257,22 +285,26 @@ def _business_score(f: dict) -> int:
     elif surprise > 0:
         score += 2
 
-    # Gross margins quality (10 pts)
-    gm = f.get("gross_margins", 0) or 0
+    # Gross/profit margins quality (10 pts)
+    # For financial-model stocks (banks, utilities): use profit_margins because
+    # yfinance reports gross_margins = 0% for these (no traditional COGS).
+    # A bank with 30%+ net margins is a well-run business; the 10-pt gap vs
+    # tech peers was an unfair artifact of different accounting conventions.
+    margin_metric = pm if is_financial_model else gm
     if is_large:
-        # Large established companies: 20%+ OPM/gross = strong (not just "ok")
-        if gm > 0.40:
+        # Large established companies: 20%+ margin = strong
+        if margin_metric > 0.40:
             score += 10
-        elif gm > 0.20:    # INFY OPM ~21% → +7 (was +4 under 40% threshold)
+        elif margin_metric > 0.20:    # INFY OPM ~21% → +7
             score += 7
-        elif gm > 0.10:
+        elif margin_metric > 0.10:
             score += 4
     else:
-        if gm > 0.60:
+        if margin_metric > 0.60:
             score += 10
-        elif gm > 0.40:
+        elif margin_metric > 0.40:
             score += 7
-        elif gm > 0.20:
+        elif margin_metric > 0.20:
             score += 4
 
     # EPS growth quality (4 pts) — separate from revenue growth, measures

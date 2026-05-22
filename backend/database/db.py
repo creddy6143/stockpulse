@@ -453,7 +453,8 @@ def get_scan_status():
     conn = get_connection()
     row = conn.execute(
         """SELECT scan_status, scan_started_at, scan_completed_at,
-                  tickers_scanned, tickers_ok, updated_at
+                  tickers_scanned, tickers_ok, updated_at,
+                  progress_current, progress_total
            FROM smart_picks_cache ORDER BY id DESC LIMIT 1"""
     ).fetchone()
     conn.close()
@@ -461,4 +462,18 @@ def get_scan_status():
         return dict(row)
     return {"scan_status": "idle", "scan_started_at": None,
             "scan_completed_at": None, "tickers_scanned": 0,
-            "tickers_ok": 0, "updated_at": None}
+            "tickers_ok": 0, "updated_at": None,
+            "progress_current": 0, "progress_total": 0}
+
+
+def update_scan_progress(current: int, total: int):
+    """Update live progress counters during a running scan."""
+    conn = get_connection()
+    existing = conn.execute("SELECT id FROM smart_picks_cache LIMIT 1").fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE smart_picks_cache SET progress_current=?, progress_total=? WHERE id=?",
+            (current, total, existing["id"]),
+        )
+    conn.commit()
+    conn.close()

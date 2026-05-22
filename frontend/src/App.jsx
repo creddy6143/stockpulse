@@ -2111,6 +2111,11 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
   const acc = accuracy || "—";
   const isScanning = PD.scan_status === "running";
   const updatedLabel = fmtUpdatedAt(PD.updated_at);
+  const progressCurrent = PD.progress_current || 0;
+  const progressTotal = PD.progress_total || 0;
+  const scanProgressLabel = (isScanning && progressTotal > 0)
+    ? `Scanning… ${progressCurrent} of ${progressTotal}`
+    : "Scanning…";
   const hasData = PICKS.length > 0 || Object.keys(SECTOR_PICKS).length > 0;
 
   useEffect(()=>{
@@ -2150,7 +2155,7 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
   };
 
   const handleTriggerScan = () => {
-    setScanMsg("Scan started — results will appear automatically in ~20 min");
+    setScanMsg("Scan started — results appear automatically when complete");
     if(onTriggerScan) onTriggerScan();
   };
 
@@ -2173,7 +2178,7 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
           {isScanning && (
             <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--indigo)",display:"flex",alignItems:"center",gap:4}}>
               <span style={{display:"inline-block",width:8,height:8,border:"1.5px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-              Scanning…
+              {scanProgressLabel}
             </span>
           )}
           <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{loading?"…":`${PICKS.length}`}</span>
@@ -2215,7 +2220,11 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
       {!hasData && isScanning && (
         <div style={{background:"var(--white)",borderRadius:12,padding:"20px",textAlign:"center",marginBottom:10,border:"1px solid rgba(91,114,248,.1)"}}>
           <span style={{display:"inline-block",width:14,height:14,border:"2px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginRight:8,verticalAlign:"middle"}}/>
-          <span style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--t2)"}}>Generating your first picks scan — results appear here automatically</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--t2)"}}>
+            {progressTotal > 0
+              ? `Scanning ${progressCurrent} of ${progressTotal} stocks — results appear automatically`
+              : "Generating picks — results appear here automatically"}
+          </span>
         </div>
       )}
 
@@ -2446,7 +2455,7 @@ export default function App() {
   const [watchlistRaw, setWatchlistRaw] = useState([]);
   const [market, setMarket] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [picksData, setPicksData] = useState({picks:[], sector_picks:{}, updated_at:null, scan_status:"idle", tickers_scanned:0, tickers_ok:0});
+  const [picksData, setPicksData] = useState({picks:[], sector_picks:{}, updated_at:null, scan_status:"idle", tickers_scanned:0, tickers_ok:0, progress_current:0, progress_total:0});
   const [picksLoading, setPicksLoading] = useState(false);
   const [disq, setDisq] = useState([]);
   const [accuracy, setAccuracy] = useState("—");
@@ -2482,16 +2491,42 @@ export default function App() {
       getDisqualified().then(v => { setDisq((v||[]).map(mapDisq)); }).catch(()=>{});
       setPicksLoading(true);
       getPicks().then(v => {
-        if (v) setPicksData({
-          picks: (v.picks||[]).map(mapPick),
-          sector_picks: Object.fromEntries(
-            Object.entries(v.sector_picks||{}).map(([s,arr])=>[s,(arr||[]).map(mapPick)])
-          ),
-          updated_at: v.updated_at||null,
-          scan_status: v.scan_status||"idle",
-          tickers_scanned: v.tickers_scanned||0,
-          tickers_ok: v.tickers_ok||0,
-        });
+        if (v) {
+          setPicksData({
+            picks: (v.picks||[]).map(mapPick),
+            sector_picks: Object.fromEntries(
+              Object.entries(v.sector_picks||{}).map(([s,arr])=>[s,(arr||[]).map(mapPick)])
+            ),
+            updated_at: v.updated_at||null,
+            scan_status: v.scan_status||"idle",
+            tickers_scanned: v.tickers_scanned||0,
+            tickers_ok: v.tickers_ok||0,
+            progress_current: v.progress_current||0,
+            progress_total: v.progress_total||0,
+          });
+          // If scan was already running when the page loaded, start polling automatically
+          if(v.scan_status === "running") {
+            const autoPoll = setInterval(()=>{
+              getPicksStatus().then(s=>{
+                setPicksData(prev=>({...prev, scan_status:s.scan_status||prev.scan_status,
+                  progress_current:s.progress_current||prev.progress_current,
+                  progress_total:s.progress_total||prev.progress_total}));
+                if(s.scan_status==="complete"||s.scan_status==="error"){
+                  clearInterval(autoPoll);
+                  if(s.scan_status==="complete"){
+                    getPicks().then(v2=>{if(v2)setPicksData({
+                      picks:(v2.picks||[]).map(mapPick),
+                      sector_picks:Object.fromEntries(Object.entries(v2.sector_picks||{}).map(([k,a])=>[k,(a||[]).map(mapPick)])),
+                      updated_at:v2.updated_at||null, scan_status:"complete",
+                      tickers_scanned:v2.tickers_scanned||0, tickers_ok:v2.tickers_ok||0,
+                      progress_current:v2.tickers_scanned||0, progress_total:v2.tickers_scanned||0,
+                    });}).catch(()=>{});
+                  }
+                }
+              }).catch(()=>{});
+            },15000);
+          }
+        }
       }).catch(()=>{}).finally(()=>setPicksLoading(false));
     }, 500);
     setTimeout(() => {
@@ -2547,29 +2582,43 @@ export default function App() {
           scan_status:v.scan_status||"idle",
           tickers_scanned:v.tickers_scanned||0,
           tickers_ok:v.tickers_ok||0,
+          progress_current:v.progress_current||0,
+          progress_total:v.progress_total||0,
         });
       }).catch(()=>{}).finally(()=>setPicksLoading(false));
     }} onTriggerScan={()=>{
       refreshPicksScan().catch(()=>{});
-      // Poll status every 30s while scan runs
+      // Show spinner immediately — don't wait for first poll
+      setPicksData(prev=>({...prev, scan_status:"running"}));
+      // Poll every 15s: update live progress and auto-load when complete
       const poll = setInterval(()=>{
         getPicksStatus().then(s=>{
-          if(s.scan_status==="complete"){
+          // Update progress on every tick (not just on completion)
+          setPicksData(prev=>({...prev,
+            scan_status: s.scan_status||prev.scan_status,
+            progress_current: s.progress_current||prev.progress_current,
+            progress_total: s.progress_total||prev.progress_total,
+          }));
+          if(s.scan_status==="complete"||s.scan_status==="error"){
             clearInterval(poll);
-            setPicksLoading(true);
-            getPicks().then(v=>{
-              if(v) setPicksData({
-                picks:(v.picks||[]).map(mapPick),
-                sector_picks:Object.fromEntries(Object.entries(v.sector_picks||{}).map(([s2,arr])=>[s2,(arr||[]).map(mapPick)])),
-                updated_at:v.updated_at||null,
-                scan_status:v.scan_status||"idle",
-                tickers_scanned:v.tickers_scanned||0,
-                tickers_ok:v.tickers_ok||0,
-              });
-            }).catch(()=>{}).finally(()=>setPicksLoading(false));
+            if(s.scan_status==="complete"){
+              // Auto-load fresh picks — user never needs to manually refresh
+              getPicks().then(v=>{
+                if(v) setPicksData({
+                  picks:(v.picks||[]).map(mapPick),
+                  sector_picks:Object.fromEntries(Object.entries(v.sector_picks||{}).map(([s2,arr])=>[s2,(arr||[]).map(mapPick)])),
+                  updated_at:v.updated_at||null,
+                  scan_status:"complete",
+                  tickers_scanned:v.tickers_scanned||0,
+                  tickers_ok:v.tickers_ok||0,
+                  progress_current:v.tickers_scanned||0,
+                  progress_total:v.tickers_scanned||0,
+                });
+              }).catch(()=>{});
+            }
           }
         }).catch(()=>{});
-      },30000);
+      },15000);
     }}/>,
     <StrategyScreen strategyData={strategyData} onDetail={setSel}/>,
   ];

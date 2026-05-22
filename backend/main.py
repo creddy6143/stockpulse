@@ -677,11 +677,15 @@ def _run_picks_scan_background():
         from data.cache import flush_disk_cache
 
         result = []
-        batch_size = 50
-        batch_pause = 20
-        workers = 2
+        batch_size = 30   # smaller batches = finer progress granularity
+        batch_pause = 12  # reduced from 20s — still safe for Finnhub free tier
+        workers = 3       # increased from 2 — saturates free-tier budget faster
         batches = [all_tickers[i:i + batch_size] for i in range(0, len(all_tickers), batch_size)]
-        print(f"[PICKS BG] {len(all_tickers)} tickers in {len(batches)} batches", flush=True)
+        total_tickers = len(all_tickers)
+        tickers_done = 0
+        print(f"[PICKS BG] {total_tickers} tickers in {len(batches)} batches", flush=True)
+        # Initialise progress counters so frontend can show X of Y immediately
+        db.update_scan_progress(0, total_tickers)
 
         for batch_num, batch in enumerate(batches):
             if batch_num > 0:
@@ -689,12 +693,15 @@ def _run_picks_scan_background():
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = {ex.submit(_score_one_ticker, t): t for t in batch}
                 for future in _as_completed(futures):
+                    tickers_done += 1
                     try:
                         entry = future.result()
                         if entry:
                             result.append(entry)
                     except Exception:
                         pass
+            # Update progress after each batch completes
+            db.update_scan_progress(tickers_done, total_tickers)
 
         flush_disk_cache()
 
@@ -800,6 +807,8 @@ def picks_scan_status():
         "scan_completed_at": status.get("scan_completed_at"),
         "tickers_scanned": status.get("tickers_scanned", 0),
         "tickers_ok": status.get("tickers_ok", 0),
+        "progress_current": status.get("progress_current", 0),
+        "progress_total": status.get("progress_total", 0),
         "updated_at": status.get("updated_at"),
         "is_running": _scan_running,
     }

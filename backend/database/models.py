@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS smart_picks_cache (
   scan_completed_at TIMESTAMP,
   tickers_scanned INTEGER DEFAULT 0,
   tickers_ok INTEGER DEFAULT 0,
+  progress_current INTEGER DEFAULT 0,
+  progress_total INTEGER DEFAULT 0,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -132,5 +134,17 @@ def get_connection():
 def init_db():
     conn = get_connection()
     conn.executescript(SCHEMA)
+    # Safe migrations for existing databases — ALTER TABLE IF NOT EXISTS is not
+    # supported in older SQLite, so we catch the "duplicate column" error instead.
+    for col, typedef in [
+        ("progress_current", "INTEGER DEFAULT 0"),
+        ("progress_total",   "INTEGER DEFAULT 0"),
+    ]:
+        try:
+            conn.execute(
+                f"ALTER TABLE smart_picks_cache ADD COLUMN {col} {typedef}"
+            )
+        except Exception:
+            pass  # column already exists
     conn.commit()
     conn.close()
