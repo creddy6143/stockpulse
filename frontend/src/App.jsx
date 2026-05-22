@@ -2254,10 +2254,19 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
         <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10}}>
           {/* Section header when viewing a sector */}
           {sectF !== "All" && (
-            <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",background:"rgba(15,23,42,.02)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
-              <div style={{width:3,height:10,borderRadius:1,background:"var(--indigo)",flexShrink:0}}/>
-              <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:10,color:"var(--t2)",textTransform:"uppercase",letterSpacing:.5}}>{sectF}</span>
-              <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--indigo)",marginLeft:4}}>Top {currentPicks.length}</span>
+            <div style={{padding:"6px 12px",background:"rgba(15,23,42,.02)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <div style={{width:3,height:10,borderRadius:1,background:"var(--indigo)",flexShrink:0}}/>
+                <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:10,color:"var(--t2)",textTransform:"uppercase",letterSpacing:.5}}>{sectF}</span>
+                <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--indigo)",marginLeft:4}}>
+                  {currentPicks.length >= 10 ? "Top 10" : `${currentPicks.length} pick${currentPicks.length!==1?"s":""}`}
+                </span>
+              </div>
+              {currentPicks.length < 10 && (
+                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:3,paddingLeft:9}}>
+                  Only {currentPicks.length} stock{currentPicks.length!==1?"s":""} in this sector meet our criteria right now
+                </div>
+              )}
             </div>
           )}
           {/* Column headers */}
