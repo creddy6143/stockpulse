@@ -58,12 +58,43 @@ async def timing_middleware(request: Request, call_next):
     return response
 
 
+def _prewarm_portfolio_cache():
+    """Background thread: warm price + fundamentals cache for all portfolio/watchlist tickers.
+
+    Runs 5 seconds after startup so the server is fully ready first.
+    yfinance calls are already serialised by _YF_LIB_LOCK inside fetcher.py,
+    so we just call get_fundamentals() for each ticker and let the cache layer
+    prevent duplicate yfinance requests for analyst_data / insider_data later.
+    """
+    import time as _t
+    _t.sleep(5)
+    try:
+        tickers = list({p["ticker"] for p in db.get_portfolio()}
+                       | {w["ticker"] for w in db.get_watchlist()})
+        if not tickers:
+            print("[prewarm] No portfolio/watchlist tickers — skipping.", flush=True)
+            return
+        print(f"[prewarm] Warming cache for {len(tickers)} tickers: {', '.join(tickers)}", flush=True)
+        for i, ticker in enumerate(tickers, 1):
+            try:
+                get_stock_price(ticker)
+                get_fundamentals(ticker)
+                print(f"[prewarm] {i}/{len(tickers)} {ticker} cached", flush=True)
+            except Exception as exc:
+                print(f"[prewarm] {ticker} error: {exc}", flush=True)
+        print("[prewarm] Done — first portfolio load will be fast.", flush=True)
+    except Exception as exc:
+        print(f"[prewarm] Startup warm failed: {exc}", flush=True)
+
+
 @app.on_event("startup")
 def startup():
     init_db()
     # Auto-trigger picks scan on startup if cache is empty or older than 23 hours.
     # Runs in background so the server starts instantly.
     _maybe_auto_scan()
+    # Pre-warm price + fundamentals cache so the first /api/portfolio request is fast.
+    threading.Thread(target=_prewarm_portfolio_cache, daemon=True).start()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
