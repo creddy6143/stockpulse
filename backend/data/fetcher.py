@@ -1292,7 +1292,7 @@ def get_analyst_data(ticker: str) -> dict:
         clean = clean.replace(suffix, "")
 
     try:
-        pt = fh.price_target(clean)
+        pt = _fh_call(fh.price_target, clean)
         if pt:
             result["target_price"] = pt.get("targetMean")
             result["target_high"]  = pt.get("targetHigh")
@@ -1335,7 +1335,7 @@ def get_analyst_data(ticker: str) -> dict:
             result["target_price"] = at
 
     try:
-        recs = fh.recommendation_trends(clean)
+        recs = _fh_call(fh.recommendation_trends, clean)
         if recs and len(recs) > 0:
             latest = recs[0]
             buy  = (latest.get("strongBuy") or 0) + (latest.get("buy") or 0)
@@ -1351,8 +1351,7 @@ def get_analyst_data(ticker: str) -> dict:
     except Exception:
         pass
 
-    # yfinance fallback for analyst consensus buy/hold/sell distribution.
-    # Finnhub free tier blocks recommendation_trends for most tickers on Railway.
+    # yfinance fallback — only reached if Finnhub returned empty (no coverage for this ticker).
     # Yahoo REST returns 429. yfinance info has recommendationKey + numberOfAnalystOpinions.
     # We synthesise an approximate buy/hold/sell split from the recommendation key.
     # This is the single biggest missing signal: +15 pts smart money + +6 pts momentum.
