@@ -1371,7 +1371,13 @@ def get_analyst_data(ticker: str) -> dict:
             result["recommendation"] = "buy"
 
     result["_yf_fallback"] = True   # mark so stale cache entries are bypassed next deploy
-    cache_set(key, result)
+    # Persist successful analyst results for 3 days so Railway restarts don't wipe them.
+    # Disk persistence kicks in for TTL >= 1h, so 3-day results survive container recycling.
+    # Empty/failed results (buy=0) still use the short 1h TTL so they retry promptly.
+    if result.get("buy_count", 0) > 0:
+        cache_set(key, result, ttl=3 * 24 * 3600)   # 3 days — survived by disk cache
+    else:
+        cache_set(key, result)                        # 1h TTL (TTL_ANALYST default)
     return result
 
 
