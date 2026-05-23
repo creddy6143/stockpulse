@@ -696,12 +696,20 @@ def _run_picks_scan_background():
         portfolio = db.get_portfolio()
         watchlist = db.get_watchlist()
         user_universe = db.get_picks_universe()
-        all_tickers = list(
-            {p["ticker"] for p in portfolio}
-            | {w["ticker"] for w in watchlist}
-            | set(user_universe)
-            | set(_CURATED_UNIVERSE)
+        # Build ticker list with deterministic priority order:
+        #   1. Portfolio stocks (user-owned — must always score accurately)
+        #   2. Watchlist stocks (user-tracked — should score accurately)
+        #   3. Custom universe additions
+        #   4. Curated universe (large pool — ok if some get rate-limited)
+        # Using set() would randomise order causing inconsistent rate-limit coverage.
+        priority = (
+            [p["ticker"] for p in portfolio]
+            + [w["ticker"] for w in watchlist]
+            + list(user_universe)
         )
+        seen = set(priority)
+        curated_tail = [t for t in _CURATED_UNIVERSE if t not in seen]
+        all_tickers = list(dict.fromkeys(priority)) + curated_tail
         portfolio_tickers = {p["ticker"] for p in portfolio}
 
         from concurrent.futures import ThreadPoolExecutor, wait as _wait
@@ -897,12 +905,14 @@ def picks_disqualified():
     portfolio = db.get_portfolio()
     watchlist = db.get_watchlist()
     user_universe = db.get_picks_universe()
-    all_tickers = list(
-        {p["ticker"] for p in portfolio}
-        | {w["ticker"] for w in watchlist}
-        | set(user_universe)
-        | set(_CURATED_UNIVERSE)
+    priority = (
+        [p["ticker"] for p in portfolio]
+        + [w["ticker"] for w in watchlist]
+        + list(user_universe)
     )
+    seen = set(priority)
+    curated_tail = [t for t in _CURATED_UNIVERSE if t not in seen]
+    all_tickers = list(dict.fromkeys(priority)) + curated_tail
 
     result = []
     for ticker in all_tickers:
