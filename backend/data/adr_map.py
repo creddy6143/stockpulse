@@ -44,6 +44,27 @@ ADR_MAP = {
     "AZN.L":        "AZN",    # AstraZeneca — NASDAQ
     "GSK.L":        "GSK",    # GSK — NYSE
     "HSBA.L":       "HSBC",   # HSBC — NYSE
+    "RR.L":         "RYCEY",  # Rolls-Royce — OTC ADR
+    "VOD.L":        "VOD",    # Vodafone — NASDAQ
+    "AAL.L":        "NGLOY",  # Anglo American — OTC ADR (strips to AAL=American Airlines: WRONG)
+    "GLEN.L":       "GLNCY",  # Glencore — OTC ADR
+    "BAYN.DE":      "BAYRY",  # Bayer — OTC ADR
+    "BMW.DE":       "BMWYY",  # BMW — OTC ADR
+    "MBG.DE":       "MBGAF",  # Mercedes-Benz — OTC ADR
+    "DTE.DE":       "DTEGY",  # Deutsche Telekom — OTC ADR (strips to DTE=DTE Energy: WRONG)
+    "BASF.DE":      "BASFY",  # BASF — OTC ADR
+    "DBK.DE":       "DB",     # Deutsche Bank — NYSE
+    "MC.PA":        "LVMUY",  # LVMH — OTC ADR (strips to MC=Moelis & Co: WRONG)
+    "BNP.PA":       "BNPQY",  # BNP Paribas — OTC ADR
+    "DANO.PA":      "DANOY",  # Danone — OTC ADR
+    "TTE.PA":       "TTE",    # TotalEnergies — NYSE
+    "CAP.PA":       "CGEMY",  # Capgemini — OTC ADR
+    "SAN.MC":       "SAN",    # Banco Santander — NYSE
+    "TEF.MC":       "TEF",    # Telefonica — NYSE
+    "ING.AS":       "ING",    # ING Groep — NYSE
+    "ENI.MI":       "E",      # ENI — NYSE
+    "ISP.MI":       "ISNPY",  # Intesa Sanpaolo — OTC ADR
+    "ENEL.MI":      "ENLAY",  # ENEL — OTC ADR
     # ── SWEDEN (NASDAQ / OTC listings) ────────────────────────────────────────
     "ERIC-B.ST":    "ERIC",   # Ericsson — NASDAQ
     "VOLV-B.ST":    "VOLVF",  # Volvo — OTC
