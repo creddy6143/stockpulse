@@ -951,16 +951,17 @@ def get_leeway_fundamentals(ticker: str) -> dict:
     try:
         r = requests.get(
             f"https://api.leeway.tech/api/v1/public/fundamentals/{ticker}",
-            headers={
-                "Authorization": f"Bearer {LEEWAY_TOKEN}",
-                "Accept": "application/json",
-                "User-Agent": "StockPulse/1.0",
-            },
+            params={"apitoken": LEEWAY_TOKEN},
+            headers={"Accept": "application/json", "User-Agent": "StockPulse/1.0"},
             timeout=12,
         )
         if r.status_code == 401:
             print("[leeway] Auth failed — check LEEWAY_API_TOKEN env var", flush=True)
             cache_set(key, {}, ttl=5 * 60)
+            return {}
+        if r.status_code == 429:
+            print(f"[leeway] Rate limit hit for {ticker} — free plan may not cover fundamentals", flush=True)
+            cache_set(key, {}, ttl=30 * 60)
             return {}
         if r.status_code != 200:
             cache_set(key, {}, ttl=5 * 60)
