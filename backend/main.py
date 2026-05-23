@@ -700,9 +700,8 @@ def _run_picks_scan_background():
         #   1. Portfolio stocks (user-owned — must always score accurately)
         #   2. Watchlist stocks (user-tracked — should score accurately)
         #   3. Custom universe additions
-        #   4. Curated universe tail — shuffled each scan so different stocks
-        #      get processed early across runs, gradually filling SQLite cache
-        import random as _rnd
+        #   4. Curated universe (large pool — sector order preserved so high-quality
+        #      IT/HC stocks at the front are processed before rate-limiting kicks in)
         priority = (
             [p["ticker"] for p in portfolio]
             + [w["ticker"] for w in watchlist]
@@ -710,7 +709,6 @@ def _run_picks_scan_background():
         )
         seen = set(priority)
         curated_tail = [t for t in _CURATED_UNIVERSE if t not in seen]
-        _rnd.shuffle(curated_tail)
         all_tickers = list(dict.fromkeys(priority)) + curated_tail
         portfolio_tickers = {p["ticker"] for p in portfolio}
 
