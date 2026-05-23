@@ -1041,11 +1041,15 @@ def get_fundamentals(ticker: str) -> dict:
 
     # yfinance patch for earnings_surprise_pct — Finnhub company_earnings often returns
     # empty on Railway free tier for US stocks, costing up to 13 pts (8 business + 5 momentum).
-    # Fallback: use earningsQuarterlyGrowth (YoY earnings growth) as a proxy.
-    # Not a perfect substitute (growth vs surprise) but far better than None.
+    # Fallback chain:
+    #   1. yfinance earningsQuarterlyGrowth / earningsGrowth (cached, no extra HTTP call)
+    #   2. Finnhub epsGrowthTTMYoy already in result["earnings_growth"] (last resort proxy)
     if result.get("earnings_surprise_pct") is None and not ticker.endswith((".NS", ".BO")):
         yf_enrich = _yf_lib_fundamentals(ticker)   # cache hit if already called above
         eg = yf_enrich.get("earnings_qtr_growth") or yf_enrich.get("earnings_growth") or 0
+        # Last resort: use Finnhub EPS YoY growth (already fetched, no extra call)
+        if not eg:
+            eg = result.get("earnings_growth") or 0
         if eg != 0:
             result["earnings_surprise_pct"] = round(float(eg) * 100, 1)
 

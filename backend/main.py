@@ -700,8 +700,9 @@ def _run_picks_scan_background():
         #   1. Portfolio stocks (user-owned — must always score accurately)
         #   2. Watchlist stocks (user-tracked — should score accurately)
         #   3. Custom universe additions
-        #   4. Curated universe (large pool — sector order preserved so high-quality
-        #      IT/HC stocks at the front are processed before rate-limiting kicks in)
+        #   4. Curated universe — sector-stratified: top-15 per sector in round 1,
+        #      remaining stocks in round 2. Ensures all 11 GICS sectors have early
+        #      representation before rate limits affect later batches.
         priority = (
             [p["ticker"] for p in portfolio]
             + [w["ticker"] for w in watchlist]
@@ -709,7 +710,24 @@ def _run_picks_scan_background():
         )
         seen = set(priority)
         curated_tail = [t for t in _CURATED_UNIVERSE if t not in seen]
-        all_tickers = list(dict.fromkeys(priority)) + curated_tail
+
+        # Sector-stratified ordering: take top 15 from each sector first (round 1)
+        # so every sector gets early representation before rate limits kick in.
+        # Without this, IT's 52 stocks consume the first 13 batches and late sectors
+        # (Real Estate, Materials, Communication Services) almost always time out.
+        # Round 2 covers the remaining stocks in original curated (sector) order.
+        from collections import defaultdict as _dd
+        _TOP_PER_SECTOR = 15
+        _sector_groups: dict = _dd(list)
+        for _t in curated_tail:
+            _sector_groups[_SECTOR_MAP.get(_t, "Other")].append(_t)
+        _round1: list = []
+        _round2: list = []
+        for _sector_tickers in _sector_groups.values():
+            _round1.extend(_sector_tickers[:_TOP_PER_SECTOR])
+            _round2.extend(_sector_tickers[_TOP_PER_SECTOR:])
+
+        all_tickers = list(dict.fromkeys(priority)) + _round1 + _round2
         portfolio_tickers = {p["ticker"] for p in portfolio}
 
         from concurrent.futures import ThreadPoolExecutor, wait as _wait
@@ -725,7 +743,13 @@ def _run_picks_scan_background():
         batches = [all_tickers[i:i + batch_size] for i in range(0, len(all_tickers), batch_size)]
         total_tickers = len(all_tickers)
         tickers_done = 0
-        print(f"[PICKS BG] {total_tickers} tickers in {len(batches)} batches", flush=True)
+        _n_priority = len(list(dict.fromkeys(priority)))
+        print(
+            f"[PICKS BG] {total_tickers} tickers: "
+            f"{_n_priority} priority + {len(_round1)} round1 (sector top-15) "
+            f"+ {len(_round2)} round2, in {len(batches)} batches",
+            flush=True,
+        )
         # Initialise progress counters so frontend can show X of Y immediately
         db.update_scan_progress(0, total_tickers)
 
