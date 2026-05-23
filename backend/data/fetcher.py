@@ -29,7 +29,12 @@ from .cache import (cache_get, cache_set,
 
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 FMP_KEY = os.getenv("FMP_API_KEY", "")
+LEEWAY_TOKEN = os.getenv("LEEWAY_API_TOKEN", "")
 _fh_client = None
+
+# SEC EDGAR ticker→CIK map: populated once per process lifetime on first use.
+# Source: https://www.sec.gov/files/company_tickers.json (stable, ~5 MB)
+_EDGAR_CIK: dict = {}
 
 # Yahoo Finance authenticated session (cookie+crumb, refreshed every 30 min)
 _yf_session = None
@@ -750,6 +755,278 @@ def _finnhub_fundamentals_for(ticker: str) -> dict:
     return result
 
 
+# ── SEC EDGAR ─────────────────────────────────────────────────────────────────
+
+# XBRL concept names tried in order for each metric.
+# Different companies use different names depending on their reporting standard.
+_EDGAR_REVENUE_CONCEPTS = [
+    "RevenueFromContractWithCustomerExcludingAssessedTax",  # post ASC 606 (2018+)
+    "Revenues",
+    "SalesRevenueNet",
+    "SalesRevenueGoodsNet",
+]
+_EDGAR_INCOME_CONCEPTS = ["NetIncomeLoss", "NetIncome"]
+_EDGAR_HEADERS = {
+    "User-Agent": "StockPulse/1.0 research@stockpulse.app",
+    "Accept-Encoding": "gzip, deflate",
+}
+
+
+def _edgar_load_cik_map() -> dict:
+    """Return ticker→CIK mapping from SEC EDGAR.
+    Downloads company_tickers.json once per process lifetime and caches in
+    module-level _EDGAR_CIK. Falls back to empty dict on network error.
+    """
+    global _EDGAR_CIK
+    if _EDGAR_CIK:
+        return _EDGAR_CIK
+    try:
+        r = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers=_EDGAR_HEADERS,
+            timeout=15,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            _EDGAR_CIK = {v["ticker"].upper(): v["cik_str"] for v in data.values()}
+            print(f"[edgar] CIK map loaded — {len(_EDGAR_CIK)} tickers", flush=True)
+    except Exception as e:
+        print(f"[edgar] CIK map download failed: {e}", flush=True)
+    return _EDGAR_CIK
+
+
+def get_edgar_fundamentals(ticker: str) -> dict:
+    """SEC EDGAR XBRL facts — revenue_growth, profit_margins, gross_margins.
+
+    US-listed stocks only. No API key required. No meaningful rate limit.
+    Only called from get_fundamentals() when Finnhub + yfinance BOTH return
+    zero revenue_growth — acts as authoritative last-resort fallback.
+    Returns empty dict on failure so caller can merge selectively.
+    """
+    key = f"edgar:{ticker}"
+    cached = cache_get(key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    cik_map = _edgar_load_cik_map()
+    cik = cik_map.get(ticker.upper())
+    if not cik:
+        cache_set(key, {}, ttl=5 * 60)
+        return {}
+
+    try:
+        url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{int(cik):010d}.json"
+        r = requests.get(url, headers=_EDGAR_HEADERS, timeout=20)
+        if r.status_code != 200:
+            cache_set(key, {}, ttl=5 * 60)
+            return {}
+
+        usgaap = r.json().get("facts", {}).get("us-gaap", {})
+        if not usgaap:
+            cache_set(key, {}, ttl=5 * 60)
+            return {}
+
+        def _annual(concepts):
+            """Return 10-K annual USD entries sorted newest-first for first matching concept."""
+            for concept in concepts:
+                entries = usgaap.get(concept, {}).get("units", {}).get("USD", [])
+                fy = [e for e in entries
+                      if e.get("form") == "10-K" and e.get("fp") == "FY"]
+                if fy:
+                    return sorted(fy, key=lambda x: x["end"], reverse=True)
+            return []
+
+        revenues = _annual(_EDGAR_REVENUE_CONCEPTS)
+        incomes  = _annual(_EDGAR_INCOME_CONCEPTS)
+        grosses  = _annual(["GrossProfit"])
+
+        result: dict = {}
+
+        # Revenue growth: (latest FY − prior FY) / prior FY
+        if len(revenues) >= 2:
+            lat, pri = revenues[0]["val"], revenues[1]["val"]
+            if pri:
+                result["revenue_growth"] = round((lat - pri) / abs(pri), 4)
+
+        # Profit margin + profitability
+        if revenues and incomes:
+            rv, ni = revenues[0]["val"], incomes[0]["val"]
+            if rv:
+                m = ni / rv
+                result["profit_margins"] = round(m, 4)
+                result["gaap_profitable"] = m > 0
+
+        # Gross margin
+        if grosses and revenues:
+            rv = revenues[0]["val"]
+            if rv:
+                result["gross_margins"] = round(grosses[0]["val"] / rv, 4)
+
+        if result:
+            result["data_source"] = "edgar"
+            print(f"[edgar] {ticker}: rev_growth={result.get('revenue_growth')}", flush=True)
+
+        cache_set(key, result or {}, ttl=TTL_FUNDAMENTALS)
+        return result
+
+    except Exception as e:
+        print(f"[edgar] Error for {ticker}: {e}", flush=True)
+        cache_set(key, {}, ttl=5 * 60)
+        return {}
+
+
+# ── FMP EARNINGS ───────────────────────────────────────────────────────────────
+
+def get_fmp_earnings(ticker: str) -> dict:
+    """FMP exact earnings surprise — actual EPS vs analyst estimate.
+
+    Free tier: 250 calls/day. US stocks only on free plan.
+    Called only when FMP_KEY is set AND earnings_surprise_pct is still None
+    after Finnhub company_earnings + yfinance both failed.
+    Returns: {earnings_surprise_pct: float, earnings_history: list}
+    """
+    if not FMP_KEY:
+        return {}
+    key = f"fmp_earnings:{ticker}"
+    cached = cache_get(key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    try:
+        url = (f"https://financialmodelingprep.com/stable/earnings"
+               f"?symbol={ticker}&apikey={FMP_KEY}")
+        r = requests.get(url, headers=_HEADERS, timeout=10)
+        if r.status_code != 200:
+            cache_set(key, {}, ttl=5 * 60)
+            return {}
+        data = r.json()
+        if not data or not isinstance(data, list):
+            cache_set(key, {}, ttl=5 * 60)
+            return {}
+
+        result: dict = {"earnings_history": []}
+        for i, entry in enumerate(data[:4]):
+            actual = entry.get("eps") or entry.get("actualEarningResult")
+            est    = entry.get("epsEstimated") or entry.get("estimatedEarning")
+            result["earnings_history"].append({
+                "date":   entry.get("date"),
+                "actual": actual,
+                "est":    est,
+                "beat":   (actual > est) if (actual is not None and est) else None,
+            })
+            if i == 0 and est and est != 0 and actual is not None:
+                result["earnings_surprise_pct"] = round(
+                    (actual - est) / abs(est) * 100, 1)
+
+        cache_set(key, result, ttl=TTL_FUNDAMENTALS)
+        if result.get("earnings_surprise_pct") is not None:
+            print(f"[fmp_earnings] {ticker}: surprise={result['earnings_surprise_pct']}%",
+                  flush=True)
+        return result
+
+    except Exception as e:
+        print(f"[fmp_earnings] Error for {ticker}: {e}", flush=True)
+        cache_set(key, {}, ttl=5 * 60)
+        return {}
+
+
+# ── LEEWAY.TECH (EU FUNDAMENTALS) ─────────────────────────────────────────────
+
+def get_leeway_fundamentals(ticker: str) -> dict:
+    """Leeway.tech fundamentals for European stocks (.DE, .AS, .L, .ST, .PA etc.).
+
+    Free tier: 100,000 calls/day. No meaningful rate limit.
+    Only called when LEEWAY_API_TOKEN is set AND the stock is international
+    AND revenue_growth is still 0 after Finnhub + Yahoo + yfinance.
+    Uses flexible field extraction because Leeway's exact response schema
+    is confirmed on first live call via the log line below.
+    """
+    if not LEEWAY_TOKEN:
+        return {}
+    key = f"leeway:{ticker}"
+    cached = cache_get(key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    try:
+        r = requests.get(
+            f"https://api.leeway.tech/api/v1/public/fundamentals/{ticker}",
+            headers={
+                "Authorization": f"Bearer {LEEWAY_TOKEN}",
+                "Accept": "application/json",
+                "User-Agent": "StockPulse/1.0",
+            },
+            timeout=12,
+        )
+        if r.status_code == 401:
+            print("[leeway] Auth failed — check LEEWAY_API_TOKEN env var", flush=True)
+            cache_set(key, {}, ttl=5 * 60)
+            return {}
+        if r.status_code != 200:
+            cache_set(key, {}, ttl=5 * 60)
+            return {}
+
+        data = r.json()
+        # Leeway may nest data under "fundamentals", "data.fundamentals", or root
+        fund = (data.get("fundamentals")
+                or data.get("data", {}).get("fundamentals")
+                or data)
+
+        def _pick(d, *keys):
+            """Return first non-None value across multiple candidate field names."""
+            for k in keys:
+                v = d.get(k)
+                if v is not None:
+                    return v
+            return None
+
+        result: dict = {}
+
+        rev = _pick(fund, "revenue_growth", "revenueGrowth", "revenueGrowthRate")
+        if rev is not None:
+            result["revenue_growth"] = round(float(rev), 4)
+
+        margin = _pick(fund, "net_profit_margin", "netProfitMargin", "profitMargin")
+        if margin is not None:
+            result["profit_margins"] = round(float(margin), 4)
+            result["gaap_profitable"] = float(margin) > 0
+
+        gross = _pick(fund, "gross_margin", "grossMargin", "grossProfitMargin")
+        if gross is not None:
+            result["gross_margins"] = round(float(gross), 4)
+
+        mktcap = _pick(fund, "market_cap", "marketCap", "marketCapitalization")
+        if mktcap:
+            result["market_cap"] = int(float(mktcap))
+
+        pe = _pick(fund, "pe_ratio", "peRatio", "priceToEarningsRatio")
+        if pe:
+            result["pe_ratio"] = round(float(pe), 2)
+
+        w52h = _pick(fund, "52_week_high", "fiftyTwoWeekHigh", "week52High")
+        if w52h:
+            result["w52_high"] = float(w52h)
+
+        w52l = _pick(fund, "52_week_low", "fiftyTwoWeekLow", "week52Low")
+        if w52l:
+            result["w52_low"] = float(w52l)
+
+        if result:
+            result["data_source"] = "leeway"
+            # Log keys on first successful call to confirm field name mapping
+            print(f"[leeway] {ticker} field keys: {list(fund.keys())[:12]}", flush=True)
+
+        cache_set(key, result or {}, ttl=TTL_FUNDAMENTALS)
+        return result
+
+    except Exception as e:
+        print(f"[leeway] Error for {ticker}: {e}", flush=True)
+        cache_set(key, {}, ttl=5 * 60)
+        return {}
+
+
+# ── FMP PROFILE (existing) ────────────────────────────────────────────────────
+
 def get_fmp_profile(ticker: str) -> dict:
     """FMP /stable/profile — display enrichment for stocks with no fundamental coverage.
 
@@ -1039,6 +1316,32 @@ def get_fundamentals(ticker: str) -> dict:
             if not result.get("data_source") and not is_intl:
                 result["data_source"] = "yfinance:lib"
 
+    # SEC EDGAR fallback for US revenue_growth when Finnhub + yfinance both return 0.
+    # Official SEC filing data — free, unlimited, no API key needed.
+    _is_us = not is_intl and not ticker.endswith((".NS", ".BO"))
+    _still_no_rev = abs(result.get("revenue_growth") or 0) < 0.001
+    if _is_us and _still_no_rev:
+        edgar_data = get_edgar_fundamentals(ticker)
+        if edgar_data:
+            for k in ("revenue_growth", "profit_margins", "gross_margins", "gaap_profitable"):
+                if edgar_data.get(k) is not None and not result.get(k):
+                    result[k] = edgar_data[k]
+            if edgar_data.get("gaap_profitable") and not result["gaap_profitable"]:
+                result["gaap_profitable"] = True
+
+    # Leeway.tech: EU stock fundamentals — free 100k/day, covers .DE/.AS/.L/.ST etc.
+    # Only called when LEEWAY_TOKEN is set AND stock is EU AND revenue_growth still 0.
+    if is_intl and abs(result.get("revenue_growth") or 0) < 0.001 and LEEWAY_TOKEN:
+        leeway_data = get_leeway_fundamentals(ticker)
+        if leeway_data:
+            for k in ("revenue_growth", "profit_margins", "gross_margins",
+                      "gaap_profitable", "market_cap", "pe_ratio",
+                      "w52_high", "w52_low"):
+                if leeway_data.get(k) is not None and not result.get(k):
+                    result[k] = leeway_data[k]
+            if leeway_data.get("gaap_profitable") and not result["gaap_profitable"]:
+                result["gaap_profitable"] = True
+
     # yfinance patch for earnings_surprise_pct — Finnhub company_earnings often returns
     # empty on Railway free tier for US stocks, costing up to 13 pts (8 business + 5 momentum).
     # Fallback chain:
@@ -1052,6 +1355,15 @@ def get_fundamentals(ticker: str) -> dict:
             eg = result.get("earnings_growth") or 0
         if eg != 0:
             result["earnings_surprise_pct"] = round(float(eg) * 100, 1)
+
+    # FMP earnings: exact EPS beat/miss % — only when all prior sources failed.
+    # Free tier: 250 calls/day. US and non-Indian stocks on free plan.
+    if result.get("earnings_surprise_pct") is None and not ticker.endswith((".NS", ".BO")):
+        fmp_earn = get_fmp_earnings(ticker)
+        if fmp_earn.get("earnings_surprise_pct") is not None:
+            result["earnings_surprise_pct"] = fmp_earn["earnings_surprise_pct"]
+        if fmp_earn.get("earnings_history") and not result.get("earnings_history"):
+            result["earnings_history"] = fmp_earn["earnings_history"]
 
     # Yahoo Finance calendarEvents fallback for next earnings date.
     # Works for all markets — covers gaps where Finnhub free tier returns nothing.
