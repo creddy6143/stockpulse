@@ -704,13 +704,16 @@ def _run_picks_scan_background():
         )
         portfolio_tickers = {p["ticker"] for p in portfolio}
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+        from concurrent.futures import ThreadPoolExecutor, wait as _wait
         from data.cache import flush_disk_cache
 
         result = []
         batch_size = 30   # smaller batches = finer progress granularity
         batch_pause = 12  # reduced from 20s — still safe for Finnhub free tier
         workers = 3       # increased from 2 — saturates free-tier budget faster
+        # Per-batch timeout: 3 workers × 30 tickers, each ticker up to ~25s max.
+        # 120s is generous; if a batch isn't done in 2 min something is hung.
+        batch_timeout = 120
         batches = [all_tickers[i:i + batch_size] for i in range(0, len(all_tickers), batch_size)]
         total_tickers = len(all_tickers)
         tickers_done = 0
@@ -723,14 +726,21 @@ def _run_picks_scan_background():
                 _time.sleep(batch_pause)
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = {ex.submit(_score_one_ticker, t): t for t in batch}
-                for future in _as_completed(futures):
-                    tickers_done += 1
+                # Use wait() with timeout — as_completed() blocks forever if a
+                # yfinance call hangs (e.g. Railway network stall holds _YF_LIB_LOCK).
+                done, pending = _wait(list(futures.keys()), timeout=batch_timeout)
+                for future in done:
                     try:
-                        entry = future.result()
+                        entry = future.result(timeout=1)
                         if entry:
                             result.append(entry)
                     except Exception:
                         pass
+                if pending:
+                    print(f"[PICKS BG] Batch {batch_num+1}: {len(pending)} tickers timed out — skipping", flush=True)
+                    for f in pending:
+                        f.cancel()
+                tickers_done += len(futures)
             # Update progress after each batch completes
             db.update_scan_progress(tickers_done, total_tickers)
 
@@ -766,9 +776,27 @@ def _run_picks_scan_background():
 
 
 def _maybe_auto_scan():
-    """Trigger background scan if cache is empty or older than 23 hours."""
+    """Trigger background scan if cache is empty, stale (>23h), or zombie."""
     try:
         cache = db.get_picks_cache()
+
+        # Zombie scan: DB says "running" but no in-process thread is alive.
+        # This happens when Railway kills the container mid-scan — the lock is
+        # recreated fresh on restart so _scan_running is False, but the DB still
+        # records "running". Detect by checking elapsed time > 30 minutes.
+        if (cache and cache.get("scan_status") == "running" and not _scan_running):
+            try:
+                start_str = cache.get("scan_started_at") or ""
+                if start_str:
+                    start = datetime.fromisoformat(start_str)
+                    age_min = (datetime.utcnow() - start).total_seconds() / 60
+                    if age_min > 30:
+                        print(f"[PICKS] Zombie scan ({age_min:.0f}m old) — resetting to idle", flush=True)
+                        db.set_scan_status("idle")
+                        cache = db.get_picks_cache()  # re-read after reset
+            except Exception:
+                pass
+
         stale = True
         if cache and cache.get("updated_at") and cache.get("scan_status") == "complete":
             try:

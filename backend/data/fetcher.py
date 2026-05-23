@@ -224,8 +224,15 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
     """
     key = f"yf_lib:{ticker}"
     cached = cache_get(key, TTL_FUNDAMENTALS)
+    # Three states for a cached entry:
+    #   1. Has "recommendation_key"  → new full-data entry  → return it
+    #   2. Has "_no_data": True      → confirmed no yfinance coverage → return {}
+    #   3. Neither (old entry)       → pre-dates analyst fields → bypass and re-fetch
     if cached is not None:
-        return cached
+        if "recommendation_key" in cached:
+            return cached
+        if cached.get("_no_data"):
+            return {}
 
     with _YF_LIB_LOCK:
         # Enforce minimum gap between consecutive yfinance calls
@@ -237,7 +244,10 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
         # Re-check cache inside lock — another thread may have fetched while we waited
         cached2 = cache_get(key, TTL_FUNDAMENTALS)
         if cached2 is not None:
-            return cached2
+            if "recommendation_key" in cached2:
+                return cached2
+            if cached2.get("_no_data"):
+                return {}
 
         try:
             import yfinance as yf
@@ -265,7 +275,7 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
                 or raw_target  # analyst target alone is sufficient
             )
             if not has_data:
-                cache_set(key, {})
+                cache_set(key, {"_no_data": True})
                 return {}
             # Analyst target price — free via yfinance; Finnhub paywalls this
             analyst_target = None
@@ -290,6 +300,14 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
                     earn_qtr = round(float(raw_eq), 4)
                 except (TypeError, ValueError):
                     pass
+            # Analyst consensus — Finnhub free tier blocks this; yfinance has it free
+            # recommendationKey: "strongBuy", "buy", "hold", "underperform", "sell"
+            # numberOfAnalystOpinions: total analyst count covering this stock
+            rec_key = (info.get("recommendationKey") or "").lower().replace(" ", "_")
+            try:
+                num_analysts = int(info.get("numberOfAnalystOpinions") or 0)
+            except (TypeError, ValueError):
+                num_analysts = 0
             result = {
                 "revenue_growth":      round(revenue_growth, 4),
                 "profit_margins":      round(profit_margins, 4),
@@ -304,11 +322,13 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
                 "analyst_target":      analyst_target,
                 "short_interest_pct":  short_pct,
                 "earnings_qtr_growth": earn_qtr,
+                "recommendation_key":  rec_key,
+                "num_analysts":        num_analysts,
             }
             cache_set(key, result, ttl=TTL_FUNDAMENTALS)
             return result
         except Exception:
-            cache_set(key, {})
+            cache_set(key, {"_no_data": True})
             return {}
 
 
@@ -1070,7 +1090,8 @@ def get_insider_data(ticker: str) -> dict:
     """Insider buy/sell signals and institutional data from Finnhub."""
     key = f"insider:{ticker}"
     cached = cache_get(key, TTL_INSIDER)
-    if cached:
+    # Bypass old cache entries that lack the yfinance short-interest fallback.
+    if cached and "_yf_fallback" in cached:
         return cached
 
     result = {
@@ -1138,6 +1159,7 @@ def get_insider_data(ticker: str) -> dict:
     except Exception:
         pass
 
+    result["_yf_fallback"] = True   # mark so stale cache entries are bypassed next deploy
     cache_set(key, result, ttl=TTL_INSIDER)
     return result
 
@@ -1238,7 +1260,8 @@ def get_analyst_data(ticker: str) -> dict:
     """Analyst ratings and price target from Finnhub."""
     key = f"analyst:{ticker}"
     cached = cache_get(key, TTL_ANALYST)
-    if cached:
+    # Bypass old cache entries that lack the yfinance analyst-consensus fallback.
+    if cached and "_yf_fallback" in cached:
         return cached
 
     result = {
@@ -1319,6 +1342,35 @@ def get_analyst_data(ticker: str) -> dict:
     except Exception:
         pass
 
+    # yfinance fallback for analyst consensus buy/hold/sell distribution.
+    # Finnhub free tier blocks recommendation_trends for most tickers on Railway.
+    # Yahoo REST returns 429. yfinance info has recommendationKey + numberOfAnalystOpinions.
+    # We synthesise an approximate buy/hold/sell split from the recommendation key.
+    # This is the single biggest missing signal: +15 pts smart money + +6 pts momentum.
+    if result["buy_count"] == 0:
+        yf_data = _yf_lib_fundamentals(ticker)   # always a cache hit after the call above
+        rec_key  = (yf_data.get("recommendation_key") or "").lower().replace(" ", "_")
+        total_an = yf_data.get("num_analysts") or 0
+        if total_an > 0 and rec_key:
+            if rec_key in ("strongbuy", "strong_buy"):
+                result.update(buy_count=round(total_an * .90), hold_count=round(total_an * .10),
+                               sell_count=0, recommendation="buy")
+            elif rec_key == "buy":
+                result.update(buy_count=round(total_an * .75), hold_count=round(total_an * .20),
+                               sell_count=round(total_an * .05), recommendation="buy")
+            elif rec_key == "outperform":
+                result.update(buy_count=round(total_an * .65), hold_count=round(total_an * .25),
+                               sell_count=round(total_an * .10), recommendation="buy")
+            elif rec_key in ("hold", "neutral"):
+                result.update(buy_count=round(total_an * .45), hold_count=round(total_an * .45),
+                               sell_count=round(total_an * .10))
+            elif rec_key in ("underperform", "sell", "strongsell", "strong_sell"):
+                result.update(buy_count=round(total_an * .10), hold_count=round(total_an * .30),
+                               sell_count=round(total_an * .60), recommendation="sell")
+        elif rec_key in ("strongbuy", "strong_buy", "buy", "outperform"):
+            result["recommendation"] = "buy"
+
+    result["_yf_fallback"] = True   # mark so stale cache entries are bypassed next deploy
     cache_set(key, result)
     return result
 
