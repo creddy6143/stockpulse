@@ -275,7 +275,7 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
                 or raw_target  # analyst target alone is sufficient
             )
             if not has_data:
-                cache_set(key, {"_no_data": True})
+                cache_set(key, {"_no_data": True}, ttl=5*60)  # short TTL: retry in 5 min
                 return {}
             # Analyst target price — free via yfinance; Finnhub paywalls this
             analyst_target = None
@@ -328,7 +328,7 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
             cache_set(key, result, ttl=TTL_FUNDAMENTALS)
             return result
         except Exception:
-            cache_set(key, {"_no_data": True})
+            cache_set(key, {"_no_data": True}, ttl=5*60)  # short TTL: retry in 5 min
             return {}
 
 

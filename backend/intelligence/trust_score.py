@@ -344,6 +344,14 @@ def _smart_money_score(insider: dict) -> int:
             score += 10
         elif buy_pct > 0.40:
             score += 5
+    else:
+        # Counts unavailable but direction known from recommendationKey.
+        # Finnhub/Yahoo throttle means num_analysts=0 yet rec_key="buy".
+        # Award conservative 5 pts (not 15) — confirms positive direction
+        # without overstating confidence in the distribution.
+        rec_dir = (analyst.get("recommendation") or "hold").lower()
+        if rec_dir in ("buy", "strong_buy", "strongbuy", "outperform"):
+            score += 5
 
     # India FII institutional proxy (replaces CEO buying when absent).
     # FII holding % from Screener.in is the best available smart-money signal
