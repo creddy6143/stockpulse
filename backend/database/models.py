@@ -122,6 +122,18 @@ CREATE TABLE IF NOT EXISTS smart_picks_cache (
   progress_total INTEGER DEFAULT 0,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS analyst_cache (
+  ticker TEXT PRIMARY KEY,
+  buy_count INTEGER DEFAULT 0,
+  hold_count INTEGER DEFAULT 0,
+  sell_count INTEGER DEFAULT 0,
+  recommendation TEXT DEFAULT 'hold',
+  target_price REAL,
+  target_high REAL,
+  target_low REAL,
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

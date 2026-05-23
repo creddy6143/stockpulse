@@ -497,3 +497,43 @@ def update_scan_progress(current: int, total: int):
         )
     conn.commit()
     conn.close()
+
+
+# ── ANALYST CACHE (SQLite-persisted, survives Railway restarts) ───────────────
+
+def save_analyst_cache(ticker: str, buy_count: int, hold_count: int, sell_count: int,
+                       recommendation: str, target_price=None,
+                       target_high=None, target_low=None):
+    """Persist analyst consensus to SQLite so it survives container restarts."""
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO analyst_cache
+           (ticker, buy_count, hold_count, sell_count, recommendation,
+            target_price, target_high, target_low, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(ticker) DO UPDATE SET
+             buy_count=excluded.buy_count,
+             hold_count=excluded.hold_count,
+             sell_count=excluded.sell_count,
+             recommendation=excluded.recommendation,
+             target_price=COALESCE(excluded.target_price, analyst_cache.target_price),
+             target_high=COALESCE(excluded.target_high, analyst_cache.target_high),
+             target_low=COALESCE(excluded.target_low, analyst_cache.target_low),
+             fetched_at=excluded.fetched_at""",
+        (ticker, buy_count, hold_count, sell_count, recommendation,
+         target_price, target_high, target_low, datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_analyst_cache(ticker: str, max_age_days: int = 7):
+    """Return SQLite-persisted analyst data if fresher than max_age_days, else None."""
+    conn = get_connection()
+    row = conn.execute(
+        """SELECT * FROM analyst_cache WHERE ticker=?
+           AND fetched_at >= datetime('now', ?)""",
+        (ticker, f"-{max_age_days} days"),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None

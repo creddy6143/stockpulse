@@ -1257,7 +1257,16 @@ def get_news(ticker: str, days: int = 7) -> list:
 # ── ANALYST DATA ──────────────────────────────────────────────────────────────
 
 def get_analyst_data(ticker: str) -> dict:
-    """Analyst ratings and price target from Finnhub."""
+    """Analyst ratings and price target from Finnhub.
+
+    Persistence hierarchy (most → least reliable):
+      1. In-memory cache (3-day TTL for successful results)
+      2. Disk cache .scan_cache.json (ephemeral on Railway — lost on redeploy)
+      3. SQLite analyst_cache table (persistent volume — survives restarts)
+      4. Live fetch from Finnhub / yfinance
+    """
+    from database.db import save_analyst_cache, get_analyst_cache
+
     key = f"analyst:{ticker}"
     cached = cache_get(key, TTL_ANALYST)
     # Bypass old cache entries that lack the yfinance analyst-consensus fallback.
@@ -1371,13 +1380,39 @@ def get_analyst_data(ticker: str) -> dict:
             result["recommendation"] = "buy"
 
     result["_yf_fallback"] = True   # mark so stale cache entries are bypassed next deploy
-    # Persist successful analyst results for 3 days so Railway restarts don't wipe them.
-    # Disk persistence kicks in for TTL >= 1h, so 3-day results survive container recycling.
-    # Empty/failed results (buy=0) still use the short 1h TTL so they retry promptly.
+
     if result.get("buy_count", 0) > 0:
-        cache_set(key, result, ttl=3 * 24 * 3600)   # 3 days — survived by disk cache
+        # Persist to in-memory + disk cache (3-day TTL)
+        cache_set(key, result, ttl=3 * 24 * 3600)
+        # Also persist to SQLite — survives Railway redeploys (persistent volume)
+        try:
+            save_analyst_cache(
+                ticker,
+                result["buy_count"], result["hold_count"], result["sell_count"],
+                result["recommendation"],
+                result.get("target_price"), result.get("target_high"), result.get("target_low"),
+            )
+        except Exception:
+            pass
     else:
-        cache_set(key, result)                        # 1h TTL (TTL_ANALYST default)
+        # Live fetch failed — check SQLite for recent analyst data (up to 7 days old)
+        sql_cached = get_analyst_cache(ticker, max_age_days=7)
+        if sql_cached and sql_cached.get("buy_count", 0) > 0:
+            result.update(
+                buy_count=sql_cached["buy_count"],
+                hold_count=sql_cached["hold_count"],
+                sell_count=sql_cached["sell_count"],
+                recommendation=sql_cached.get("recommendation", "hold"),
+                target_price=sql_cached.get("target_price"),
+                target_high=sql_cached.get("target_high"),
+                target_low=sql_cached.get("target_low"),
+            )
+            result["_from_sqlite_cache"] = True
+            # Warm the memory cache from SQLite so next in-process call is instant
+            cache_set(key, result, ttl=3 * 24 * 3600)
+        else:
+            cache_set(key, result)   # 1h TTL — retry next hour
+
     return result
 
 
