@@ -325,15 +325,18 @@ def _business_score(f: dict) -> int:
             score += 4
         elif rev > 0:
             score += 2
-        elif rev < 0 and f.get("gaap_profitable") and pm > 0.05:
-            # ── CYCLICAL DOWN-CYCLE CREDIT ────────────────────────────────────
-            # Energy/materials revenue can fall in commodity price downturns while
-            # the underlying business remains healthy (e.g. XOM revenue -5% when
-            # oil drops, but profit margins still 10%+).
-            # Maintaining profitability through a cyclical trough = business quality.
-            # Award partial credit (+3) rather than zero, so a great energy major
-            # in a down-cycle is not scored identically to a failing growth stock.
-            score += 3
+        elif rev < 0:
+            if f.get("gaap_profitable") and pm > 0.05:
+                # ── CYCLICAL DOWN-CYCLE CREDIT (profitable) ───────────────────
+                # e.g. XOM revenue -5% when oil drops, margins still 10%+ → +3
+                score += 3
+            elif gm > 0.25:
+                # ── CYCLICAL DOWN-CYCLE CREDIT (gross-margin intact) ──────────
+                # Large established company with gross margins > 25% (INTC ~40%)
+                # but GAAP net losses from one-time restructuring / impairments.
+                # The gross margin confirms the core business model is intact;
+                # the net loss is accounting charges, not operational collapse.
+                score += 2
     else:
         # Small/mid-cap: higher growth expected, original thresholds apply
         if rev > 0.30:
@@ -512,6 +515,22 @@ def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict,
         score += 5
     elif surprise > 0:
         score += 2
+
+    # Near 52-week high = market conviction (5 pts)
+    # A stock trading at 90%+ of its 52-week high has passed the most demanding
+    # real-money test: institutional investors are buying/holding at these prices
+    # despite full knowledge of the company's situation. Analyst price targets
+    # often lag during recoveries — trading at or above old targets is NOT a
+    # penalty, it signals the market sees more ahead. Also catches turnarounds
+    # (INTC at ATH despite restructuring losses) that fundamentals lag to capture.
+    w52h = (fundamentals or {}).get("w52_high") or 0
+    cur  = (price_data or {}).get("price", 0)
+    if w52h > 0 and cur > 0:
+        pct_of_high = cur / w52h
+        if pct_of_high >= 0.95:
+            score += 5   # at or near 52-week high — strong market conviction
+        elif pct_of_high >= 0.85:
+            score += 2   # strong recovery from recent lows
 
     # News catalyst signal (up to +5 / down to -10)
     # Closes the architectural gap: get_news() was fetched but never scored.
