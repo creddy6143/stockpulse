@@ -1,240 +1,303 @@
 #!/usr/bin/env python3
 """
-StockPulse Scoring Validation Test
-===================================
-Tests 18 stocks across market caps, sectors, and regions.
-Validates that each stock lands in the expected score range.
+StockPulse Scoring Validation — Fresh Stock Test
+==================================================
+18 completely fresh stocks never previously used in this app.
+No pre-tuning bias. Pure algorithmic output.
 
-A professional analyst would expect:
-  Large-cap quality leaders  →  70–90+ (Strong / Exceptional)
-  Mid-cap growth / recovery  →  40–70  (Moderate / Weak)
-  Pre-revenue speculative    →  20–45  (Speculative)
-  Auto-disqualified / fraud  →   0–20  (Blocked)
+Covers:
+  • Large-cap established leaders (US + EU + India)
+  • Mid-cap growth / turnaround
+  • Small-cap pre-revenue speculative
+  • Financial-sector model test (Visa, JPM, BNP)
+  • EU data pipeline test (SIE.DE, AIR.PA, SHEL.L)
+  • Indian market test (TATAMOTORS, BAJFINANCE, SUNPHARMA)
 
 Usage:
   python3 test_scores.py                           # localhost:8000
-  python3 test_scores.py https://myapp.railway.app # Railway
+  python3 test_scores.py https://myapp.railway.app
 """
 import sys
-import json
 import time
 import requests
 
 BASE_URL = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://localhost:8000"
 
-# (ticker, min_expected, max_expected, analyst_rationale)
-# Ranges are deliberately wide — we're testing the scoring DIRECTION, not the exact number.
+# ─────────────────────────────────────────────────────────────────────────────
+# Test cases: (ticker, min_expected, max_expected, analyst_rationale)
+#
+# I am going on record with these expectations BEFORE running.
+# If a score is outside the range it is a CONFIRMED GAP, not a surprise.
+# ─────────────────────────────────────────────────────────────────────────────
 TESTS = [
 
-    # ── LARGE CAP QUALITY (should score 70–95) ─────────────────────────────────
-    # These are the stocks where "Avoid" or "Blocked" would be embarrassing.
-    # Any analyst looking at NVDA and saying "Avoid" has a broken model.
-    ("NVDA",        78, 100,
-     "AI chip monopoly. 122% rev growth, 55%+ margins, ATH, 90%+ analyst buy. "
-     "Expected: business=40(cap), smart=20-25, momentum=25(cap)"),
+    # ══════════════════════════════════════════════════════════════════════════
+    # LARGE-CAP QUALITY — scores must be 65+. Any score < 50 is a scoring bug.
+    # ══════════════════════════════════════════════════════════════════════════
 
-    ("MSFT",        68,  90,
-     "Cloud + Office dominance. 15% rev growth, 35%+ net margins, GAAP profitable. "
-     "Expected: business=35-38, smart=15-20, momentum=18-22"),
+    ("LLY",   78, 100,
+     # Eli Lilly: GLP-1/Ozempic explosion. ~35% revenue growth, 25%+ net margins,
+     # GAAP profitable, near ATH, 85%+ analyst buy.
+     # business=38-40 (hits cap: rev growth + margins + earnings)
+     # smart=15-20 (strong consensus), momentum=20-25 (ATH + 200MA)
+     "Eli Lilly. GLP-1 drug explosion. 35%+ rev growth, 25%+ margins, ATH. "
+     "FAIL if < 72 — this is one of the strongest businesses on the market right now."),
 
-    ("AAPL",        60,  82,
-     "Large-cap stable. Profitable, buybacks, slowing growth (<5%). "
-     "Expected: business=28-32, smart=12-18, momentum=16-22"),
+    ("GOOGL", 68,  92,
+     # Alphabet: search + YouTube + Cloud. 12-15% rev growth, 20-25% net margins,
+     # massive buybacks, GAAP profitable. Analyst consensus: 85%+ buy.
+     # business=30-36, smart=15-20, momentum=18-22
+     "Alphabet. Search monopoly + AI + Cloud. 12-15% rev growth, 22% margins. "
+     "FAIL if < 60 — Google with a broken score would be a serious credibility problem."),
 
-    ("AXON",        72,  92,
-     "Public safety monopoly. 30%+ rev growth, profitable, strong analyst conviction. "
-     "Expected: business=36-40, smart=18-22, momentum=18-22"),
+    ("V",     68,  88,
+     # Visa: pure payment network. Near-zero GROSS margins (no COGS in financial model)
+     # but 50%+ NET margins. GAAP profitable. KEY TEST: financial-sector detection
+     # must trigger so pm is used instead of gm. If gm is used → scores near 0 on margins.
+     "Visa. 50%+ net margins, ~8% rev growth. CRITICAL TEST: financial-sector model "
+     "must use profit_margins not gross_margins. FAIL if < 55 (financial model broken)."),
 
-    ("META",        70,  92,
-     "Ad platform recovery. Strong EPS growth, 40%+ margins, ATH. "
-     "Expected: business=38-40, smart=18-22, momentum=20-25"),
+    ("JPM",   62,  85,
+     # JPMorgan: largest US bank. ~10% rev growth, 25-30% net margins.
+     # Same financial-sector model test as Visa. ROE ~15%.
+     # Additional test: large-cap + financial model + profitable.
+     "JPMorgan. Banking giant. 10% rev growth, 25%+ net margins. "
+     "FAIL if < 52 — if financial model breaks here it breaks for all banks."),
 
-    # ── MID-CAP QUALITY / RECOVERY (should score 40–70) ───────────────────────
-    # These are the stocks where the old engine was most broken.
-    # INTC at ATH should NEVER be in "Avoid". AMD recovering is a clear hold/watch.
-    ("INTC",        38,  58,
-     "Turnaround play. ATH, recovering, but GAAP losses from restructuring impairments. "
-     "Forward EPS expected positive. "
-     "Expected: business=14-18, smart=8-12, momentum=16-22. "
-     "FAIL if score < 30 (would put in Avoid — wrong for ATH stock)"),
+    # ══════════════════════════════════════════════════════════════════════════
+    # MID-CAP GROWTH — scores should be 45-75. The interesting middle ground.
+    # ══════════════════════════════════════════════════════════════════════════
 
-    ("AMD",         58,  80,
-     "AI datacenter growth, recovered profitability. Strong momentum. "
-     "Expected: business=28-35, smart=15-20, momentum=18-23"),
+    ("PLTR",  45,  70,
+     # Palantir: AI/analytics. ~25-30% rev growth. Recently GAAP profitable (2024).
+     # High P/E, controversial valuation, but real revenue and now profitable.
+     # Expected: business=22-28, smart=10-15, momentum=14-20
+     "Palantir. AI analytics, recently GAAP profitable, 27% rev growth. "
+     "Interesting test: should score Moderate not Blocked. Analyst consensus mixed."),
 
-    ("SOFI",        35,  55,
-     "Fintech recently GAAP profitable. Growing 20%+ revenue. "
-     "Financial-sector gross margins (low gross, but positive net). "
-     "Expected: business=22-28, smart=8-14, momentum=12-18"),
+    ("CRWD",  55,  78,
+     # CrowdStrike: cybersecurity leader. 30%+ rev growth. Near-profitable or profitable.
+     # Strong analyst conviction. Industry tailwind from cyber attacks.
+     "CrowdStrike. Cybersecurity. 30%+ rev growth, near/GAAP profitable. "
+     "FAIL if < 45 — clear growth leader with real revenue."),
 
-    ("ERIC",        35,  55,
-     "Telecom equipment. Cyclically down but recovering. Large-cap, EU market. "
-     "Expected: business=14-22, smart=10-14, momentum=12-18"),
+    ("CELH",  35,  58,
+     # Celsius Holdings: energy drinks. Had explosive growth (100%+) but slowed
+     # sharply in 2024 (Pepsi channel saturation). Revenue growth now 5-15%.
+     # Still GAAP profitable. Tests deceleration handling.
+     "Celsius Holdings. Energy drinks. Growth decelerated from 100% to ~10%. "
+     "Interesting: still profitable but growth story broken. Should score Weak-Moderate."),
 
-    # ── PRE-REVENUE SPECULATIVE (should score 20–45, grade=Speculative) ────────
-    # These should NOT be "Data Unavailable" any more after the pre-revenue fix.
-    # Score is smart_money + momentum only, capped at 50.
-    ("RKLB",        22,  45,
-     "Rocket Lab. Pre-commercial aerospace, strong institutional backing. "
-     "Grade must be 'Speculative'. FAIL if grade='Data Unavailable' (old bug)."),
+    ("HIMS",  32,  55,
+     # Hims & Hers: telehealth platform. 60%+ revenue growth. NOT yet GAAP profitable
+     # but getting close. Forward EPS should be positive (analysts expect profitability).
+     # Tests forward EPS inflection bonus.
+     "Hims & Hers. 60%+ rev growth, not yet profitable but analysts expect it soon. "
+     "Tests forward EPS inflection bonus (+4 pts loss→profit). Key mid-cap growth test."),
 
-    ("OKLO",        18,  40,
-     "Nuclear micro-reactor. Pre-revenue. Policy tailwind (US govt support). "
-     "Grade must be 'Speculative'. FAIL if score=None (sufficiency gate bug)."),
+    # ══════════════════════════════════════════════════════════════════════════
+    # PRE-REVENUE SPECULATIVE — must show grade=Speculative, score 18-42
+    # These MUST NOT show Data Unavailable (that was the OKLO/NNE bug we fixed)
+    # ══════════════════════════════════════════════════════════════════════════
 
-    ("IONQ",        18,  40,
-     "Quantum computing. Pre-revenue, highly speculative. "
-     "Grade must be 'Speculative'. Score driven by analyst consensus + news."),
+    ("JOBY",  18,  42,
+     # Joby Aviation: eVTOL air taxi. Pre-revenue, FAA certification progress.
+     # Toyota invested $890M. Delta airlines partnership.
+     # Must show Speculative not Data Unavailable.
+     "Joby Aviation. Pre-revenue eVTOL. Toyota/Delta backing. "
+     "CRITICAL: must show grade=Speculative not Data Unavailable. Score from smart_money+momentum only."),
 
-    # ── EU / INTERNATIONAL (tests data pipeline quality) ────────────────────────
-    # These consistently scored 0–20 on the old engine due to yfinance EU gaps.
-    # After EDGAR/Leeway fixes, EU large-caps should score 60+.
-    ("ASML.AS",     62,  88,
-     "EUV lithography monopoly. 55%+ gross margin, strong growth. "
-     "FAIL if score < 40 (yfinance EU coverage still broken for this stock)"),
+    ("ACHR",  15,  38,
+     # Archer Aviation: eVTOL competitor to JOBY. Pre-revenue. United Airlines deal.
+     # Smaller than JOBY, less institutional backing.
+     "Archer Aviation. Pre-revenue eVTOL. United Airlines deal. "
+     "Must show grade=Speculative. Score should be lower than JOBY (less backing)."),
 
-    ("SAP.DE",      55,  78,
-     "Cloud ERP transition. 70%+ gross margins, profitable, steady growth. "
-     "FAIL if score < 35 (DE suffix data coverage issue)"),
+    ("LUNR",  12,  35,
+     # Intuitive Machines: lunar landers for NASA. Pre-revenue commercial space.
+     # Had a successful lunar landing mission. NASA contract.
+     # Very small market cap, volatile.
+     "Intuitive Machines. Lunar landers, NASA contracts. Pre-revenue. "
+     "Must show grade=Speculative. Very small cap → may be Data Unavailable if mktcap=0."),
 
-    # ── INDIAN MARKET (FII data + NSE pipeline) ──────────────────────────────────
-    ("INFY.NS",     60,  82,
-     "IT services giant. Steady 8-12% growth, profitable, FII buying. "
-     "India-specific FII signals should add to smart_money score."),
+    # ══════════════════════════════════════════════════════════════════════════
+    # EU STOCKS — critical data pipeline test. Old engine scored these 0-20.
+    # If these still fail, EU data coverage is still broken.
+    # ══════════════════════════════════════════════════════════════════════════
 
-    ("HDFCBANK.NS", 58,  80,
-     "India's largest private bank. Profitable, growing, FII holding >30%. "
-     "Financial-sector model (net margins not gross) should apply."),
+    ("SIE.DE",  50,  75,
+     # Siemens Germany: industrial automation + digitalization. Large-cap.
+     # ~8-10% rev growth, 10-15% net margins, GAAP profitable.
+     # Tests German .DE suffix data fetching.
+     "Siemens Germany. Industrial automation. 8-10% rev growth, profitable. "
+     "FAIL if < 35 — if Siemens scores low, EU .DE data pipeline broken."),
 
-    # ── SHOULD BE BLOCKED (auto-disqualified / manual overrides) ─────────────────
-    ("TNXP",         0,  20,
-     "MANUAL BLOCK: 8 reverse splits. Should return auto_disqualified=True. "
-     "FAIL if score > 25 (override not firing)"),
+    ("AIR.PA",  48,  72,
+     # Airbus France: aerospace duopoly. 10-15% rev growth. Profitable.
+     # Large-cap EU. Tests French .PA suffix.
+     "Airbus France. Aerospace duopoly with Boeing. 10-15% rev growth, profitable. "
+     "FAIL if < 35 — EU .PA data pipeline test."),
 
-    ("XGN",          0,  15,
-     "MANUAL BLOCK: board resigned 18 days before earnings. "
-     "FAIL if score > 20 (override not firing)"),
+    ("SHEL.L",  42,  65,
+     # Shell London: energy major. Revenue volatile with oil prices.
+     # Very large-cap. Net margins 5-10% (cyclical). Tests .L suffix.
+     # Large-cap cyclical with good gross margins — tests our new cyclical credit.
+     "Shell London. Energy major. Revenue volatile but profitable. .L suffix test. "
+     "Tests large-cap cyclical scoring. FAIL if < 30."),
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # INDIAN MARKET — FII data + NSE pipeline test
+    # ══════════════════════════════════════════════════════════════════════════
+
+    ("TATAMOTORS.NS", 48,  72,
+     # Tata Motors: Indian auto giant + Jaguar Land Rover. JLR turnaround complete.
+     # Revenue growth strong. Becoming profitable. FII holding increasing.
+     "Tata Motors India. JLR turnaround + EV push. Strong revenue growth, profitable. "
+     "FII data should add smart_money pts. FAIL if < 38."),
+
+    ("BAJFINANCE.NS", 58,  82,
+     # Bajaj Finance: India's top NBFC. 25-30% loan book growth. Very profitable.
+     # High FII holding (~20%+). One of India's strongest growth stories.
+     # Financial-sector model should apply here too.
+     "Bajaj Finance India. Top NBFC. 25%+ growth, very profitable, high FII holding. "
+     "FAIL if < 50 — Bajaj Finance with a bad score = India data pipeline broken."),
+
+    ("SUNPHARMA.NS", 52,  75,
+     # Sun Pharma: India's largest pharma. Specialty drugs. 10-15% rev growth.
+     # GAAP profitable. Exports to US/EU. Strong FII holding.
+     "Sun Pharma India. Largest Indian pharma. 10-15% growth, profitable, FII backing. "
+     "FAIL if < 42."),
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STRESS TEST — a bad stock that should score LOW
+    # ══════════════════════════════════════════════════════════════════════════
+
+    ("BBBY",   0,  25,
+     # Bed Bath & Beyond (or its successor): was a bankruptcy case.
+     # If ticker still exists and returns data, should score very low.
+     # Tests that a genuinely distressed company scores < 30.
+     # NOTE: if ticker not found, DATA GAP is acceptable here.
+     "Bed Bath & Beyond successor. Bankruptcy/distressed. Should score very low. "
+     "If data returns: FAIL if score > 30 (distressed company scored high = false positive)."),
 ]
 
-# ANSI colours
-G = "\033[92m"  # green
-R = "\033[91m"  # red
-Y = "\033[93m"  # amber
-B = "\033[1m"   # bold
-X = "\033[0m"   # reset
+# ─────────────────────────────────────────────────────────────────────────────
+G = "\033[92m"; R = "\033[91m"; Y = "\033[93m"; B = "\033[1m"; X = "\033[0m"
 
 
-def colour_score(score):
-    if score is None:
-        return f"{Y}  ?{X}"
-    if score >= 70:
-        return f"{G}{score:3d}{X}"
-    if score >= 40:
-        return f"{Y}{score:3d}{X}"
-    return f"{R}{score:3d}{X}"
+def colour_score(s):
+    if s is None:  return f"{Y}  ?{X}"
+    if s >= 70:    return f"{G}{s:3d}{X}"
+    if s >= 40:    return f"{Y}{s:3d}{X}"
+    return f"{R}{s:3d}{X}"
 
 
 def run():
-    print(f"\n{B}StockPulse Scoring Validation — 18 stocks{X}")
-    print(f"Backend: {BASE_URL}\n")
+    print(f"\n{B}StockPulse — Fresh Stock Scoring Validation{X}")
+    print(f"Backend : {BASE_URL}")
+    print(f"Stocks  : {len(TESTS)} fresh tickers never previously seen in this app\n")
 
-    header = (
-        f"{'Ticker':<12} {'Score':>5}  {'Biz':>4} {'Sm$':>4} {'Mom':>4}  "
-        f"{'Grade':<18}  {'Expected':>10}  {'Status':<6}  Notes"
-    )
-    print(header)
-    print("─" * 120)
+    hdr = (f"{'Ticker':<16} {'Score':>5}  {'Biz':>4} {'Sm$':>4} {'Mom':>4}  "
+           f"{'Grade':<20}  {'Expected':>8}  {'Status'}")
+    print(hdr)
+    print("─" * 95)
 
     passed = failed = data_gaps = 0
-    failures = []
+    findings = []
 
     for ticker, lo, hi, rationale in TESTS:
         try:
-            r = requests.get(f"{BASE_URL}/api/stock/{ticker}/trust", timeout=40)
-            r.raise_for_status()
-            d = r.json()
+            r  = requests.get(f"{BASE_URL}/api/stock/{ticker}/trust", timeout=45)
+            d  = r.json()
 
-            score = d.get("total_score")
-            biz   = d.get("business_score")
-            sm    = d.get("smart_money_score")
-            mom   = d.get("momentum_score")
-            grade = (d.get("grade") or "?")[:18]
-            dq    = d.get("data_quality", "full")
-            auto  = d.get("auto_disqualified", False)
+            score  = d.get("total_score")
+            biz    = d.get("business_score")
+            sm     = d.get("smart_money_score")
+            mom    = d.get("momentum_score")
+            grade  = (d.get("grade") or "?")[:20]
+            dq     = d.get("data_quality", "full")
+            auto   = d.get("auto_disqualified", False)
+            source = d.get("data_source") or "?"
 
-            score_s = colour_score(score)
-            biz_s   = f"{biz:4d}" if biz is not None else "   ?"
-            sm_s    = f"{sm:4d}"  if sm  is not None else "   ?"
-            mom_s   = f"{mom:4d}" if mom is not None else "   ?"
+            ss  = colour_score(score)
+            bs  = f"{biz:4d}" if biz is not None else "   ?"
+            sms = f"{sm:4d}"  if sm  is not None else "   ?"
+            ms  = f"{mom:4d}" if mom is not None else "   ?"
 
-            if score is None:
+            if score is None and dq == "unavailable":
                 status = f"{Y}DATA? {X}"
                 data_gaps += 1
-                failures.append((ticker, "Data Unavailable", dq, rationale))
+                findings.append(("DATA GAP", ticker, f"score=None / grade='{grade}' — data unavailable", source))
+            elif score is None:
+                status = f"{Y}NONE  {X}"
+                data_gaps += 1
+                findings.append(("DATA GAP", ticker, f"score=None unexpectedly", source))
             elif lo <= score <= hi:
                 status = f"{G}PASS  {X}"
                 passed += 1
             elif score < lo:
+                gap = lo - score
                 status = f"{R}LOW   {X}"
                 failed += 1
-                failures.append((ticker, f"Score {score} — below expected {lo}", dq, rationale))
+                findings.append(("TOO LOW", ticker,
+                                  f"score={score}  expected≥{lo}  gap={gap}pts  biz={biz} sm={sm} mom={mom}  "
+                                  f"grade='{grade}'  source={source}", rationale))
             else:
-                # Score above expected — not necessarily bad
                 status = f"{Y}HIGH  {X}"
-                passed += 1
-                failures.append((ticker, f"Score {score} — above expected {hi} (review)", dq, rationale))
+                passed += 1  # scoring high is generally fine
+                findings.append(("HIGH", ticker,
+                                  f"score={score}  expected≤{hi}  biz={biz} sm={sm} mom={mom}  "
+                                  f"grade='{grade}'  source={source}", rationale))
 
-            dq_tag = f" [{dq}]" if dq not in ("full", "limited") else ""
-            adq_tag = " AUTO-DQ" if auto else ""
+            flags = ""
+            if auto:           flags += " AUTO-DQ"
+            if dq == "limited": flags += " [limited]"
+            if dq == "unavailable": flags += " [unavailable]"
 
-            print(
-                f"{ticker:<12} {score_s:>5}  {biz_s} {sm_s} {mom_s}  "
-                f"{grade:<18}  {lo}-{hi:>3}          {status}  "
-                f"{dq_tag}{adq_tag}"
-            )
-
-            time.sleep(0.5)  # don't hammer the API
+            print(f"{ticker:<16} {ss:>5}  {bs} {sms} {ms}  {grade:<20}  {lo}-{hi:>3}       {status}{flags}")
+            time.sleep(0.5)
 
         except requests.exceptions.ConnectionError:
-            print(f"\n{R}CONNECTION FAILED — backend not running at {BASE_URL}{X}")
-            print(f"Start with:  cd backend && uvicorn main:app --reload\n")
+            print(f"\n{R}Cannot connect to {BASE_URL}{X}")
+            print("Start backend:  cd backend && uvicorn main:app --reload\n")
             sys.exit(1)
         except Exception as e:
-            print(f"{ticker:<12} {R}ERROR: {e}{X}")
+            print(f"{ticker:<16} {R}ERROR: {e}{X}")
             data_gaps += 1
 
     total = len(TESTS)
-    print(f"\n{'═' * 120}")
-    print(
-        f"{B}Results:{X}  "
-        f"{G}{passed} passed{X}  /  "
-        f"{R}{failed} failed{X}  /  "
-        f"{Y}{data_gaps} data gaps{X}  "
-        f"— {total} stocks tested"
-    )
+    print(f"\n{'═' * 95}")
+    print(f"{B}Results:{X}  {G}{passed} passed{X} / {R}{failed} failed{X} / {Y}{data_gaps} data gaps{X}  ({total} stocks)")
 
-    if failures:
-        print(f"\n{B}Stocks needing attention:{X}")
-        for ticker, issue, dq, rationale in failures:
-            # Extract just the FAIL notes (before first period in rationale)
-            fail_hint = ""
-            for part in rationale.split("."):
-                if "FAIL" in part:
-                    fail_hint = part.strip()
-                    break
-            print(f"  {'●':2} {B}{ticker:<10}{X}  {issue}")
-            if fail_hint:
-                print(f"             {Y}{fail_hint}{X}")
+    # ── Findings breakdown ───────────────────────────────────────────────────
+    if findings:
+        print(f"\n{B}{'─'*95}")
+        print(f"FINDINGS (investigate these):{X}")
+        for kind, ticker, detail, context in findings:
+            icon = R+"✗"+X if kind == "TOO LOW" else (Y+"▲"+X if kind == "HIGH" else Y+"?"+X)
+            print(f"\n  {icon} {B}{ticker}{X}  [{kind}]")
+            print(f"     {detail}")
+            # Extract FAIL hint from context
+            for sentence in context.split("."):
+                if "FAIL" in sentence or "broken" in sentence.lower():
+                    print(f"     {Y}→ {sentence.strip()}{X}")
 
-    # Print expected score guide
+    # ── Scoring guide ────────────────────────────────────────────────────────
     print(f"""
-{B}Score interpretation:{X}
-  75–100  Strong / Exceptional  →  Smart Picks "Ready to Buy"
-  60–74   Moderate              →  Watchlist "Still Watching" (high end)
-  40–59   Weak                  →  Watchlist "Still Watching"
-  30–39   Weak-low              →  Watchlist "Still Watching" (threshold was the INTC bug)
-  20–29   Speculative           →  grade = "Speculative" for pre-revenue
-   0–19   Blocked               →  auto_disqualified = True
+{B}Expected scoring bands:{X}
+  78–100  Exceptional/Strong   →  Smart Picks "Ready to Buy"
+  60–77   Strong/Moderate      →  Watchlist "Still Watching" (high conviction)
+  40–59   Moderate/Weak        →  Watchlist "Still Watching"
+  20–39   Weak/Speculative     →  Watchlist "Still Watching" (pre-revenue = Speculative grade)
+   0–19   Blocked              →  auto_disqualified=True
+   None   Data Unavailable     →  coverage gap (EU stocks if Leeway not configured)
+
+{B}Key things to check:{X}
+  • V and JPM: financial-sector model should give HIGHER score than gm alone
+  • JOBY/ACHR/LUNR: must show grade=Speculative (not Data Unavailable)
+  • SIE.DE/AIR.PA/SHEL.L: if score < 35, EU data pipeline still broken
+  • TATAMOTORS.NS/BAJFINANCE.NS: FII data should add smart_money pts
+  • HIMS: forward EPS inflection should add +4 pts (loss→profit expected)
 """)
 
 
