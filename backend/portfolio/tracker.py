@@ -104,6 +104,8 @@ def _build_position(pos: dict, rates: dict) -> dict:
         "verified_rec": trust.get("verified_rec"),
         "verification": trust.get("verification"),
         "group": group,
+        "situation_label": trust.get("situation_label"),
+        "situation_note": trust.get("situation_note"),
         # FMP profile enrichment — populated for Data Unavailable stocks
         "fmp_profile": _extract_fmp_profile(get_fundamentals(ticker))
             if trust.get("data_quality") == "unavailable" else None,
@@ -309,6 +311,8 @@ def _build_watchlist_item(item: dict) -> dict:
         "analyst_buy": trust.get("analyst_buy", 0),
         "analyst_hold": trust.get("analyst_hold", 0),
         "analyst_sell": trust.get("analyst_sell", 0),
+        "situation_label": trust.get("situation_label"),
+        "situation_note": trust.get("situation_note"),
         # FMP profile enrichment for Data Unavailable stocks
         "fmp_profile": _extract_fmp_profile(fundamentals)
             if trust.get("data_quality") == "unavailable" else None,
