@@ -321,7 +321,11 @@ def _business_score(f: dict) -> int:
         # Indian NBFC / financial services: profit margin > gross margin (inverted)
         # In standard accounting pm < gm always. If pm > gm, the "gross margin"
         # is not a traditional COGS-based metric — use profit_margins instead.
-        or (pm > gm > 0 and pm > 0.05)
+        # pm < 0.80 cap: prevents one-time accounting events (debt extinguishment
+        # gains, asset sales) from triggering the financial model. Legitimate NBFCs
+        # have pm 10-40%; pm > 80% signals a non-recurring item corrupting TTM data
+        # (e.g. BYND pm=91% from a debt restructuring gain in a single TTM window).
+        or (pm > gm > 0 and 0.05 < pm < 0.80)
     )
 
     # Revenue growth (12 pts max)
