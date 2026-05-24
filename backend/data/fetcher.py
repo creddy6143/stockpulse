@@ -862,6 +862,21 @@ def get_edgar_fundamentals(ticker: str) -> dict:
             if rv:
                 result["gross_margins"] = round(grosses[0]["val"] / rv, 4)
 
+        # Cash runway: cash balance / monthly burn rate (only when OCF is negative)
+        # Feeds the cash_runway_months < 6 auto-disqualifier — critical for pre-revenue
+        # companies (OKLO, NNE, IONQ) where this is the primary risk signal.
+        cash_entries = _annual(["CashAndCashEquivalentsAtCarryingValue",
+                                "CashCashEquivalentsAndShortTermInvestments"])
+        ocf_entries  = _annual(["NetCashProvidedByUsedInOperatingActivities"])
+        if cash_entries and ocf_entries:
+            cash_bal   = cash_entries[0]["val"]
+            ocf_annual = ocf_entries[0]["val"]
+            if ocf_annual < 0 and cash_bal > 0:
+                monthly_burn = abs(ocf_annual) / 12
+                result["cash_runway_months"] = round(cash_bal / monthly_burn, 1)
+                print(f"[edgar] {ticker}: cash_runway={result['cash_runway_months']:.1f}mo",
+                      flush=True)
+
         if result:
             result["data_source"] = "edgar"
             print(f"[edgar] {ticker}: rev_growth={result.get('revenue_growth')}", flush=True)
@@ -1180,6 +1195,7 @@ def get_fundamentals(ticker: str) -> dict:
                 # Finnhub returns values in PERCENTAGE form (e.g. 65.47 means 65.47%)
                 rev = float(m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y") or 0)
                 result["revenue_growth"] = round(rev / 100, 4)
+                result["data_source"] = "finnhub"   # mark source on first real data
 
                 eps_growth = float(
                     m.get("epsGrowthTTMYoy") or m.get("epsGrowthQuarterlyYoy") or
@@ -1241,6 +1257,8 @@ def get_fundamentals(ticker: str) -> dict:
     if not has_fundamentals:
         qs = _yf_quotesummary(ticker)
         if qs:
+            if not result.get("data_source"):
+                result["data_source"] = "yahoo_v10"
             # Revenue growth
             rev = qs.get("revenueGrowth")
             if rev is not None:
@@ -1290,6 +1308,8 @@ def get_fundamentals(ticker: str) -> dict:
                     result["w52_low"] = meta.get("fiftyTwoWeekLow") or meta.get("regularMarketDayLow")
                 if not result["market_cap"]:
                     result["market_cap"] = int(meta.get("marketCap") or 0)
+                if not result.get("data_source") and (result["market_cap"] or result["w52_high"]):
+                    result["data_source"] = "yahoo_v8"
         except Exception:
             pass
 
@@ -1314,8 +1334,10 @@ def get_fundamentals(ticker: str) -> dict:
             # gaap_profitable: yf might confirm profitable even if our default is False
             if yf_data.get("gaap_profitable") and not result["gaap_profitable"]:
                 result["gaap_profitable"] = True
-            if not result.get("data_source") and not is_intl:
-                result["data_source"] = "yfinance:lib"
+            if not result.get("data_source"):
+                result["data_source"] = "yfinance"
+            elif "yfinance" not in result["data_source"]:
+                result["data_source"] += "+yfinance"
 
     # SEC EDGAR fallback for US revenue_growth when Finnhub + yfinance both return 0.
     # Official SEC filing data — free, unlimited, no API key needed.
@@ -1324,11 +1346,18 @@ def get_fundamentals(ticker: str) -> dict:
     if _is_us and _still_no_rev:
         edgar_data = get_edgar_fundamentals(ticker)
         if edgar_data:
-            for k in ("revenue_growth", "profit_margins", "gross_margins", "gaap_profitable"):
+            contributed = False
+            for k in ("revenue_growth", "profit_margins", "gross_margins",
+                      "gaap_profitable", "cash_runway_months"):
                 if edgar_data.get(k) is not None and not result.get(k):
                     result[k] = edgar_data[k]
+                    contributed = True
             if edgar_data.get("gaap_profitable") and not result["gaap_profitable"]:
                 result["gaap_profitable"] = True
+                contributed = True
+            if contributed:
+                ds = result.get("data_source") or ""
+                result["data_source"] = (ds + "+edgar").lstrip("+")
 
     # Leeway.tech: EU stock fundamentals — free 100k/day, covers .DE/.AS/.L/.ST etc.
     # Only called when LEEWAY_TOKEN is set AND stock is EU AND revenue_growth still 0.
@@ -1363,6 +1392,9 @@ def get_fundamentals(ticker: str) -> dict:
         fmp_earn = get_fmp_earnings(ticker)
         if fmp_earn.get("earnings_surprise_pct") is not None:
             result["earnings_surprise_pct"] = fmp_earn["earnings_surprise_pct"]
+            ds = result.get("data_source") or ""
+            if "fmp" not in ds:
+                result["data_source"] = (ds + "+fmp_earn").lstrip("+")
         if fmp_earn.get("earnings_history") and not result.get("earnings_history"):
             result["earnings_history"] = fmp_earn["earnings_history"]
 
@@ -1392,7 +1424,21 @@ def get_fundamentals(ticker: str) -> dict:
     if FMP_KEY and (not result.get("market_cap") or _no_fundamentals):
         fmp = get_fmp_profile(ticker)
         if fmp:
-            result.update(fmp)   # overlays market_cap, w52_high/low, fmp_* fields
+            # Safe merge — never overwrite existing non-zero values with None.
+            # FMP returns market_cap=None for some tickers; a None value must not
+            # replace the 0 default (which would mask the data-unavailable state)
+            # or overwrite a real value fetched from an earlier route.
+            for k, v in fmp.items():
+                if k == "market_cap":
+                    if v and int(v) > 0 and not result.get("market_cap"):
+                        result["market_cap"] = int(v)
+                elif v is not None and not result.get(k):
+                    result[k] = v
+            # data_source from FMP profile is already "fmp:profile" — only apply
+            # if no earlier source was recorded (FMP profile is display enrichment,
+            # not the primary scoring data source).
+            if not result.get("data_source") and fmp.get("data_source"):
+                result["data_source"] = fmp["data_source"]
 
     # Use a short retry TTL (5 min) when we got no usable data — prevents an empty
     # fetch from locking out the stock for the full 24-hour fundamentals cache window.

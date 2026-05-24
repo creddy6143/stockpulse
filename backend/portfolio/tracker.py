@@ -257,7 +257,11 @@ def _build_watchlist_item(item: dict) -> dict:
     if score is not None and score >= 75 and not trust["auto_disqualified"]:
         wl_group = "ready"
         signal = "Entry zone now"
-    elif trust["auto_disqualified"] or (score is not None and score < 40):
+    elif trust["auto_disqualified"] or (score is not None and score < 30):
+        # score < 30 = genuinely distressed or blocked — "Avoid"
+        # score 30–59 falls through to "watching" below — weak but not a red flag.
+        # INTC at 34 (cyclical down-cycle), SOFI at 33 (data gap) belong in
+        # "watching", not alongside stocks with SEC investigations or cash crises.
         wl_group = "avoid"
         signal = "Not yet"
     else:

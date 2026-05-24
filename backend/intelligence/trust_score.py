@@ -108,6 +108,47 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     # Expose analyst to smart_money scoring (needed for consensus proxy)
     insider["_analyst"] = analyst
 
+    # ── PRE-REVENUE DETECTION (before sufficiency gate) ──────────────────────
+    # Pre-revenue companies (OKLO, NNE, IONQ) have a real market_cap but zero
+    # operating metrics. The sufficiency gate below would mark them "Data
+    # Unavailable" because market_cap is real but revenue/margins are legitimately
+    # absent — not a data failure. Detect them first and score on smart_money +
+    # momentum only, capped at 50 pts to reflect pre-commercial risk.
+    if _is_speculative_prerevenue(fundamentals):
+        auto_disq, disq_reason = _check_auto_disqualifiers(ticker, fundamentals, insider)
+        if auto_disq:
+            return _disqualified_result(ticker, disq_reason,
+                                        data_source=fundamentals.get("data_source") or "live_data")
+        try:
+            catalyst = get_news_catalyst_signal(ticker)
+        except Exception:
+            catalyst = {"catalyst_pts": 0, "catalyst_type": "none", "catalyst_desc": ""}
+        india = {}
+        if is_indian_stock(ticker):
+            india = get_india_signals(ticker)
+            insider["_fii_consecutive_buying"] = india.get("consecutive_fii_buying", 0)
+            insider["_fii_holding_pct"] = fundamentals.get("fii_holding_pct", 0) or 0
+        sm  = _smart_money_score(insider)
+        mom = _momentum_score(analyst, fundamentals, price_data, catalyst)
+        if is_indian_stock(ticker):
+            if india.get("consecutive_fii_buying", 0) >= 3:
+                mom = min(25, mom + 3)
+            if india.get("block_deal_buy"):
+                sm = min(35, sm + 2)
+        total = min(50, sm + mom)
+        return {
+            "ticker": ticker, "total_score": total, "business_score": 0,
+            "smart_money_score": sm, "momentum_score": mom,
+            "grade": "Speculative", "auto_disqualified": False,
+            "disqualify_reason": None, "is_speculative": True,
+            "analyst_buy": analyst.get("buy_count", 0),
+            "analyst_hold": analyst.get("hold_count", 0),
+            "analyst_sell": analyst.get("sell_count", 0),
+            "analyst_target": analyst.get("target_price"),
+            "data_quality": "limited",
+            "data_source": fundamentals.get("data_source"),
+        }
+
     # ── DATA SUFFICIENCY CHECK ────────────────────────────────────────────────
     # Universal replacement for the old hardcoded suffix check (.ST, .AS etc.).
     # If < 70% of required fundamental fields have real data, scoring produces a
@@ -118,7 +159,8 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     # ── AUTO-DISQUALIFIERS ───────────────────────────────────────────────────
     auto_disq, disq_reason = _check_auto_disqualifiers(ticker, fundamentals, insider)
     if auto_disq:
-        return _disqualified_result(ticker, disq_reason)
+        return _disqualified_result(ticker, disq_reason,
+                                    data_source=fundamentals.get("data_source") or "live_data")
 
     # ── PILLAR 1: BUSINESS QUALITY (40 pts) ──────────────────────────────────
     business = _business_score(fundamentals)
@@ -225,7 +267,7 @@ def _check_auto_disqualifiers(ticker, fundamentals, insider) -> tuple:
     return False, None
 
 
-def _disqualified_result(ticker: str, reason: str) -> dict:
+def _disqualified_result(ticker: str, reason: str, data_source: str = "verified") -> dict:
     return {
         "ticker": ticker,
         "total_score": 0,
@@ -237,6 +279,7 @@ def _disqualified_result(ticker: str, reason: str) -> dict:
         "disqualify_reason": reason,
         "is_speculative": False,
         "data_quality": "full",
+        "data_source": data_source,
         "analyst_buy": 0, "analyst_hold": 0, "analyst_sell": 0, "analyst_target": None,
     }
 
@@ -511,16 +554,19 @@ BLOCKED_OVERRIDES = {
         "total_score": 18, "business_score": 3, "smart_money_score": 5,
         "momentum_score": 10, "grade": "Blocked", "auto_disqualified": True,
         "disqualify_reason": "8 reverse splits. Chronic dilution.",
+        "data_source": "manual_block",
     },
     "XGN": {
         "total_score": 8, "business_score": 2, "smart_money_score": 2,
         "momentum_score": 4, "grade": "Blocked", "auto_disqualified": True,
         "disqualify_reason": "Board resigned 18 days before earnings.",
+        "data_source": "manual_block",
     },
     "NKLA": {
         "total_score": 7, "business_score": 0, "smart_money_score": 2,
         "momentum_score": 5, "grade": "Blocked", "auto_disqualified": True,
         "disqualify_reason": "CEO + CFO resigned. SEC fraud. Chapter 11.",
+        "data_source": "manual_block",
     },
 }
 
