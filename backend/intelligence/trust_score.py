@@ -86,6 +86,99 @@ def _data_unavailable_result(ticker: str, data_source: str = "no coverage") -> d
     }
 
 
+def _detect_situation_label(
+    f: dict, insider: dict, score: int, is_speculative: bool, price_data: dict | None
+) -> tuple[str, str]:
+    """Return (label, note) — one plain-English situation label for this stock.
+
+    Priority order: most urgent/distinctive situation wins.
+    Label is shown as a coloured badge in expanded rows and Smart Picks panel.
+    Note is 1 sentence shown below the label.
+    """
+    pm          = f.get("profit_margins") or 0
+    gm          = f.get("gross_margins") or 0
+    rev_growth  = f.get("revenue_growth") or 0
+    gaap_ok     = f.get("gaap_profitable", False)
+    mktcap      = f.get("market_cap") or 0
+    w52h        = f.get("w52_high") or 0
+    cash_runway = f.get("cash_runway_months")
+    short_int   = insider.get("short_interest_pct") or 0
+    ceo_buying  = insider.get("ceo_buying", False)
+    current_price = (price_data or {}).get("price") or 0
+
+    # ── 1. Cash warning — safety-critical, shows first ────────────────────────
+    if cash_runway is not None and cash_runway < 12:
+        return (
+            "Cash Warning",
+            f"Only {cash_runway:.0f} months of cash at current burn — company needs new funding or revenue soon.",
+        )
+
+    # ── 2. CEO bought with own money — highest-trust insider signal ───────────
+    if ceo_buying:
+        return (
+            "CEO Backing",
+            "The CEO recently bought shares with their own money — the strongest insider signal in the market.",
+        )
+
+    # ── 3. Speculative bet: loss-making, small/mid-cap, high growth ──────────
+    # Covers pre-revenue (is_speculative) and early-revenue (pm corrupt or very low)
+    small_or_mid = mktcap < 10_000_000_000   # < $10B
+    loss_making  = not gaap_ok or (pm < 0.05 and pm > -0.50)
+    high_growth  = rev_growth > 0.25 or is_speculative
+    if small_or_mid and loss_making and high_growth:
+        return (
+            "Speculative Bet",
+            "Size this at 2–3% of portfolio max — one catalyst away from a big move or a big loss.",
+        )
+
+    # ── 4. Near all-time high — quality stock breaking out ────────────────────
+    if w52h and current_price and current_price >= w52h * 0.95 and score >= 70:
+        return (
+            "ATH Breakout",
+            "Quality stock at all-time highs — strong stocks often continue higher from here, not reverse.",
+        )
+
+    # ── 5. High short interest — squeeze potential ────────────────────────────
+    if short_int >= 20:
+        return (
+            "Short Squeeze Watch",
+            f"{short_int:.0f}% of shares are bet against this stock — good news could force rapid price rise.",
+        )
+
+    # ── 6. Deep value / turnaround — well below ATH but fundamentals intact ──
+    if w52h and current_price and current_price < w52h * 0.50 and score >= 60:
+        return (
+            "Turnaround Play",
+            "Well-run company trading well below its high — recovery plays like this take patience but can be powerful.",
+        )
+
+    # ── 7. Strong quality hold — solid across all pillars ────────────────────
+    if score >= 80 and gaap_ok and rev_growth > 0.10:
+        return (
+            "Strong Foundation",
+            "Solid business with growing revenue and institutional backing — suitable as a core position.",
+        )
+
+    # ── 8. Profitable grower — good but not exceptional ──────────────────────
+    if score >= 65 and gaap_ok:
+        return (
+            "Profitable Grower",
+            "Profitable and growing — the risk here is timing and valuation, not business quality.",
+        )
+
+    # ── 9. Default for lower-scoring or incomplete data ───────────────────────
+    if score < 50:
+        return (
+            "Proceed with Caution",
+            "Multiple risk factors present — keep any position small and set a clear exit level.",
+        )
+
+    return (
+        "Monitor Closely",
+        "Not everything is aligned yet — worth watching but wait for a clearer entry signal.",
+    )
+
+
 def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     """
     Returns full trust score breakdown:
@@ -136,11 +229,16 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
             if india.get("block_deal_buy"):
                 sm = min(35, sm + 2)
         total = min(50, sm + mom)
+        sit_label, sit_note = _detect_situation_label(
+            fundamentals, insider, total, True, price_data
+        )
         return {
             "ticker": ticker, "total_score": total, "business_score": 0,
             "smart_money_score": sm, "momentum_score": mom,
             "grade": "Speculative", "auto_disqualified": False,
             "disqualify_reason": None, "is_speculative": True,
+            "situation_label": sit_label,
+            "situation_note": sit_note,
             "analyst_buy": analyst.get("buy_count", 0),
             "analyst_hold": analyst.get("hold_count", 0),
             "analyst_sell": analyst.get("sell_count", 0),
@@ -200,6 +298,11 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     speculative = _is_speculative_prerevenue(fundamentals)
     grade = _grade(total, speculative)
 
+    # Situation label — plain English framing shown in expanded rows and Smart Picks
+    sit_label, sit_note = _detect_situation_label(
+        fundamentals, insider, total, speculative, price_data
+    )
+
     # Include analyst consensus in result so frontend can display it
     buy_n  = analyst.get("buy_count", 0)
     hold_n = analyst.get("hold_count", 0)
@@ -215,6 +318,8 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
         "auto_disqualified": False,
         "disqualify_reason": None,
         "is_speculative": speculative,
+        "situation_label": sit_label,
+        "situation_note": sit_note,
         # Analyst consensus — displayed on watchlist and stock rows
         "analyst_buy": buy_n,
         "analyst_hold": hold_n,

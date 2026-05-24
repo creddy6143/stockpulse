@@ -227,6 +227,20 @@ const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".
 const isSEK = t => t && (t.endsWith(".ST") || t.endsWith(".HE") || t.endsWith(".CO") || t.endsWith(".OL"));
 const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : isSEK(t) ? "kr\u00a0" : "$";
 const actionColor = a => a==="EXIT"||a==="WAIT"?"var(--rose)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber)":a==="BUY"||a==="STRONG BUY"?"var(--emerald)":"var(--indigo)";
+const situationColor = lbl => {
+  if (!lbl) return {c:"var(--indigo)",bg:"#eef2ff"};
+  if (lbl==="Cash Warning")        return {c:"var(--rose)",   bg:"var(--rose2)"};
+  if (lbl==="Proceed with Caution")return {c:"var(--rose)",   bg:"var(--rose2)"};
+  if (lbl==="Speculative Bet")     return {c:"var(--violet)", bg:"rgba(124,58,237,.08)"};
+  if (lbl==="CEO Backing")         return {c:"var(--emerald)",bg:"var(--emerald2)"};
+  if (lbl==="ATH Breakout")        return {c:"var(--emerald)",bg:"var(--emerald2)"};
+  if (lbl==="Strong Foundation")   return {c:"var(--emerald)",bg:"var(--emerald2)"};
+  if (lbl==="Profitable Grower")   return {c:"var(--sky)",    bg:"#e0f2fe"};
+  if (lbl==="Turnaround Play")     return {c:"var(--amber)",  bg:"var(--amber2)"};
+  if (lbl==="Short Squeeze Watch") return {c:"var(--amber)",  bg:"var(--amber2)"};
+  if (lbl==="Monitor Closely")     return {c:"var(--amber)",  bg:"var(--amber2)"};
+  return {c:"var(--indigo)",bg:"#eef2ff"};
+};
 const actionBg = a => a==="EXIT"||a==="WAIT"?"var(--rose2)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber2)":a==="BUY"||a==="STRONG BUY"?"var(--emerald2)":"#eef2ff";
 const actionLabel = a => a==="EXIT"?"⚠️ Risk":a==="WAIT"?"Wait":a==="TRIM"?"Trim":a==="DECIDE"?"Decide":a==="WATCH"?"Watch":a==="BUY"?"Buy":a==="STRONG BUY"?"Strong Buy":a||"Signal";
 // Swedish number format: 27 681 kr (space thousands separator)
@@ -297,6 +311,8 @@ const mapPosition = (pos, earningsByTicker) => {
     verdict,
     earn: (earningsByTicker || {})[pos.ticker] || "—",
     auto_disqualified: pos.auto_disqualified,
+    situationLabel: pos.situation_label || null,
+    situationNote: pos.situation_note || null,
   };
 };
 
@@ -323,6 +339,8 @@ const mapWatchlistItem = item => {
     analystHold: item.analyst_hold || 0,
     analystSell: item.analyst_sell || 0,
     analystTarget: item.analyst_target || null,
+    situationLabel: item.situation_label || null,
+    situationNote: item.situation_note || null,
   };
 };
 
@@ -377,6 +395,8 @@ const mapPick = pick => {
     is_dip: pick.is_dip || false,
     change_pct: pick.change_pct || 0,
     sector: pick.sector || "Other",
+    situationLabel: trust.situation_label || null,
+    situationNote: trust.situation_note || null,
   };
 };
 
@@ -1293,6 +1313,12 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
               ~ {s.verifCaveat}
             </div>
           )}
+          {s.situationLabel && (()=>{const sc=situationColor(s.situationLabel);return(
+            <div style={{display:"inline-flex",flexDirection:"column",gap:2,marginBottom:8}}>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:sc.c,background:sc.bg,padding:"3px 8px",borderRadius:5,alignSelf:"flex-start"}}>{s.situationLabel}</span>
+              {s.situationNote&&<span style={{fontSize:10,color:"var(--t2)",lineHeight:1.5,paddingLeft:2}}>{s.situationNote}</span>}
+            </div>
+          );})()}
           <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:8,borderLeft:"2.5px solid",borderLeftColor:dot,paddingLeft:9}}>{s.verdict}</div>
           {isDataUnavailable && s.fmpProfile && <FmpProfileCard p={s.fmpProfile} />}
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap",marginTop: isDataUnavailable && s.fmpProfile ? 8 : 0}}>
@@ -1374,6 +1400,12 @@ function CompactWatchRow({s, dot, onRemove, onSetAlert}) {
       </div>
       {open&&(
         <div style={{padding:"9px 12px 11px",background:"rgba(91,114,248,.02)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
+          {s.situationLabel && (()=>{const sc=situationColor(s.situationLabel);return(
+            <div style={{display:"inline-flex",flexDirection:"column",gap:2,marginBottom:8}}>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:sc.c,background:sc.bg,padding:"3px 8px",borderRadius:5,alignSelf:"flex-start"}}>{s.situationLabel}</span>
+              {s.situationNote&&<span style={{fontSize:10,color:"var(--t2)",lineHeight:1.5,paddingLeft:2}}>{s.situationNote}</span>}
+            </div>
+          );})()}
           <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:9}}>{s.reason}</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <div style={{background:"var(--card2)",borderRadius:8,padding:"7px 10px"}}>
@@ -2024,6 +2056,12 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
       {open&&(
         <div style={{padding:"8px 12px 10px",background:"rgba(91,114,248,.018)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
           <div style={{height:2,borderRadius:1,background:s.grad,marginBottom:7}}/>
+          {s.situationLabel && (()=>{const sc=situationColor(s.situationLabel);return(
+            <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:9,padding:"7px 9px",borderRadius:7,background:sc.bg,border:`1px solid ${sc.c}22`}}>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:sc.c,whiteSpace:"nowrap",paddingTop:1}}>{s.situationLabel}</span>
+              {s.situationNote&&<span style={{fontSize:10,color:"var(--t2)",lineHeight:1.5}}>{s.situationNote}</span>}
+            </div>
+          );})()}
           <div style={{display:"flex",gap:0,marginBottom:8,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
             {[{l:"Business",v:s.b,m:s.bm,c:"#5b72f8"},{l:"Smart $",v:s.s,m:s.sm,c:"#7c3aed"},{l:"Momentum",v:s.m,m:s.mm,c:"#059669"}].map((p,j)=>(
               <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
