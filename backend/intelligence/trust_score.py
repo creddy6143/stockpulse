@@ -83,6 +83,8 @@ def _data_unavailable_result(ticker: str, data_source: str = "no coverage") -> d
         "analyst_target": None,
         "data_quality": "unavailable",
         "data_source": data_source,
+        "situation_label": None,
+        "situation_note": None,
     }
 
 
@@ -386,6 +388,8 @@ def _disqualified_result(ticker: str, reason: str, data_source: str = "verified"
         "data_quality": "full",
         "data_source": data_source,
         "analyst_buy": 0, "analyst_hold": 0, "analyst_sell": 0, "analyst_target": None,
+        "situation_label": None,
+        "situation_note": None,
     }
 
 
@@ -881,6 +885,8 @@ def get_trust_score_with_fallback(ticker: str, price_data: dict = None) -> dict:
         "analyst_buy": 0, "analyst_hold": 0, "analyst_sell": 0, "analyst_target": None,
         "display_score": 50, "display_grade": "Moderate",
         "verified_rec": "HOLD",
+        "situation_label": None,
+        "situation_note": None,
         "verification": {
             "confidence": "MEDIUM",
             "suppressed": False,

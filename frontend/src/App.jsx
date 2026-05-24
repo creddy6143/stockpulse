@@ -364,7 +364,7 @@ const mapEarnings = e => {
     revEst: e.revenue_estimate||null,
     analystBuy: e.analyst_buy||0, analystHold: e.analyst_hold||0, analystSell: e.analyst_sell||0,
     analystTarget: e.analyst_target||null,
-    history: (e.earnings_history||[]).map(h=>({q:h.period||"",epsEst:h.estimate,epsAct:h.actual,beat:(h.actual??0)>=(h.estimate??0)})),
+    history: (e.earnings_history||[]).map(h=>({q:h.period||h.date||"",epsEst:h.estimate??h.est,epsAct:h.actual,beat:(h.actual??0)>=((h.estimate??h.est)??0)})),
     note: isToday ? "Earnings today — review the results when released."
       : `Results expected ${fmtEarnDate(e.next_earnings_date)}. Worth checking in before then.`,
     isUrgent: false,
