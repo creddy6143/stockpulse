@@ -905,6 +905,138 @@ def get_edgar_fundamentals(ticker: str) -> dict:
         return {}
 
 
+# ── EDGAR FORM 4 — CEO / INSIDER BUYING ───────────────────────────────────────
+
+# Form 4 relationship strings that indicate executive insiders (not just directors)
+_EDGAR_EXEC_TITLES = (
+    "CHIEF EXECUTIVE", "CEO", "PRESIDENT", "CHIEF OPERATING", "COO",
+    "CHIEF FINANCIAL", "CFO", "CHIEF TECHNOLOGY", "CTO",
+)
+
+def get_edgar_insider_buying(ticker: str) -> dict:
+    """SEC EDGAR Form 4 filings — CEO and executive insider buying last 90 days.
+
+    No API key, no rate limit. Filed within 2 business days of any transaction.
+    Returns {ceo_buying: bool, insider_buy_value: float, exec_buy_count: int}.
+    Returns {} on failure so caller merges selectively.
+    US stocks only (EDGAR has no foreign filings).
+    """
+    key = f"edgar_form4:{ticker}"
+    cached = cache_get(key, 7 * 24 * 60)   # 7-day TTL — Form 4 is event-driven
+    if cached is not None:
+        return cached
+
+    cik_map = _edgar_load_cik_map()
+    cik = cik_map.get(ticker.upper().split(".")[0])   # strip .NS/.BO etc
+    if not cik:
+        cache_set(key, {}, ttl=5 * 60)
+        return {}
+
+    try:
+        url = f"https://data.sec.gov/submissions/CIK{int(cik):010d}.json"
+        r = requests.get(url, headers=_EDGAR_HEADERS, timeout=15)
+        if r.status_code != 200:
+            cache_set(key, {}, ttl=5 * 60)
+            return {}
+
+        data = r.json()
+        recent = data.get("filings", {}).get("recent", {})
+        forms      = recent.get("form", [])
+        dates      = recent.get("filingDate", [])
+        acc_nums   = recent.get("accessionNumber", [])
+
+        cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+
+        form4_entries = [
+            (acc_nums[i], dates[i])
+            for i, f in enumerate(forms)
+            if f == "4" and dates[i] >= cutoff
+        ]
+
+        if not form4_entries:
+            result = {"ceo_buying": False, "insider_buy_value": 0.0, "exec_buy_count": 0}
+            result["data_source"] = "edgar_form4"
+            cache_set(key, result, ttl=7 * 24 * 60)
+            return result
+
+        ceo_buying = False
+        total_buy_value = 0.0
+        exec_buys = 0
+
+        # Parse individual Form 4 XML files (cap at 10 most recent to limit calls)
+        import xml.etree.ElementTree as ET
+        for acc, date in form4_entries[:10]:
+            try:
+                acc_clean = acc.replace("-", "")
+                xml_url = (
+                    f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                    f"{acc_clean}/{acc}.txt"
+                )
+                xr = requests.get(xml_url, headers=_EDGAR_HEADERS, timeout=8)
+                if xr.status_code != 200:
+                    continue
+                # EDGAR Form 4 txt files are wrapped; find the <ownershipDocument> block
+                txt = xr.text
+                xml_start = txt.find("<ownershipDocument>")
+                if xml_start == -1:
+                    continue
+                xml_block = txt[xml_start:]
+                xml_end = xml_block.find("</ownershipDocument>")
+                if xml_end != -1:
+                    xml_block = xml_block[:xml_end + len("</ownershipDocument>")]
+
+                root = ET.fromstring(xml_block)
+
+                # Officer title from <reportingOwner>/<reportingOwnerRelationship>
+                title = ""
+                for ro in root.findall(".//reportingOwnerRelationship"):
+                    title = (ro.findtext("officerTitle") or "").upper()
+                    break
+
+                is_exec = any(t in title for t in _EDGAR_EXEC_TITLES)
+
+                # Non-derivative transactions (table 1) — open-market purchases
+                for txn in root.findall(".//nonDerivativeTransaction"):
+                    code = (txn.findtext(".//transactionCode") or "").upper()
+                    if code != "P":   # P = open-market purchase
+                        continue
+                    shares_el = txn.findtext(".//transactionShares/value")
+                    price_el  = txn.findtext(".//transactionPricePerShare/value")
+                    if shares_el and price_el:
+                        try:
+                            val = float(shares_el) * float(price_el)
+                            total_buy_value += val
+                            if is_exec:
+                                exec_buys += 1
+                                if any(t in title for t in ("CHIEF EXECUTIVE", "CEO")):
+                                    ceo_buying = True
+                        except (ValueError, TypeError):
+                            pass
+
+            except Exception:
+                continue
+
+        result = {
+            "ceo_buying": ceo_buying,
+            "insider_buy_value": round(total_buy_value, 0),
+            "exec_buy_count": exec_buys,
+            "data_source": "edgar_form4",
+        }
+        if ceo_buying or exec_buys > 0:
+            print(
+                f"[edgar_form4] {ticker}: ceo={ceo_buying} "
+                f"exec_buys={exec_buys} value=${total_buy_value:,.0f}",
+                flush=True,
+            )
+        cache_set(key, result, ttl=7 * 24 * 60)
+        return result
+
+    except Exception as e:
+        print(f"[edgar_form4] Error for {ticker}: {e}", flush=True)
+        cache_set(key, {}, ttl=5 * 60)
+        return {}
+
+
 # ── FMP EARNINGS ───────────────────────────────────────────────────────────────
 
 def get_fmp_earnings(ticker: str) -> dict:
@@ -1501,7 +1633,9 @@ def get_insider_data(ticker: str) -> dict:
                 change = t.get("change", 0) or 0
                 price = t.get("transactionPrice", 0) or 0
                 value = abs(change * price)
-                pos = t.get("name", "").upper()
+                # officerTitle has the role (e.g. "CEO", "Chief Executive Officer")
+                # name has the person's name (e.g. "Reed Hastings") — wrong field
+                pos = t.get("officerTitle", "").upper()
                 if change > 0:
                     result["insider_buy_value"] += value
                     if "CEO" in pos or "CHIEF EXEC" in pos:
@@ -1528,6 +1662,34 @@ def get_insider_data(ticker: str) -> dict:
         if yf_short > 0:
             result["short_interest_pct"] = yf_short
 
+    # FMP short interest — last fallback when Finnhub + yfinance both return 0.
+    # FINRA publishes bi-weekly; 48h cache matches the publication cadence.
+    # Only for US stocks (FMP free tier doesn't cover .NS/.BO/.AS etc.)
+    _is_us_ticker = not any(ticker.upper().endswith(s) for s in
+                            (".NS", ".BO", ".AS", ".DE", ".ST", ".PA", ".L",
+                             ".F", ".MI", ".MC", ".BR"))
+    if result["short_interest_pct"] == 0 and FMP_KEY and _is_us_ticker:
+        try:
+            fmp_si_url = (
+                f"https://financialmodelingprep.com/stable/short-interest"
+                f"?symbol={clean}&apikey={FMP_KEY}"
+            )
+            fsi = requests.get(fmp_si_url, headers=_HEADERS, timeout=10)
+            if fsi.status_code == 200:
+                fsi_data = fsi.json()
+                # FMP returns a list; most-recent entry first
+                entry = fsi_data[0] if isinstance(fsi_data, list) and fsi_data else {}
+                # Field is percentOfSharesShorted or shortPercent (API version dependent)
+                si_val = (entry.get("percentOfSharesShorted")
+                          or entry.get("shortPercent")
+                          or entry.get("shortPercentFloat"))
+                if si_val:
+                    result["short_interest_pct"] = round(float(si_val) * 100, 1)
+                    print(f"[fmp_si] {ticker}: short={result['short_interest_pct']}%",
+                          flush=True)
+        except Exception:
+            pass
+
     try:
         own = _fh_call(fh.ownership, clean, limit=10)
         holders = (own or {}).get("ownership", [])
@@ -1536,6 +1698,16 @@ def get_insider_data(ticker: str) -> dict:
             result["institutional_buying"] = total_pct > 0.30
     except Exception:
         pass
+
+    # EDGAR Form 4 — merge CEO/exec buying when Finnhub insider data returns nothing.
+    # Only called when ceo_buying still False AND insider_buy_value still 0 (data gap).
+    # Only for US stocks — EDGAR has no foreign filings.
+    if not result["ceo_buying"] and result["insider_buy_value"] == 0 and _is_us_ticker:
+        form4 = get_edgar_insider_buying(ticker)
+        if form4.get("ceo_buying"):
+            result["ceo_buying"] = True
+        if form4.get("insider_buy_value", 0) > 0:
+            result["insider_buy_value"] = form4["insider_buy_value"]
 
     result["_yf_fallback"] = True   # mark so stale cache entries are bypassed next deploy
     cache_set(key, result, ttl=TTL_INSIDER)
