@@ -523,16 +523,29 @@ def verify_pick(
                     "suppression_reason": reason, "warnings": []})
         return False, reason
 
-    # P6 — quality gate: must be profitable OR revenue-growing
-    # Banks / financials naturally have no "gross margin" — use profit_margins only.
-    profitable    = (fundamentals.get("profit_margins") or 0) > 0
-    revenue_grows = (fundamentals.get("revenue_growth") or 0) >= 0.02  # ≥ 2% YoY
-    gaap_ok       = trust.get("gaap_profitable", False)
-    if not profitable and not revenue_grows and not gaap_ok:
+    # P6 — quality gate: two distinct criteria, not conflated.
+    #
+    # PROFITABLE: positive net margin — includes quality mature companies
+    # (Coca-Cola growing 3%, JPMorgan growing 6%) that are real businesses.
+    # Profitability alone is sufficient — slow growth on a profitable company
+    # is a feature, not a bug. The score already penalises slow growers.
+    #
+    # HIGH-GROWTH: revenue growing ≥ 10% YoY — genuine growth-oriented stocks.
+    # 2% was inflation-level "growth" — not meaningful. 10% is a real signal.
+    # Allows unprofitable but fast-growing companies (cloud, biotech pre-profit)
+    # to qualify on growth alone.
+    #
+    # Rejects: unprofitable + growing < 10% — not quality, not growth-oriented.
+    # Example: a company losing money and growing 5% has no business in picks.
+    profitable  = (fundamentals.get("profit_margins") or 0) > 0
+    gaap_ok     = trust.get("gaap_profitable", False)
+    high_growth = (fundamentals.get("revenue_growth") or 0) >= 0.10  # ≥ 10% YoY
+
+    if not profitable and not gaap_ok and not high_growth:
         reason = (
-            f"P6_quality_gate: neither profitable nor growing "
-            f"(profit_margin={fundamentals.get('profit_margins')}, "
-            f"revenue_growth={fundamentals.get('revenue_growth')})"
+            f"P6_quality_gate: not profitable and revenue_growth "
+            f"{round((fundamentals.get('revenue_growth') or 0)*100,1)}% < 10% threshold — "
+            f"neither quality nor growth-oriented"
         )
         _write_log({"ts": time.time(), "ticker": ticker, "output_type": "pick",
                     "confidence": "SUPPRESSED", "score": score,
