@@ -329,6 +329,21 @@ def _yf_lib_fundamentals(ticker: str) -> dict:
                 "earnings_qtr_growth": earn_qtr,
                 "recommendation_key":  rec_key,
                 "num_analysts":        num_analysts,
+                # ── Price trend indicators ─────────────────────────────────────
+                # 200-day MA is the universally used institutional trend signal.
+                # Spec: "Above 200-day MA: +7" — was never fetched until now.
+                "ma_200d": round(float(info.get("twoHundredDayAverage") or 0), 2) or None,
+                "ma_50d":  round(float(info.get("fiftyDayAverage") or 0), 2) or None,
+                # ── Forward-looking EPS ────────────────────────────────────────
+                # Loss → profit inflection (trailing→forward) is one of the
+                # strongest re-rating catalysts. Previously unscored.
+                "forward_eps":  round(float(info.get("forwardEps") or 0), 4) or None,
+                "trailing_eps": round(float(info.get("trailingEps") or 0), 4) or None,
+                # ── Balance sheet ─────────────────────────────────────────────
+                # Previously initialized in result dict but never populated.
+                "free_cashflow": int(info.get("freeCashflow") or 0),
+                "total_cash":    int(info.get("totalCash") or 0),
+                "total_debt":    int(info.get("totalDebt") or 0),
             }
             cache_set(key, result, ttl=TTL_FUNDAMENTALS)
             return result

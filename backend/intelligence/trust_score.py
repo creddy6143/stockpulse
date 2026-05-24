@@ -349,22 +349,55 @@ def _business_score(f: dict) -> int:
             score += 2  # smaller cyclical credit for small-cap
 
     # Profitability (10 pts)
-    # BUG FIX: only award "near profitable" when we actually have data.
-    # profit_margins defaults to 0.0 when no data — 0.0 > -0.10 was awarding
-    # 5 pts to pre-revenue companies and uncovered stocks.
+    # GUARD: profit_margins defaults to 0.0 when data unavailable. has_data can be
+    # True from market_cap alone, so profit_margins=0.0 (default) would incorrectly
+    # pass the old "> -0.10" check. Require pm_real: the value must be an explicitly
+    # measured non-zero margin before awarding near-profitable credit.
+    pm_real = abs(pm) > 0.001   # measured margin (not a 0.0 default)
     if f.get("gaap_profitable"):
         score += 10
-    elif has_data and (f.get("profit_margins") or 0) > -0.10:
-        score += 5
+    elif has_data and pm_real and pm > -0.10:
+        score += 5   # Near breakeven — on the path to profitability
+    elif is_large and has_data and gm > 0.25:
+        # ── LARGE-CAP RESTRUCTURING CREDIT ────────────────────────────────────
+        # INTC/ERIC-type situation: gross margins > 25% confirm the core business
+        # economics are sound, but GAAP net income is negative from one-time charges
+        # (impairments, restructuring, write-downs). These are accounting events,
+        # not operational collapse. Do NOT score 0 identically to a failing startup.
+        score += 3
 
-    # Earnings surprise (8 pts)
-    surprise = f.get("earnings_surprise_pct", 0) or 0
-    if surprise > 20:
-        score += 8
-    elif surprise > 5:
-        score += 5
-    elif surprise > 0:
-        score += 2
+    # Earnings quality (8 pts) — multi-quarter streak beats single-quarter surprise.
+    # A company beating estimates 4 consecutive quarters demonstrates systematic
+    # execution discipline (the "sandbagging" pattern — one of our 8 core patterns).
+    # Single-quarter surprise is too noisy; the streak is the signal.
+    history = f.get("earnings_history") or []
+    beats_valid = [
+        (float(q["actual"]), float(q.get("estimate") or q.get("est")))
+        for q in history[:4]
+        if q.get("actual") is not None
+        and (q.get("estimate") or q.get("est"))
+        and float(q.get("estimate") or q.get("est")) != 0
+    ]
+    beat_count  = sum(1 for act, est in beats_valid if act > est)
+    valid_count = len(beats_valid)
+
+    if valid_count >= 2:
+        # Use streak scoring when we have at least 2 quarters of history
+        if beat_count >= 4:
+            score += 8   # Beat all 4 — systematic over-delivery
+        elif beat_count >= 3:
+            score += 5   # Beat 3 of 4 — reliable execution
+        elif beat_count >= 2:
+            score += 2   # Beat half — improving or mixed
+    else:
+        # No multi-quarter history available — fall back to single-quarter surprise
+        surprise = f.get("earnings_surprise_pct", 0) or 0
+        if surprise > 20:
+            score += 8
+        elif surprise > 5:
+            score += 5
+        elif surprise > 0:
+            score += 2
 
     # Gross/profit margins quality (10 pts)
     # For financial-model stocks (banks, utilities): use profit_margins because
@@ -395,6 +428,19 @@ def _business_score(f: dict) -> int:
         score += 4
     elif eps > 0.20:
         score += 2
+
+    # Forward EPS inflection bonus (4 pts) — the only forward-looking business signal.
+    # Analyst consensus forward EPS captures the re-rating the market is pricing in.
+    # Loss → Profit inflection: analysts collectively expect profitable operations
+    # next year when the company is currently loss-making. This is one of the
+    # strongest re-rating triggers in equity markets (INTC, AMD 2022, RKLB).
+    # Strong EPS growth expectation (25%+): analysts expect major earnings acceleration.
+    fwd_eps = f.get("forward_eps") or 0
+    ttm_eps = f.get("trailing_eps") or 0
+    if fwd_eps > 0 and ttm_eps <= 0:
+        score += 4   # Loss → Profit inflection — analysts expect turnaround
+    elif fwd_eps > 0 and ttm_eps > 0 and fwd_eps > ttm_eps * 1.25:
+        score += 2   # Strong EPS growth expected (25%+)
 
     return min(40, score)
 
@@ -515,6 +561,26 @@ def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict,
         score += 5
     elif surprise > 0:
         score += 2
+
+    # Price vs 200-day moving average (7 pts)
+    # The universally used institutional trend confirmation — CLAUDE.md spec baseline
+    # that was never implemented. Every professional fund uses this as the primary
+    # filter: above 200MA = money flowing in, below = money flowing out.
+    # Well above (10%+) confirms not just direction but strength of the move.
+    # Downtrend penalty: well below 200MA (-3) is a mild signal, not a disqualifier.
+    ma200 = (fundamentals or {}).get("ma_200d") or 0
+    cur   = (price_data or {}).get("price", 0)
+    if ma200 > 0 and cur > 0:
+        ratio = cur / ma200
+        if ratio >= 1.10:
+            score += 7   # 10%+ above 200MA — confirmed uptrend with momentum
+        elif ratio >= 1.02:
+            score += 5   # Above 200MA — uptrend established
+        elif ratio >= 0.98:
+            score += 2   # Hugging 200MA — testing support, neutral
+        elif ratio < 0.85:
+            score -= 3   # Well below 200MA — confirmed downtrend, capital leaving
+        # 0.85–0.97: 0 pts — below MA but not confirmed breakdown
 
     # Near 52-week high = market conviction (5 pts)
     # A stock trading at 90%+ of its 52-week high has passed the most demanding
