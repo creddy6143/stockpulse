@@ -307,12 +307,22 @@ def _business_score(f: dict) -> int:
     # tech/retail peers.  Solution: when gross_margins is near-zero but the
     # company is GAAP profitable with real profit margins, use profit_margins as
     # the margin quality metric instead.
-    # Detection pattern (data-driven, no sector metadata needed):
-    #   gross_margins < 3%  AND  profit_margins > 5%  AND  GAAP profitable
-    # Matches: JPM, BAC, WFC, GS, V, MA, AXP, NEE, DUK, SO (banks + utilities)
-    # Does NOT match: loss-making fintech, pre-revenue companies (pm ≤ 0.05)
-    is_financial_model = (gm < 0.03 and pm > 0.05
-                          and f.get("gaap_profitable", False))
+    #
+    # Two detection patterns (data-driven, no sector metadata needed):
+    # 1. Traditional: gross_margins < 3% — US/EU banks, payment processors (JPM, V, MA)
+    #    gm ≈ 0 because no traditional COGS (net interest income is the business model)
+    # 2. NBFC/inverted: profit_margins > gross_margins — Indian NBFCs (BAJFINANCE, HDFCBANK)
+    #    Screener.in reports OPM as gross_margin; for NBFCs pm > gm is mathematically
+    #    impossible in standard accounting, signalling the "gross margin" is not a
+    #    traditional metric. Use profit_margins for scoring instead.
+    is_financial_model = (
+        # US/EU banks and payment processors: gross_margin ≈ 0
+        (gm < 0.03 and pm > 0.05 and f.get("gaap_profitable", False))
+        # Indian NBFC / financial services: profit margin > gross margin (inverted)
+        # In standard accounting pm < gm always. If pm > gm, the "gross margin"
+        # is not a traditional COGS-based metric — use profit_margins instead.
+        or (pm > gm > 0 and pm > 0.05)
+    )
 
     # Revenue growth (12 pts max)
     if is_large:
@@ -423,11 +433,20 @@ def _business_score(f: dict) -> int:
 
     # EPS growth quality (4 pts) — separate from revenue growth, measures
     # bottom-line acceleration which is the truest sign of business health.
+    # ROE PROXY: Screener.in for Indian stocks provides ROE (stored as %, e.g. 43.4)
+    # but not earnings_growth. ROE > 25% signals outstanding capital efficiency and
+    # is a reliable proxy for business quality when EPS growth is unavailable.
+    # Only used when earnings_growth = 0 (data absent) to avoid double-counting.
     eps = f.get("earnings_growth", 0) or 0
+    roe_raw = f.get("roe") or 0   # screener.in stores as percentage (43.4 = 43.4%)
     if eps > 0.50:
         score += 4
     elif eps > 0.20:
         score += 2
+    elif eps == 0 and roe_raw > 25:
+        score += 4   # Outstanding ROE (> 25%) — proxy for strong earnings quality
+    elif eps == 0 and roe_raw > 15:
+        score += 2   # Decent ROE (> 15%) — proxy for adequate earnings quality
 
     # Forward EPS inflection bonus (4 pts) — the only forward-looking business signal.
     # Analyst consensus forward EPS captures the re-rating the market is pricing in.
@@ -496,9 +515,9 @@ def _smart_money_score(insider: dict) -> int:
         # FII holding % — structural institutional backing (always scores)
         if fii_pct > 30:
             score += 8    # INFY 33.4% → +8
-        elif fii_pct > 20:
-            score += 5
-        elif fii_pct > 10:
+        elif fii_pct > 15:
+            score += 5    # Strong foreign institutional backing (15%+ is above Nifty avg)
+        elif fii_pct > 8:
             score += 2
 
     # Short interest (5 pts for low — only when data is available)

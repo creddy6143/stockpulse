@@ -55,8 +55,27 @@ def _pnum(s: str) -> float | None:
         return None
 
 
+# NSE ticker → Screener.in company slug overrides.
+# Most NSE tickers match directly (BAJFINANCE, SUNPHARMA, INFY, TCS, etc.).
+# These are exceptions where corporate restructuring changed the Screener.in slug.
+_SCREENER_SLUG_OVERRIDES: dict[str, str] = {
+    # TATAMOTORS restructured into separate entities; consolidated is at TMCV
+    "TATAMOTORS": "/company/TMCV/consolidated/",
+}
+
+
 def _get_screener_page(symbol: str) -> str | None:
     """Fetch Screener.in page HTML with retry. Returns HTML or None."""
+    # ── Static slug override (known NSE ticker ≠ Screener.in URL exceptions) ──
+    override_path = _SCREENER_SLUG_OVERRIDES.get(symbol.upper())
+    if override_path:
+        try:
+            r = _session().get(f"https://www.screener.in{override_path}", timeout=15)
+            if r.status_code == 200 and len(r.text) > 5000:
+                return r.text
+        except Exception:
+            pass
+
     # Try consolidated first, then standalone
     urls = [
         f"https://www.screener.in/company/{symbol}/consolidated/",
@@ -78,6 +97,30 @@ def _get_screener_page(symbol: str) -> str | None:
         # Exponential backoff between attempts
         if attempt < 2:
             time.sleep(1.0 * (2 ** attempt))
+
+    # ── SEARCH FALLBACK ───────────────────────────────────────────────────────
+    # Some stocks use a different Screener.in slug than their NSE ticker.
+    # Example: TATAMOTORS.NS → screener.in/company/TMCV/ (commercial vehicles division)
+    # Use Screener.in's own search API to find the correct company page URL.
+    try:
+        sr = _session().get(
+            f"https://www.screener.in/api/company/search/?q={symbol}",
+            timeout=10,
+        )
+        if sr.status_code == 200:
+            results = sr.json()
+            if results:
+                slug_path = results[0].get("url", "")   # e.g. "/company/TMCV/consolidated/"
+                if slug_path:
+                    pr = _session().get(
+                        f"https://www.screener.in{slug_path}",
+                        timeout=15,
+                    )
+                    if pr.status_code == 200 and len(pr.text) > 5000:
+                        return pr.text
+    except Exception:
+        pass
+
     return None
 
 
@@ -100,12 +143,17 @@ def _parse_ratios(html: str) -> dict:
             return {}
 
         for li in section.find_all("li"):
-            name_el = li.find("span", class_="name")
-            val_el  = li.find("span", class_="number")
-            if name_el and val_el:
-                key = name_el.text.strip()
-                val = val_el.text.strip()
-                ratios[key] = val
+            name_el  = li.find("span", class_="name")
+            num_els  = li.find_all("span", class_="number")
+            if not name_el or not num_els:
+                continue
+            key = name_el.text.strip()
+            # "High / Low" has two number spans — capture both as separate keys
+            if "High" in key and "/" in key and len(num_els) >= 2:
+                ratios["52W_High"] = num_els[0].text.strip()
+                ratios["52W_Low"]  = num_els[1].text.strip()
+            else:
+                ratios[key] = num_els[0].text.strip()
 
         return ratios
     except Exception:
@@ -300,6 +348,16 @@ def get_screener_fundamentals(ticker: str) -> dict:
     div_yield = _pnum(ratios.get("Dividend Yield", ""))
     if div_yield:
         result["dividend_yield"] = div_yield
+
+    # 52-week high / low — used for near-ATH momentum credit in trust_score.
+    # Screener.in "High / Low" li has two span.number elements (parsed separately above).
+    # Values are in INR (native currency — no conversion needed here).
+    w52h = _pnum(ratios.get("52W_High", ""))
+    w52l = _pnum(ratios.get("52W_Low", ""))
+    if w52h:
+        result["w52_high"] = w52h
+    if w52l:
+        result["w52_low"] = w52l
 
     # ── From P&L ──────────────────────────────────────────────────────────────
     result.update(pl)
