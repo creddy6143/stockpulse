@@ -864,10 +864,13 @@ def picks():
     all_picks = _json.loads(cache["all_picks_json"])
     sector_picks = _json.loads(cache["sector_json"])
 
-    # Global top-15 = main picks (trust ≥75) capped at 15 + dips capped at 3
+    # Return all qualified picks (threshold ≥60, quality gate passed).
+    # Sector grouping (top 10 per sector) is in sector_picks.
+    # Frontend shows sector_picks for the sector view and all_picks sorted
+    # globally for the "All" view. Cap at 100 to keep response size reasonable.
     dips = [p for p in all_picks if p.get("is_dip")]
     mains = [p for p in all_picks if not p.get("is_dip")]
-    top_picks = mains[:15] + dips[:3]
+    top_picks = mains[:100] + dips[:10]
 
     return {
         "picks": top_picks,
