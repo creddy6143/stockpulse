@@ -1173,8 +1173,17 @@ def strategy():
             "shares": pos.get("shares"),
             "buy_price": pos.get("buy_price"),
             "trust_score": pos.get("trust_score", 50),
+            "display_score": pos.get("display_score"),
+            "display_grade": pos.get("display_grade", ""),
             "grade": pos.get("grade", ""),
             "is_speculative": pos.get("is_speculative", False),
+            "auto_disqualified": pos.get("auto_disqualified", False),
+            "disqualify_reason": pos.get("disqualify_reason"),
+            "analyst_buy": pos.get("analyst_buy", 0),
+            "analyst_hold": pos.get("analyst_hold", 0),
+            "analyst_sell": pos.get("analyst_sell", 0),
+            "situation_label": pos.get("situation_label"),
+            "situation_note": pos.get("situation_note"),
         })
 
     wl_situations = []
@@ -1195,8 +1204,15 @@ def strategy():
             "current_price": item.get("current_price", 0),
             "change_pct": item.get("change_pct", 0),
             "trust_score": item.get("trust_score", 50),
+            "display_score": item.get("display_score"),
+            "display_grade": item.get("display_grade", ""),
             "grade": item.get("grade", ""),
             "is_speculative": item.get("is_speculative", False),
+            "analyst_buy": item.get("analyst_buy", 0),
+            "analyst_hold": item.get("analyst_hold", 0),
+            "analyst_sell": item.get("analyst_sell", 0),
+            "situation_label": item.get("situation_label"),
+            "situation_note": item.get("situation_note"),
         })
 
     my_stocks.sort(key=lambda x: x["priority"])
@@ -1230,6 +1246,11 @@ def strategy():
             "smart_money_score": t.get("smart_money_score", 0),
             "momentum_score": t.get("momentum_score", 0),
             "is_speculative": t.get("is_speculative", False),
+            "analyst_buy": t.get("analyst_buy", 0),
+            "analyst_hold": t.get("analyst_hold", 0),
+            "analyst_sell": t.get("analyst_sell", 0),
+            "situation_label": t.get("situation_label"),
+            "situation_note": t.get("situation_note"),
             "sector": pick.get("sector", ""),
         })
 
