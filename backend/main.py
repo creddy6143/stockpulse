@@ -637,17 +637,17 @@ def _score_one_ticker(ticker: str) -> dict | None:
         trust_score_val = trust["total_score"]
 
         # Buy-the-dip: quality stock down on market fear (not company news)
-        is_dip = (trust_score_val >= 65 and change_pct <= -4
+        is_dip = (trust_score_val >= 60 and change_pct <= -4
                   and not trust.get("disqualify_reason"))
 
         # ── REAL MONEY TEST for picks ───────────────────────────────────────
-        # verify_pick runs 5 gates (data quality, score threshold, no auto-disq,
-        # market cap present, large-cap sanity floor). If it rejects, the stock
-        # does NOT appear in Smart Picks — not even as a dip pick.
+        # verify_pick runs 6 gates (data quality, score threshold ≥60, no auto-disq,
+        # market cap present, large-cap sanity floor, quality gate).
+        # If it rejects, the stock does NOT appear in Smart Picks.
         approved, rejection_reason = verify_pick(ticker, trust, fundamentals)
         if not approved and not is_dip:
             return None
-        # Dip picks have a lower score threshold (65) — still require data quality
+        # Dip picks still require real data
         if is_dip and trust.get("data_quality") == "unavailable":
             return None
 

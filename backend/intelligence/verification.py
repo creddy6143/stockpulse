@@ -473,10 +473,13 @@ def verify_pick(
     as a Smart Pick. Returns (approved: bool, rejection_reason: str | None).
 
     P1  data_quality must not be "unavailable"
-    P2  score must be an integer >= 75 (not 74, not None, not 74.9)
+    P2  score must be an integer >= 60 — picks the top of "Moderate" and above
     P3  stock must not be auto-disqualified
     P4  market_cap must be > 0 (confirms it is a priced public company)
     P5  must pass the large-cap sanity check (no score < 30 for large-caps)
+    P6  quality gate — must be profitable OR revenue-growing (≥2% YoY)
+        Prevents showing declining money-losers that happen to score 60+ on
+        analyst sentiment alone. This is the "growth-oriented profitable" filter.
     """
     score  = trust.get("total_score")
     dq     = trust.get("data_quality", "full")
@@ -497,8 +500,8 @@ def verify_pick(
                     "suppression_reason": reason, "warnings": []})
         return False, reason
 
-    if score is None or score < 75:
-        reason = f"P2_score_below_threshold: score={score} (need ≥75)"
+    if score is None or score < 60:
+        reason = f"P2_score_below_threshold: score={score} (need ≥60)"
         _write_log({"ts": time.time(), "ticker": ticker, "output_type": "pick",
                     "confidence": "SUPPRESSED", "score": score,
                     "suppression_reason": reason, "warnings": []})
@@ -511,10 +514,26 @@ def verify_pick(
                     "suppression_reason": reason, "warnings": []})
         return False, reason
 
-    # P5 — large-cap sanity (unlikely to fire here since score >= 75, but belt-and-suspenders)
+    # P5 — large-cap sanity
     if mc >= LARGE_CAP_USD and score < LARGE_CAP_SCORE_FLOOR:
         reason = (f"P5_large_cap_floor: ${mc/1e9:.0f}B cap but score={score} "
                   f"(floor={LARGE_CAP_SCORE_FLOOR})")
+        _write_log({"ts": time.time(), "ticker": ticker, "output_type": "pick",
+                    "confidence": "SUPPRESSED", "score": score,
+                    "suppression_reason": reason, "warnings": []})
+        return False, reason
+
+    # P6 — quality gate: must be profitable OR revenue-growing
+    # Banks / financials naturally have no "gross margin" — use profit_margins only.
+    profitable    = (fundamentals.get("profit_margins") or 0) > 0
+    revenue_grows = (fundamentals.get("revenue_growth") or 0) >= 0.02  # ≥ 2% YoY
+    gaap_ok       = trust.get("gaap_profitable", False)
+    if not profitable and not revenue_grows and not gaap_ok:
+        reason = (
+            f"P6_quality_gate: neither profitable nor growing "
+            f"(profit_margin={fundamentals.get('profit_margins')}, "
+            f"revenue_growth={fundamentals.get('revenue_growth')})"
+        )
         _write_log({"ts": time.time(), "ticker": ticker, "output_type": "pick",
                     "confidence": "SUPPRESSED", "score": score,
                     "suppression_reason": reason, "warnings": []})
