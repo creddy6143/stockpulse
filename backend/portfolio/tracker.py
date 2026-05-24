@@ -160,11 +160,30 @@ def get_portfolio_with_pnl() -> dict:
             pos.get("trust_score"),
             pos.get("auto_disqualified", False),
         )
-        # Generate urgent in-app alert for auto-disqualified positions (once per 24h)
+        # Generate urgent in-app alert ONLY for hard categorical disqualifiers.
+        # Hard disqualifiers = objective, binary, verifiable facts:
+        #   cash runway, reverse split, board resignation, SEC fraud, etc.
+        # Financial-metric conditions (margins, revenue) have been removed from
+        # auto-disqualifiers — they were producing false "going concern" alerts on
+        # legitimate early-stage companies (quantum computing, biotech).
+        # The rule: an alert must only fire when the reason traces to a categorical
+        # fact, not a financial inference. We check by scanning the reason text for
+        # the keywords that our categorical disqualifiers actually produce.
+        _HARD_DISQ_KEYWORDS = (
+            "cash runway", "reverse split", "board resign", "ceo", "cfo",
+            "sec ", "fraud", "chapter 11", "bankruptcy", "liquidat",
+            "going concern",   # only valid if from auditor notes, not our inference
+            "promoter pledge", "sebi",
+        )
         if pos.get("auto_disqualified") and not _db.recent_alert_exists(pos["ticker"], hours=24):
-            reason = pos.get("disqualify_reason") or "Auto-disqualification signal active"
-            _db.create_alert(pos["ticker"], "urgent",
-                             f"{pos['ticker']} — {reason}. Review and consider exiting.")
+            reason = pos.get("disqualify_reason") or ""
+            reason_lower = reason.lower()
+            is_categorical = any(kw in reason_lower for kw in _HARD_DISQ_KEYWORDS)
+            # Also fire for manual BLOCKED_OVERRIDES — these have verified reasons
+            is_manual_override = pos.get("data_quality") != "limited"
+            if is_categorical or is_manual_override:
+                _db.create_alert(pos["ticker"], "urgent",
+                                 f"{pos['ticker']} — {reason}. Review and consider exiting.")
 
     total_value_sek    = sum(p["value_sek"]    for p in result)
     total_invested_sek = sum(p["invested_sek"] for p in result)

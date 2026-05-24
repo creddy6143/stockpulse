@@ -1571,6 +1571,129 @@ def get_news(ticker: str, days: int = 7) -> list:
     return result
 
 
+# ── NEWS CATALYST SIGNAL ───────────────────────────────────────────────────────
+
+# Positive catalyst keywords → +pts to momentum score
+# Ordered strongest-first; first match wins for that tier.
+_CATALYST_POSITIVE = [
+    # Tier 1: government / institutional validation (+5 pts)
+    (5, ["government contract", "government award", "department of defense", "dod award",
+         "dod contract", "darpa", "doe award", "doe contract", "nasa contract",
+         "department of energy", "national science foundation", "nsf grant",
+         "white house", "executive order", "congress", "senate approved",
+         "government funding", "federal contract", "prime contract",
+         "quantum initiative", "chips act", "ira funding"]),
+    # Tier 2: major business milestones (+4 pts)
+    (4, ["fda approval", "fda approved", "fda clearance", "breakthrough therapy",
+         "fast track designation", "regulatory approval", "ce mark",
+         "partnership with", "strategic partnership", "multi-year agreement",
+         "licensing agreement", "landmark deal", "merger agreement",
+         "acquisition completed"]),
+    # Tier 3: positive operating signals (+3 pts)
+    (3, ["record revenue", "raised guidance", "guidance raise", "beat estimates",
+         "earnings beat", "raised outlook", "strong demand", "new customer",
+         "major customer", "contract win", "awarded contract", "new order",
+         "backlog", "capacity expansion", "new facility"]),
+    # Tier 4: soft positive (+2 pts)
+    (2, ["upgrade", "analyst upgrade", "price target raised", "buy rating",
+         "strong buy", "overweight", "outperform", "positive outlook"]),
+]
+
+# Negative catalyst keywords → -pts to momentum score
+_CATALYST_NEGATIVE = [
+    # Tier 1: existential risk (-10 pts)
+    (-10, ["sec investigation", "sec charges", "securities fraud", "class action",
+           "chapter 11", "bankruptcy", "going concern", "liquidation",
+           "delisting notice", "nasdaq delisting", "nyse delisting"]),
+    # Tier 2: major red flags (-6 pts)
+    (-6, ["ceo resign", "ceo departure", "ceo steps down", "cfo resign",
+          "cfo departure", "board resignation", "restatement",
+          "accounting irregularities", "material weakness",
+          "guidance cut", "guidance lowered", "revenue warning",
+          "profit warning", "missed estimates", "earnings miss"]),
+    # Tier 3: negative signals (-3 pts)
+    (-3, ["downgrade", "analyst downgrade", "price target cut", "sell rating",
+          "underperform", "underweight", "weak demand", "layoffs",
+          "restructuring charge", "impairment"]),
+]
+
+
+def get_news_catalyst_signal(ticker: str) -> dict:
+    """Scan recent news headlines for positive/negative catalysts.
+
+    Uses already-fetched news from get_news() — no extra API calls.
+    Returns a signal dict that feeds directly into _momentum_score():
+      {
+        "catalyst_pts":  int,    # net score delta (-10 to +5)
+        "catalyst_type": str,    # e.g. "government_contract", "earnings_miss"
+        "catalyst_desc": str,    # headline excerpt for logging
+        "articles_checked": int,
+      }
+
+    This closes the architectural gap where get_news() data is fetched
+    but never wired into the numeric trust score.
+    """
+    key = f"catalyst:{ticker}"
+    cached = cache_get(key, TTL_NEWS)  # same TTL as news (1h)
+    if cached is not None:
+        return cached
+
+    news = get_news(ticker, days=7)  # cache hit — no new HTTP call
+    if not news:
+        result = {"catalyst_pts": 0, "catalyst_type": "none",
+                  "catalyst_desc": "", "articles_checked": 0}
+        cache_set(key, result, ttl=TTL_NEWS)
+        return result
+
+    best_positive = (0, "none", "")   # (pts, type, desc)
+    worst_negative = (0, "none", "")  # (pts, type, desc)
+
+    for article in news:
+        headline = (article.get("headline") or article.get("summary") or "").lower()
+        if not headline:
+            continue
+
+        # Check positive tiers
+        for pts, keywords in _CATALYST_POSITIVE:
+            for kw in keywords:
+                if kw in headline:
+                    if pts > best_positive[0]:
+                        best_positive = (pts, kw.replace(" ", "_"), headline[:80])
+                    break
+
+        # Check negative tiers
+        for pts, keywords in _CATALYST_NEGATIVE:
+            for kw in keywords:
+                if kw in headline:
+                    if pts < worst_negative[0]:
+                        worst_negative = (pts, kw.replace(" ", "_"), headline[:80])
+                    break
+
+    # Net signal: strongest positive + strongest negative (they can co-exist)
+    net_pts = best_positive[0] + worst_negative[0]
+    net_pts = max(-10, min(5, net_pts))  # clamp
+
+    if abs(best_positive[0]) >= abs(worst_negative[0]):
+        catalyst_type = best_positive[1]
+        catalyst_desc = best_positive[2]
+    else:
+        catalyst_type = worst_negative[1]
+        catalyst_desc = worst_negative[2]
+
+    result = {
+        "catalyst_pts":   net_pts,
+        "catalyst_type":  catalyst_type,
+        "catalyst_desc":  catalyst_desc,
+        "articles_checked": len(news),
+    }
+    cache_set(key, result, ttl=TTL_NEWS)
+
+    if net_pts != 0:
+        print(f"[catalyst] {ticker}: {net_pts:+d}pts ({catalyst_type}) — {catalyst_desc[:60]}", flush=True)
+
+    return result
+
+
 # ── ANALYST DATA ──────────────────────────────────────────────────────────────
 
 def get_analyst_data(ticker: str) -> dict:

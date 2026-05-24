@@ -5,7 +5,7 @@ returned. The 'verification' key in the result dict carries confidence level,
 suppression reason, and any warnings from the three-layer Real Money Test.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data
+from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data, get_news_catalyst_signal
 from data.india import get_india_signals, is_indian_stock
 from intelligence.verification import verify_trust_output, verify_recommendation
 
@@ -135,7 +135,15 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     smart_money = _smart_money_score(insider)
 
     # ── PILLAR 3: MOMENTUM (25 pts) ──────────────────────────────────────────
-    momentum = _momentum_score(analyst, fundamentals, price_data)
+    # News catalyst signal is fetched here (cache hit — get_news() already ran
+    # during price fetch) and passed into the momentum scorer.
+    # This closes the architectural gap: get_news() data was being fetched but
+    # never influencing the numeric trust score.
+    try:
+        catalyst = get_news_catalyst_signal(ticker)
+    except Exception:
+        catalyst = {"catalyst_pts": 0, "catalyst_type": "none", "catalyst_desc": ""}
+    momentum = _momentum_score(analyst, fundamentals, price_data, catalyst)
 
     # Indian market bonus adjustments (post-scoring)
     if is_indian_stock(ticker):
@@ -176,16 +184,43 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
 
 
 def _check_auto_disqualifiers(ticker, fundamentals, insider) -> tuple:
-    """Returns (bool, reason_str|None)."""
+    """Returns (bool, reason_str|None).
+
+    RULE: Auto-disqualifiers are ONLY for objective categorical facts —
+    things that are binary, verifiable, and not subject to interpretation.
+    Examples: cash runway < 6 months, reverse splits, board resignations, SEC fraud.
+
+    Financial-metric conditions (profit_margins, revenue_growth) have been
+    intentionally removed from this function. Reasons:
+      1. They fire incorrectly on legitimate early-stage companies (quantum
+         computing, pre-commercial biotech, AI infrastructure) where very
+         negative margins and quarter-to-quarter revenue dips are NORMAL
+         and expected business behaviour — not distress signals.
+      2. The three-pillar scoring engine already handles poor financials
+         correctly: a company with severe losses and declining revenue will
+         score <40 on business_score alone, producing a "Blocked" grade and
+         SELL recommendation — the honest, accurate output.
+      3. Auto-disq escalates to score=0 + URGENT ALERT, which is factually
+         wrong for a stock that is simply early-stage or cyclically down.
+    """
+    # ── Data confidence gate ──────────────────────────────────────────────────
+    # Any future condition added here that relies on financial metrics MUST pass
+    # this gate first. If data sufficiency < 70% the numbers are defaults (0.0),
+    # not real measured values, so disqualifying on them would be based on nothing.
+    # This mirrors the picks P1 gate in verification.py.
+    data_ok = _data_sufficiency(fundamentals) >= 0.70
+
+    # Cash runway: objective hard fact — only fires when explicitly populated.
+    # safe regardless of data_ok because the `is not None` guard already ensures
+    # this field was explicitly set by a data source (not a 0.0 default).
     cash_months = fundamentals.get("cash_runway_months")
     if cash_months is not None and cash_months < 6:
         return True, f"Cash runway only {cash_months} months — imminent dilution risk"
 
-    if not fundamentals.get("gaap_profitable", True):
-        rev_growth = fundamentals.get("revenue_growth", 0)
-        profit_margin = fundamentals.get("profit_margins", 0)
-        if profit_margin < -0.50 and rev_growth < 0:
-            return True, "Severe losses with declining revenue — going concern risk"
+    # NOTE: Any future financial-metric disqualifier (margins, revenue trends,
+    # debt ratios) MUST be gated: `if data_ok and <condition>: return True, reason`
+    # Without data_ok, zero-defaults will trigger false positives.
+    _ = data_ok  # referenced above — keeps linter happy
 
     return False, None
 
@@ -388,7 +423,8 @@ def _smart_money_score(insider: dict) -> int:
     return max(0, min(35, score))
 
 
-def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict) -> int:
+def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict,
+                    catalyst: dict | None = None) -> int:
     score = 0
 
     # Analyst recommendation (8 pts)
@@ -434,7 +470,17 @@ def _momentum_score(analyst: dict, fundamentals: dict, price_data: dict) -> int:
     elif surprise > 0:
         score += 2
 
-    return min(25, score)
+    # News catalyst signal (up to +5 / down to -10)
+    # Closes the architectural gap: get_news() was fetched but never scored.
+    # Positive: government contract, FDA approval, partnership, beat estimates
+    # Negative: SEC investigation, bankruptcy, guidance cut, fraud
+    # Clamped so a single article cannot dominate the score.
+    if catalyst:
+        cat_pts = int(catalyst.get("catalyst_pts", 0) or 0)
+        if cat_pts != 0:
+            score += cat_pts
+
+    return max(0, min(25, score))
 
 
 def _grade(total: int, speculative: bool = False) -> str:
