@@ -530,9 +530,91 @@ def _detect_currency(ticker: str) -> str:
     return "USD"
 
 
+def _market_holidays(year: int) -> dict:
+    """Return sets of holiday dates for US (NYSE), EU (Xetra), and India (NSE)."""
+    from datetime import date as _date
+
+    def nth_weekday(y, month, weekday, n):
+        """nth occurrence of weekday (0=Mon) in month."""
+        d = _date(y, month, 1)
+        d += timedelta(days=(weekday - d.weekday()) % 7)
+        return d + timedelta(weeks=n - 1)
+
+    def last_weekday(y, month, weekday):
+        """Last occurrence of weekday in month."""
+        import calendar as _cal
+        last = _date(y, month, _cal.monthrange(y, month)[1])
+        return last - timedelta(days=(last.weekday() - weekday) % 7)
+
+    def observed(d):
+        """NYSE rule: Sat → Fri, Sun → Mon."""
+        if d.weekday() == 5:
+            return d - timedelta(days=1)
+        if d.weekday() == 6:
+            return d + timedelta(days=1)
+        return d
+
+    def easter_sunday(y):
+        """Gauss algorithm for Easter Sunday."""
+        a = y % 19
+        b, c = divmod(y, 100)
+        d, e = divmod(b, 4)
+        f = (b + 8) // 25
+        g = (b - f + 1) // 3
+        h = (19 * a + b - d - g + 15) % 30
+        i, k = divmod(c, 4)
+        l = (32 + 2 * e + 2 * i - h - k) % 7
+        m = (a + 11 * h + 22 * l) // 451
+        month = (h + l - 7 * m + 114) // 31
+        day = (h + l - 7 * m + 114) % 31 + 1
+        return _date(y, month, day)
+
+    easter = easter_sunday(year)
+    good_friday = easter - timedelta(days=2)
+    easter_monday = easter + timedelta(days=1)
+
+    # NYSE holidays
+    us = {
+        observed(_date(year, 1, 1)),          # New Year's Day
+        nth_weekday(year, 1, 0, 3),           # MLK Day (3rd Mon Jan)
+        nth_weekday(year, 2, 0, 3),           # Presidents' Day (3rd Mon Feb)
+        good_friday,                           # Good Friday
+        last_weekday(year, 5, 0),             # Memorial Day (last Mon May)
+        observed(_date(year, 6, 19)),         # Juneteenth
+        observed(_date(year, 7, 4)),          # Independence Day
+        nth_weekday(year, 9, 0, 1),           # Labor Day (1st Mon Sep)
+        nth_weekday(year, 11, 3, 4),          # Thanksgiving (4th Thu Nov)
+        observed(_date(year, 12, 25)),        # Christmas
+    }
+
+    # Xetra / Euronext key closures
+    eu = {
+        _date(year, 1, 1),    # New Year's Day
+        good_friday,           # Good Friday
+        easter_monday,         # Easter Monday
+        _date(year, 5, 1),    # Labour Day
+        _date(year, 12, 25),  # Christmas Day
+        _date(year, 12, 26),  # Boxing Day
+    }
+
+    # NSE India key closures (fixed + approximate for current year)
+    in_holidays = {
+        _date(year, 1, 26),   # Republic Day
+        good_friday,           # Good Friday
+        _date(year, 5, 1),    # Maharashtra Day / Labour Day
+        _date(year, 8, 15),   # Independence Day
+        _date(year, 10, 2),   # Gandhi Jayanti
+        _date(year, 11, 1),   # Diwali Laxmi Pujan (approx)
+        _date(year, 12, 25),  # Christmas
+    }
+
+    return {"us": us, "eu": eu, "in": in_holidays}
+
+
 def _get_market_sessions() -> dict:
     """Returns open/closed status for US, EU, and India markets.
     All countdown times expressed in Stockholm timezone (CET/CEST).
+    Includes public holiday detection for all three markets.
     """
     try:
         import pytz
@@ -542,18 +624,24 @@ def _get_market_sessions() -> dict:
         in_tz     = pytz.timezone("Asia/Kolkata")
 
         now_utc = datetime.now(timezone.utc)
+        holidays = _market_holidays(now_utc.year)
 
-        def _session_info(now_local, open_h, open_m, close_h, close_m, tz_name):
+        def _session_info(now_local, open_h, open_m, close_h, close_m, holiday_set):
             """Compute state + label for a market given local time and hours."""
-            wd = now_local.weekday()   # 0=Mon … 6=Sun
-            t  = now_local.hour * 60 + now_local.minute
+            wd      = now_local.weekday()   # 0=Mon … 6=Sun
+            t       = now_local.hour * 60 + now_local.minute
+            today   = now_local.date()
 
-            # Convert open/close to minutes since midnight
             open_min  = open_h  * 60 + open_m
             close_min = close_h * 60 + close_m
 
-            if wd >= 5:   # Weekend
-                # Next open: Monday in Stockholm time
+            is_holiday = today in holiday_set
+            is_weekend = wd >= 5
+
+            if is_holiday:
+                return {"state": "closed", "label": "Closed · Holiday", "opens_in_min": None}
+
+            if is_weekend:
                 days_to_mon = (7 - wd) % 7 or 7
                 next_open = (now_local + timedelta(days=days_to_mon)).replace(
                     hour=open_h, minute=open_m, second=0, microsecond=0
@@ -563,7 +651,6 @@ def _get_market_sessions() -> dict:
                     hour=open_h, minute=open_m, second=0, microsecond=0
                 )
             elif t >= close_min:
-                # Next business day
                 days_ahead = 3 if wd == 4 else 1   # Friday → Monday
                 next_open = (now_local + timedelta(days=days_ahead)).replace(
                     hour=open_h, minute=open_m, second=0, microsecond=0
@@ -571,10 +658,9 @@ def _get_market_sessions() -> dict:
             else:
                 next_open = None   # currently open
 
-            if wd >= 5 or t < open_min or t >= close_min:
+            if is_weekend or t < open_min or t >= close_min:
                 state = "closed"
                 if next_open:
-                    # Convert to Stockholm for display
                     next_open_sthlm = next_open.astimezone(stockholm)
                     delta_min = int((next_open_sthlm - now_utc.astimezone(stockholm)).total_seconds() / 60)
                     if delta_min < 60:
@@ -586,7 +672,6 @@ def _get_market_sessions() -> dict:
                     label = "Closed"
             else:
                 state = "open"
-                close_min_left = close_min - t
                 label = "Open"
                 next_open = None
 
@@ -604,12 +689,11 @@ def _get_market_sessions() -> dict:
         in_local = now_utc.astimezone(in_tz)
 
         return {
-            "us": _session_info(us_local, 9, 30, 16, 0,  "US"),
-            "eu": _session_info(eu_local, 9,  0, 17, 30, "EU"),
-            "in": _session_info(in_local, 9, 15, 15, 30, "India"),
+            "us": _session_info(us_local, 9, 30, 16, 0,  holidays["us"]),
+            "eu": _session_info(eu_local, 9,  0, 17, 30, holidays["eu"]),
+            "in": _session_info(in_local, 9, 15, 15, 30, holidays["in"]),
         }
     except Exception:
-        # If pytz unavailable or any error, return safe defaults
         return {
             "us": {"state": "unknown", "label": "—", "opens_in_min": None},
             "eu": {"state": "unknown", "label": "—", "opens_in_min": None},
