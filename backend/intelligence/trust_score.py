@@ -223,6 +223,7 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
             india = get_india_signals(ticker)
             insider["_fii_consecutive_buying"] = india.get("consecutive_fii_buying", 0)
             insider["_fii_holding_pct"] = fundamentals.get("fii_holding_pct", 0) or 0
+            insider["_dii_holding_pct"] = fundamentals.get("dii_holding_pct", 0) or 0
         sm  = _smart_money_score(insider)
         mom = _momentum_score(analyst, fundamentals, price_data, catalyst)
         if is_indian_stock(ticker):
@@ -274,6 +275,10 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
         india = get_india_signals(ticker)
         insider["_fii_consecutive_buying"] = india.get("consecutive_fii_buying", 0)
         insider["_fii_holding_pct"] = fundamentals.get("fii_holding_pct", 0) or 0
+        # DII = domestic institutions (mutual funds, insurance, pension funds).
+        # Passed so _smart_money_score can use combined FII+DII when Finnhub
+        # returns 0 analysts for NSE-only stocks (TCS, SBIN, RELIANCE).
+        insider["_dii_holding_pct"] = fundamentals.get("dii_holding_pct", 0) or 0
     smart_money = _smart_money_score(insider)
 
     # ── PILLAR 3: MOMENTUM (25 pts) ──────────────────────────────────────────
@@ -556,10 +561,19 @@ def _business_score(f: dict) -> int:
         score += 4
     elif eps > 0.20:
         score += 2
-    elif eps == 0 and roe_raw > 25:
-        score += 4   # Outstanding ROE (> 25%) — proxy for strong earnings quality
+    elif eps > 0:
+        score += 1   # Small positive EPS growth confirmed (e.g. TCS 1.35%)
+
+    # ROE proxy — fires for Indian stocks (Screener.in stores as %, e.g. 51.8)
+    # US/EU stocks use yfinance decimal (0.49), so roe_raw > 25 only matches India.
+    # Applies when eps growth is weak (< 20%) or absent, so it doesn't double-count
+    # high-growth stocks (eps > 20% already fully scored above).
+    if eps < 0.20 and roe_raw > 40:
+        score += 3   # Exceptional capital efficiency — TCS 51.8%, HDFCBANK 16%
+    elif eps < 0.20 and roe_raw > 25:
+        score += 2   # Strong capital efficiency — INFY ~32%
     elif eps == 0 and roe_raw > 15:
-        score += 2   # Decent ROE (> 15%) — proxy for adequate earnings quality
+        score += 1   # Adequate capital efficiency when no eps data
 
     # Forward EPS inflection bonus (4 pts) — the only forward-looking business signal.
     # Analyst consensus forward EPS captures the re-rating the market is pricing in.
@@ -612,26 +626,46 @@ def _smart_money_score(insider: dict) -> int:
         if rec_dir in ("buy", "strong_buy", "strongbuy", "outperform"):
             score += 5
 
-    # India FII institutional proxy (replaces CEO buying when absent).
+    # India FII + DII institutional proxy.
     # FII holding % from Screener.in is the best available smart-money signal
     # for Indian stocks: INFY = 33.4% FII = strong institutional conviction.
     # FII consecutive buying (from NSE daily data) signals active accumulation.
+    #
+    # DII (domestic institutions: mutual funds, insurance, pension funds) is used
+    # as an ADDITIONAL institutional consensus proxy specifically when Finnhub
+    # returns 0 analyst counts for NSE-only stocks (TCS, SBIN, RELIANCE — not
+    # NASDAQ-listed, so Finnhub free tier returns no data).
+    # Combined FII+DII > 20% means majority of free-float is professionally managed.
     fii_pct  = insider.get("_fii_holding_pct", 0) or 0
+    dii_pct  = insider.get("_dii_holding_pct", 0) or 0
     fii_days = insider.get("_fii_consecutive_buying", 0) or 0
-    if fii_pct > 0 or fii_days > 0:
+    if fii_pct > 0 or fii_days > 0 or dii_pct > 0:
         if not insider.get("ceo_buying") and (insider.get("insider_buy_value") or 0) <= 100_000:
             # Active FII accumulation flow signal
             if fii_days >= 3:
                 score += 12
             elif fii_days >= 1:
                 score += 5
-        # FII holding % — structural institutional backing (always scores)
+        # FII holding % — structural foreign institutional backing
         if fii_pct > 30:
             score += 8    # INFY 33.4% → +8
         elif fii_pct > 15:
-            score += 5    # Strong foreign institutional backing (15%+ is above Nifty avg)
+            score += 5    # Strong foreign institutional backing (15%+ above Nifty avg)
         elif fii_pct > 8:
             score += 2
+
+    # DII as institutional analyst-consensus proxy for Finnhub-dark NSE stocks.
+    # When Finnhub returns 0 analysts (TCS, SBIN, RELIANCE are NSE-only),
+    # DII holding represents domestic professional money that IS buying/holding.
+    # Only applied when no Finnhub analyst count exists (total_analysts == 0 above).
+    if total_analysts == 0 and dii_pct > 0:
+        combined_inst = fii_pct + dii_pct
+        if combined_inst > 30:
+            score += 10   # TCS: FII 9.66% + DII 13.34% = 23% → +7 pts
+        elif combined_inst > 20:
+            score += 7
+        elif combined_inst > 10:
+            score += 4
 
     # Short interest (5 pts for low — only when data is available)
     short_pct = insider.get("short_interest_pct", 0)
