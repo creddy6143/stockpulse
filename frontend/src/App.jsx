@@ -2463,6 +2463,7 @@ export default function App() {
   const [showEarnings,setShowEarnings] = useState(false);
   const [alertSubject,setAlertSubject] = useState(null); // {ticker,price,entryLow,entryHigh} or null
   const [showBellPanel,setShowBellPanel] = useState(false);
+  const [showSignOutConfirm,setShowSignOutConfirm] = useState(false);
 
   // ── Real data state ──
   const [portfolio, setPortfolio] = useState({positions:[], summary:{}});
@@ -2668,7 +2669,7 @@ export default function App() {
           </div>
           <div className="hdr-right">
             <div className="bell" onClick={()=>setShowBellPanel(true)} style={{cursor:"pointer"}}>🔔{unreadCount>0&&<div className="bell-b">{unreadCount}</div>}</div>
-            <button onClick={()=>signOut(auth)} style={{width:36,height:36,borderRadius:10,background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.28)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:15,color:"#fff",flexShrink:0}} title="Sign out">👤</button>
+            <button onClick={()=>setShowSignOutConfirm(true)} style={{width:36,height:36,borderRadius:10,background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.28)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:15,color:"#fff",flexShrink:0}} title="Account">👤</button>
           </div>
         </div>
       </div>
@@ -2710,6 +2711,19 @@ export default function App() {
           onClose={()=>setAlertSubject(null)}
           onSaved={loadPriceAlerts}
         />
+      )}
+      {showSignOutConfirm&&(
+        <div className="alert-panel-overlay" onClick={()=>setShowSignOutConfirm(false)}>
+          <div className="alert-panel-box" onClick={e=>e.stopPropagation()} style={{maxHeight:"unset",paddingBottom:24}}>
+            <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 18px"}}/>
+            <div style={{fontSize:16,fontFamily:"var(--syne)",fontWeight:700,color:"var(--t1)",marginBottom:6}}>Sign out?</div>
+            <div style={{fontSize:13,color:"var(--t2)",marginBottom:24,lineHeight:1.5}}>You'll need to sign in again to access your portfolio and watchlist.</div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setShowSignOutConfirm(false)} style={{flex:1,padding:"11px 0",borderRadius:10,border:"1.5px solid var(--t4)",background:"#fff",fontFamily:"var(--dm)",fontSize:14,fontWeight:600,color:"var(--t2)",cursor:"pointer"}}>Cancel</button>
+              <button onClick={()=>{setShowSignOutConfirm(false);signOut(auth);}} style={{flex:1,padding:"11px 0",borderRadius:10,border:"none",background:"var(--rose)",fontFamily:"var(--dm)",fontSize:14,fontWeight:700,color:"#fff",cursor:"pointer"}}>Sign Out</button>
+            </div>
+          </div>
+        </div>
       )}
       {showBellPanel&&(
         <div className="alert-panel-overlay" onClick={()=>setShowBellPanel(false)}>
