@@ -2668,6 +2668,7 @@ export default function App() {
           </div>
           <div className="hdr-right">
             <div className="bell" onClick={()=>setShowBellPanel(true)} style={{cursor:"pointer"}}>🔔{unreadCount>0&&<div className="bell-b">{unreadCount}</div>}</div>
+            <button onClick={()=>signOut(auth)} style={{width:36,height:36,borderRadius:10,background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.28)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:15,color:"#fff",flexShrink:0}} title="Sign out">👤</button>
           </div>
         </div>
       </div>
@@ -2756,21 +2757,6 @@ export default function App() {
                 ))}
               </>
             )}
-            <div style={{marginTop:20,paddingTop:16,borderTop:"1px solid var(--t4)"}}>
-              <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Account</div>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"var(--white)",borderRadius:10,border:"1px solid var(--t4)"}}>
-                <div>
-                  <div style={{fontFamily:"var(--dm)",fontSize:12,fontWeight:600,color:"var(--t1)"}}>{user?.email || "Signed in"}</div>
-                  <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginTop:2}}>Signed in</div>
-                </div>
-                <button
-                  onClick={()=>signOut(auth)}
-                  style={{background:"var(--rose2)",color:"var(--rose)",border:"1px solid #fca5a5",borderRadius:8,padding:"7px 14px",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}
-                >
-                  Sign Out
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}
