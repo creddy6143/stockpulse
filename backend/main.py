@@ -112,6 +112,25 @@ def auth_me(user_id: str = Depends(get_current_user)):
     return {"uid": user_id, "status": "ok"}
 
 
+@app.get("/api/admin/db-status")
+def db_status():
+    """Temporary diagnostic — shows row counts per user_id (no personal data)."""
+    import os
+    from database.models import get_connection as _gc
+    conn = _gc()
+    config = {r["key"]: r["value"] for r in conn.execute("SELECT key,value FROM app_config").fetchall()}
+    summary = {}
+    for table in ("portfolio", "watchlist"):
+        rows = conn.execute(f"SELECT user_id, COUNT(*) as cnt FROM {table} GROUP BY user_id").fetchall()
+        summary[table] = [{"user_id": r["user_id"][:8] + "...", "count": r["cnt"]} for r in rows]
+    conn.close()
+    return {
+        "owner_uid_env_set": bool(os.getenv("OWNER_UID","").strip()),
+        "owner_migrated_flag": config.get("owner_migrated"),
+        "rows_by_user": summary,
+    }
+
+
 
 
 
