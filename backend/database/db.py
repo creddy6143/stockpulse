@@ -237,8 +237,6 @@ def get_signal_accuracy(days=90):
 
 def create_alert(ticker, alert_type, message):
     conn = get_connection()
-    # Skip if an identical alert (same ticker + message) was created in the last 24 hours.
-    # Prevents duplicate rows when signals/portfolio checks fire repeatedly.
     existing = conn.execute(
         """SELECT 1 FROM alerts
            WHERE ticker=? AND message=?
@@ -248,21 +246,25 @@ def create_alert(ticker, alert_type, message):
     ).fetchone()
     if not existing:
         conn.execute(
-            "INSERT INTO alerts (ticker, alert_type, message) VALUES (?, ?, ?)",
+            "INSERT INTO alerts (ticker, alert_type, message, user_id) VALUES (?, ?, ?, 'OWNER')",
             (ticker, alert_type, message),
         )
         conn.commit()
     conn.close()
 
 
-def get_alerts():
+def get_alerts(user_id=None):
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM alerts ORDER BY is_read ASC, created_at DESC LIMIT 100"
-    ).fetchall()
+    if user_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM alerts WHERE user_id=? ORDER BY is_read ASC, created_at DESC LIMIT 100",
+            (user_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM alerts ORDER BY is_read ASC, created_at DESC LIMIT 100"
+        ).fetchall()
     conn.close()
-    # Deduplicate in memory by (ticker, message): keep only the most-recent row
-    # for each unique pair so legacy duplicate rows don't surface in the UI.
     seen = set()
     deduped = []
     for r in rows:
@@ -274,16 +276,22 @@ def get_alerts():
     return deduped
 
 
-def mark_alert_read(alert_id):
+def mark_alert_read(alert_id, user_id=None):
     conn = get_connection()
-    conn.execute("UPDATE alerts SET is_read=1 WHERE id=?", (alert_id,))
+    if user_id is not None:
+        conn.execute("UPDATE alerts SET is_read=1 WHERE id=? AND user_id=?", (alert_id, user_id))
+    else:
+        conn.execute("UPDATE alerts SET is_read=1 WHERE id=?", (alert_id,))
     conn.commit()
     conn.close()
 
 
-def get_unread_alert_count():
+def get_unread_alert_count(user_id=None):
     conn = get_connection()
-    row = conn.execute("SELECT COUNT(*) as cnt FROM alerts WHERE is_read=0").fetchone()
+    if user_id is not None:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM alerts WHERE is_read=0 AND user_id=?", (user_id,)).fetchone()
+    else:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM alerts WHERE is_read=0").fetchone()
     conn.close()
     return row["cnt"] if row else 0
 
@@ -357,7 +365,7 @@ def migrate_owner_data(user_id: str):
         return
 
     conn = get_connection()
-    for table in ("portfolio", "watchlist", "price_alerts"):
+    for table in ("portfolio", "watchlist", "price_alerts", "alerts"):
         conn.execute(f"UPDATE {table} SET user_id=?", (user_id,))
     conn.execute(
         "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"

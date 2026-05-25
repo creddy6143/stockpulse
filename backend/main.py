@@ -371,12 +371,12 @@ def stock_verdict(ticker: str, user_id: str = Depends(get_current_user)):
 
 @app.get("/api/alerts")
 def alerts(user_id: str = Depends(get_current_user)):
-    return db.get_alerts()
+    return db.get_alerts(user_id=user_id)
 
 
 @app.put("/api/alerts/{alert_id}/read")
 def mark_read(alert_id: int, user_id: str = Depends(get_current_user)):
-    db.mark_alert_read(alert_id)
+    db.mark_alert_read(alert_id, user_id=user_id)
     return {"status": "read"}
 
 

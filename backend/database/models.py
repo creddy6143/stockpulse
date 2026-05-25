@@ -170,6 +170,7 @@ def init_db():
         ("portfolio",    "TEXT DEFAULT 'OWNER'"),
         ("watchlist",    "TEXT DEFAULT 'OWNER'"),
         ("price_alerts", "TEXT DEFAULT 'OWNER'"),
+        ("alerts",       "TEXT DEFAULT 'OWNER'"),
     ]
     for table, typedef in _user_id_migrations:
         try:
