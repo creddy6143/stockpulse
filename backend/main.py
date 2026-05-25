@@ -112,15 +112,6 @@ def auth_me(user_id: str = Depends(get_current_user)):
     return {"uid": user_id, "status": "ok"}
 
 
-@app.post("/api/admin/reset-migration")
-def admin_reset_migration():
-    """One-time recovery: move all data back to OWNER and clear migration flags.
-    Call this if migration ran for the wrong user. After calling, sign out of
-    all accounts, then sign back in with the correct (original) account first.
-    No auth required — this endpoint should be removed after use.
-    """
-    db.reset_migration()
-    return {"status": "reset", "message": "All data returned to OWNER. Log in with your original account now."}
 
 
 @app.get("/api/ping")
