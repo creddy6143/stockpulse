@@ -382,7 +382,7 @@ def migrate_owner_data(user_id: str):
 
 def reset_migration():
     """Admin utility: move all data back to OWNER and clear migration flags.
-    Call this once via /api/admin/reset-migration to recover from a wrong migration.
+    Call this directly on the server if migration ever needs to be re-run.
     After calling, the NEXT user to log in will claim the OWNER data.
     """
     conn = get_connection()
