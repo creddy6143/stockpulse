@@ -346,37 +346,23 @@ def clear_all_data(user_id=None):
 
 
 def migrate_owner_data(user_id: str):
-    """Reassign all 'OWNER' rows to user_id.
-    Only runs if OWNER_UID env var matches user_id (or is unset — legacy fallback).
-    Any other user gets an empty portfolio."""
+    """Reassign ALL data to user_id if they are the verified owner.
+    If OWNER_UID env var is set, only that UID can claim data.
+    Runs every login for the owner — safe because it is idempotent."""
     import os
     owner_uid = os.getenv("OWNER_UID", "").strip()
 
-    # If OWNER_UID is set, only the real owner can claim OWNER data
     if owner_uid and user_id != owner_uid:
-        print(f"[auth] Skipping migration — {user_id} is not the owner", flush=True)
+        # Not the owner — skip silently, they get an empty portfolio
         return
 
     conn = get_connection()
-
-    # Check if migration already completed
-    already = conn.execute(
-        "SELECT value FROM app_config WHERE key='owner_migrated'"
-    ).fetchone()
-    if already and already["value"] == "true":
-        conn.close()
-        return
-
     for table in ("portfolio", "watchlist", "price_alerts"):
-        conn.execute(
-            f"UPDATE {table} SET user_id=? WHERE user_id='OWNER'",
-            (user_id,),
-        )
+        conn.execute(f"UPDATE {table} SET user_id=?", (user_id,))
     conn.execute(
         "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"
     )
     conn.commit()
-    print(f"[auth] Owner data migrated to {user_id}", flush=True)
     conn.close()
 
 
