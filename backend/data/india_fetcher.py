@@ -11,12 +11,20 @@ Caching: 24 hours (TTL_FUNDAMENTALS = 1440 min) — scraping is slow,
 never call this more than once per day per ticker.
 """
 
+import os
 import re
 import time
 import random
 import requests
 
 from data.cache import cache_get, cache_set, TTL_FUNDAMENTALS
+
+# ── Cloudflare Worker proxy (optional) ───────────────────────────────────────
+# Set CF_WORKER_URL=https://screener-proxy.<subdomain>.workers.dev in Railway
+# to route Screener.in requests through a Cloudflare edge node.
+# Cloudflare IPs are consumer-like and not in Screener.in's datacenter blocklist.
+# Leave unset to use direct fetch (works locally, blocked on Railway).
+_CF_WORKER_URL = os.getenv("CF_WORKER_URL", "").rstrip("/")
 
 # ── User-agent rotation — avoid looking like a bot ───────────────────────────
 _UAS = [
@@ -27,6 +35,17 @@ _UAS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 ]
+
+
+def _screener_url(path: str) -> str:
+    """
+    Build a Screener.in request URL.
+    If CF_WORKER_URL is set, route through the Cloudflare proxy.
+    path: e.g. "/company/SBIN/consolidated/"
+    """
+    if _CF_WORKER_URL:
+        return _CF_WORKER_URL + path
+    return "https://www.screener.in" + path
 
 
 def _session() -> requests.Session:
@@ -65,27 +84,34 @@ _SCREENER_SLUG_OVERRIDES: dict[str, str] = {
 
 
 def _get_screener_page(symbol: str) -> str | None:
-    """Fetch Screener.in page HTML with retry. Returns HTML or None."""
+    """Fetch Screener.in page HTML with retry. Returns HTML or None.
+
+    Routes through Cloudflare Worker proxy when CF_WORKER_URL env var is set,
+    so Railway datacenter IPs bypass Screener.in's Akamai block.
+    """
+    if _CF_WORKER_URL:
+        print(f"[screener] Using CF proxy for {symbol}", flush=True)
+
     # ── Static slug override (known NSE ticker ≠ Screener.in URL exceptions) ──
     override_path = _SCREENER_SLUG_OVERRIDES.get(symbol.upper())
     if override_path:
         try:
-            r = _session().get(f"https://www.screener.in{override_path}", timeout=15)
+            r = _session().get(_screener_url(override_path), timeout=15)
             if r.status_code == 200 and len(r.text) > 5000:
                 return r.text
         except Exception:
             pass
 
     # Try consolidated first, then standalone
-    urls = [
-        f"https://www.screener.in/company/{symbol}/consolidated/",
-        f"https://www.screener.in/company/{symbol}/",
+    paths = [
+        f"/company/{symbol}/consolidated/",
+        f"/company/{symbol}/",
     ]
     for attempt in range(3):
-        for url in urls:
+        for path in paths:
             try:
                 s = _session()
-                r = s.get(url, timeout=15)
+                r = s.get(_screener_url(path), timeout=15)
                 if r.status_code == 200 and len(r.text) > 5000:
                     return r.text
                 if r.status_code == 404:
@@ -100,11 +126,10 @@ def _get_screener_page(symbol: str) -> str | None:
 
     # ── SEARCH FALLBACK ───────────────────────────────────────────────────────
     # Some stocks use a different Screener.in slug than their NSE ticker.
-    # Example: TATAMOTORS.NS → screener.in/company/TMCV/ (commercial vehicles division)
     # Use Screener.in's own search API to find the correct company page URL.
     try:
         sr = _session().get(
-            f"https://www.screener.in/api/company/search/?q={symbol}",
+            _screener_url(f"/api/company/search/?q={symbol}"),
             timeout=10,
         )
         if sr.status_code == 200:
@@ -112,10 +137,7 @@ def _get_screener_page(symbol: str) -> str | None:
             if results:
                 slug_path = results[0].get("url", "")   # e.g. "/company/TMCV/consolidated/"
                 if slug_path:
-                    pr = _session().get(
-                        f"https://www.screener.in{slug_path}",
-                        timeout=15,
-                    )
+                    pr = _session().get(_screener_url(slug_path), timeout=15)
                     if pr.status_code == 200 and len(pr.text) > 5000:
                         return pr.text
     except Exception:

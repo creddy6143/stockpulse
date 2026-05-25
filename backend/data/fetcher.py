@@ -1297,12 +1297,23 @@ def get_fundamentals(ticker: str) -> dict:
             cache_set(key, adr_result)
             return adr_result
 
-    # ── Route 2: Indian stocks without ADR → Screener.in ─────────────────────
+    # ── Route 2: Indian stocks without ADR → Screener.in → NSE XBRL fallback ─
     if is_indian_stock(ticker):
         screener = get_screener_fundamentals(ticker)
         if screener and screener.get("market_cap"):
             cache_set(key, screener)
             return screener
+        # Screener.in unavailable (Railway datacenter IP blocked) — fall back
+        # to NSE XBRL: official SEBI-mandated filings, no auth, no cost.
+        try:
+            from data.nse_xbrl_fetcher import get_nse_xbrl_fundamentals
+            xbrl = get_nse_xbrl_fundamentals(ticker)
+            if xbrl and (xbrl.get("revenue_growth") is not None
+                         or xbrl.get("profit_margins") is not None):
+                cache_set(key, xbrl)
+                return xbrl
+        except Exception as _xbrl_err:
+            print(f"[nse_xbrl] import/call error for {ticker}: {_xbrl_err}", flush=True)
 
     result = {
         "ticker": ticker,
