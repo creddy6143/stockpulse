@@ -510,7 +510,7 @@ def _business_score(f: dict) -> int:
     valid_count = len(beats_valid)
 
     if valid_count >= 2:
-        # Use streak scoring when we have at least 2 quarters of history
+        # Finnhub/FMP estimate-vs-actual history available — use it directly.
         if beat_count >= 4:
             score += 8   # Beat all 4 — systematic over-delivery
         elif beat_count >= 3:
@@ -518,14 +518,55 @@ def _business_score(f: dict) -> int:
         elif beat_count >= 2:
             score += 2   # Beat half — improving or mixed
     else:
-        # No multi-quarter history available — fall back to single-quarter surprise
-        surprise = f.get("earnings_surprise_pct", 0) or 0
-        if surprise > 20:
-            score += 8
-        elif surprise > 5:
-            score += 5
-        elif surprise > 0:
-            score += 2
+        # No estimate-vs-actual data (Indian stocks, EU stocks, Finnhub throttled).
+        # Use Screener.in EPS consistency metrics as earnings quality proxy:
+        #
+        # annual_eps_growth_streak — consecutive years of EPS improvement.
+        #   TCS: 11 years, HDFCBANK: typically 5–7 years, SBIN: ~4 since NPA recovery.
+        #   5+ consecutive years is stronger evidence than 4 quarterly beats because
+        #   it spans multiple economic cycles.
+        #
+        # quarterly_eps_yoy_beats — quarters (of last 4) where EPS beat same
+        #   quarter one year ago. Captures recent execution trend.
+        #
+        # Take whichever proxy gives the HIGHER score (don't double-count).
+        annual_streak  = f.get("annual_eps_growth_streak", 0) or 0
+        annual_pos_yrs = f.get("annual_eps_positive_years", 0) or 0
+        q_yoy_beats    = f.get("quarterly_eps_yoy_beats", 0) or 0
+
+        # Annual streak → beat-equivalent score
+        if annual_streak >= 5:
+            annual_pts = 8   # 5+ consecutive years ≡ beat 4 of 4 quarters
+        elif annual_streak >= 3 or annual_pos_yrs >= 4:
+            annual_pts = 5   # 3–4 year streak ≡ beat 3 of 4
+        elif annual_streak >= 2 or annual_pos_yrs >= 3:
+            annual_pts = 2
+        else:
+            annual_pts = 0
+
+        # Quarterly YoY → beat-equivalent score
+        if q_yoy_beats >= 4:
+            q_pts = 8
+        elif q_yoy_beats >= 3:
+            q_pts = 5
+        elif q_yoy_beats >= 2:
+            q_pts = 2
+        else:
+            q_pts = 0
+
+        consistency_pts = max(annual_pts, q_pts)
+
+        if consistency_pts > 0:
+            score += consistency_pts
+        else:
+            # Final fallback: single-quarter EPS surprise (FMP data, US stocks)
+            surprise = f.get("earnings_surprise_pct", 0) or 0
+            if surprise > 20:
+                score += 8
+            elif surprise > 5:
+                score += 5
+            elif surprise > 0:
+                score += 2
 
     # Gross/profit margins quality (10 pts)
     # For financial-model stocks (banks, utilities): use profit_margins because

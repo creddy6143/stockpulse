@@ -274,10 +274,82 @@ def _parse_pl_table(html: str) -> dict:
             if prior_eps and prior_eps != 0:
                 result["earnings_growth"] = round((latest_eps - prior_eps) / abs(prior_eps), 4)
 
+        # Annual EPS consistency — consecutive growth streak (backwards from latest).
+        # Used by trust_score.py as earnings quality proxy when Finnhub beat data absent.
+        # Counts improvement year-on-year (covers negative-EPS turnarounds too).
+        if len(eps_vals) >= 3:
+            streak = 0
+            for i in range(len(eps_vals) - 1, 0, -1):
+                if eps_vals[i] > eps_vals[i - 1]:
+                    streak += 1
+                else:
+                    break
+            result["annual_eps_growth_streak"] = streak
+
+            # Positive growth years in the last 5 (handles interrupted streaks)
+            last6 = eps_vals[-6:] if len(eps_vals) >= 6 else eps_vals
+            if len(last6) >= 2:
+                pos_years = sum(1 for i in range(1, len(last6)) if last6[i] > last6[i - 1])
+                result["annual_eps_positive_years"] = pos_years  # max = len(last6)-1
+
     except Exception:
         pass
 
     return result
+
+
+def _parse_quarterly_pl(html: str) -> dict:
+    """
+    Parse the #quarters section to compute quarterly YoY EPS consistency.
+
+    Returns:
+      quarterly_eps_yoy_beats  int  — how many of last 4 quarters had EPS
+                                      higher than the same quarter one year ago.
+                                      Range 0-4. Used as earnings beat proxy
+                                      when Finnhub estimate data is absent.
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return {}
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        qs = soup.find("section", id="quarters")
+        if not qs:
+            return {}
+
+        rows = {}
+        for tr in qs.find_all("tr"):
+            cells = [td.text.strip() for td in tr.find_all(["td", "th"])]
+            if not cells:
+                continue
+            label = cells[0].replace("+", "").replace("*", "").strip()
+            values = cells[1:]
+            if label and values:
+                rows[label] = values
+
+        def _nums(row_key):
+            for k, v in rows.items():
+                if row_key.lower() in k.lower():
+                    nums = [_pnum(c) for c in v]
+                    return [n for n in nums if n is not None]
+            return []
+
+        q_eps = _nums("EPS")
+        # Need at least 8 data points: 4 recent + 4 prior-year same quarters
+        if len(q_eps) < 8:
+            return {}
+
+        # Quarterly EPS oldest → newest. Compare last 4 vs same quarter 1yr ago.
+        beats = sum(
+            1 for i in range(len(q_eps) - 4, len(q_eps))
+            if q_eps[i] > q_eps[i - 4]
+        )
+        return {"quarterly_eps_yoy_beats": beats}
+
+    except Exception:
+        return {}
 
 
 def _parse_shareholding(html: str) -> dict:
@@ -341,9 +413,10 @@ def get_screener_fundamentals(ticker: str) -> dict:
         return {}
 
     # Parse all sections
-    ratios = _parse_ratios(html)
-    pl     = _parse_pl_table(html)
-    sh     = _parse_shareholding(html)
+    ratios   = _parse_ratios(html)
+    pl       = _parse_pl_table(html)
+    sh       = _parse_shareholding(html)
+    qtly     = _parse_quarterly_pl(html)
 
     if not ratios and not pl:
         cache_set(key, {}, ttl=5*60)
@@ -385,6 +458,9 @@ def get_screener_fundamentals(ticker: str) -> dict:
 
     # ── From P&L ──────────────────────────────────────────────────────────────
     result.update(pl)
+
+    # ── From quarterly consistency ────────────────────────────────────────────
+    result.update(qtly)
 
     # ── From shareholding ─────────────────────────────────────────────────────
     result.update(sh)
