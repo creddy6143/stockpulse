@@ -2457,14 +2457,14 @@ export default function App() {
   // Auth state: undefined = loading, null = signed out, object = signed in
   const [user, setUser] = useState(undefined);
   useEffect(() => onAuthStateChanged(auth, async u => {
+    setUser(u || null);  // Render immediately — never block on network
     if (u) {
-      // Run migration BEFORE rendering the app so portfolio fetch sees correct data
+      // Fire auth/me in background — triggers migration, does not block UI
       try {
         const token = await u.getIdToken();
         await fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
       } catch (_) {}
     }
-    setUser(u || null);  // Render app only after migration is done
   }), []);
 
   const [tab,setTab] = useState(0);
