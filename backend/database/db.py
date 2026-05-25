@@ -346,25 +346,59 @@ def clear_all_data(user_id=None):
 
 
 def migrate_owner_data(user_id: str):
-    """Reassign all 'OWNER' rows to this user. Called once on first login."""
+    """Reassign all 'OWNER' rows to the FIRST user who ever logs in.
+    Any subsequent user gets an empty portfolio — they are a new user."""
     conn = get_connection()
+
+    # Check if migration already completed
     already = conn.execute(
         "SELECT value FROM app_config WHERE key='owner_migrated'"
     ).fetchone()
     if already and already["value"] == "true":
         conn.close()
         return
-    for table in ("portfolio", "watchlist", "price_alerts"):
+
+    # Check if a first user has already been recorded
+    first_user_row = conn.execute(
+        "SELECT value FROM app_config WHERE key='first_user_uid'"
+    ).fetchone()
+
+    if first_user_row is None:
+        # This IS the first user ever — record them and migrate OWNER data to them
         conn.execute(
-            f"UPDATE {table} SET user_id=? WHERE user_id='OWNER'",
+            "INSERT OR REPLACE INTO app_config(key,value) VALUES('first_user_uid',?)",
             (user_id,),
         )
-    conn.execute(
-        "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"
-    )
+        for table in ("portfolio", "watchlist", "price_alerts"):
+            conn.execute(
+                f"UPDATE {table} SET user_id=? WHERE user_id='OWNER'",
+                (user_id,),
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"
+        )
+        conn.commit()
+        print(f"[auth] Owner data migrated to first user {user_id}", flush=True)
+    else:
+        # Another user already claimed the data — this is a new user, skip migration
+        conn.close()
+        return
+
+    conn.close()
+
+
+def reset_migration():
+    """Admin utility: move all data back to OWNER and clear migration flags.
+    Call this once via /api/admin/reset-migration to recover from a wrong migration.
+    After calling, the NEXT user to log in will claim the OWNER data.
+    """
+    conn = get_connection()
+    for table in ("portfolio", "watchlist", "price_alerts"):
+        conn.execute(f"UPDATE {table} SET user_id='OWNER'")
+    conn.execute("DELETE FROM app_config WHERE key IN ('owner_migrated','first_user_uid')")
     conn.commit()
     conn.close()
-    print(f"[auth] Owner data migrated to user {user_id}", flush=True)
+    print("[auth] Migration reset — all data returned to OWNER", flush=True)
 
 
 # ── PICKS UNIVERSE ────────────────────────────────────────────────────────────
