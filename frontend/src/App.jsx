@@ -2667,10 +2667,6 @@ export default function App() {
             </div>
           </div>
           <div className="hdr-right">
-            <div className="mpill">
-              <div className="mpdot" style={{background:mktDotColor}}/>
-              <span className="mptext">{mktLabel}</span>
-            </div>
             <div className="bell" onClick={()=>setShowBellPanel(true)} style={{cursor:"pointer"}}>🔔{unreadCount>0&&<div className="bell-b">{unreadCount}</div>}</div>
           </div>
         </div>
