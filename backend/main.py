@@ -112,6 +112,30 @@ def auth_me(user_id: str = Depends(get_current_user)):
     return {"uid": user_id, "status": "ok"}
 
 
+@app.get("/api/admin/db-status")
+def db_status():
+    """Diagnostic: shows migration state and row counts. No sensitive data."""
+    import os
+    from database.models import get_connection
+    conn = get_connection()
+    migrated = conn.execute("SELECT value FROM app_config WHERE key='owner_migrated'").fetchone()
+    owner_rows = {
+        t: conn.execute(f"SELECT COUNT(*) FROM {t} WHERE user_id='OWNER'").fetchone()[0]
+        for t in ("portfolio", "watchlist", "price_alerts")
+    }
+    total_rows = {
+        t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        for t in ("portfolio", "watchlist", "price_alerts")
+    }
+    conn.close()
+    return {
+        "owner_migrated": migrated["value"] if migrated else None,
+        "owner_uid_set": bool(os.getenv("OWNER_UID", "").strip()),
+        "owner_tagged_rows": owner_rows,
+        "total_rows": total_rows,
+    }
+
+
 
 
 @app.get("/api/ping")
