@@ -214,6 +214,11 @@ def get_portfolio_with_pnl() -> dict:
 
 
 def _classify_position(trust: dict, pnl_pct: float) -> str:
+    # Suppressed score (display_score is None) and NOT auto-disqualified means we
+    # don't have enough data to make a confident call — put in Watch, never Urgent.
+    # Saying "Action Required" when data is insufficient is worse than saying nothing.
+    if trust.get("display_score") is None and not trust.get("auto_disqualified"):
+        return "watch"
     score = trust["total_score"]
     if trust["auto_disqualified"] or (score is not None and score < 40):
         return "urgent"

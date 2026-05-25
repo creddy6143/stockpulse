@@ -70,8 +70,10 @@ def get_verification_log(limit: int = 100) -> list[dict]:
 # Stocks above this market cap are Fortune-500 / Nifty-50 calibre.
 # Without an active auto-disqualifier, scoring them below the floor
 # almost always means a data-fetch failure, not genuine distress.
-LARGE_CAP_USD       = 50_000_000_000   # $50 B
-LARGE_CAP_SCORE_FLOOR = 30             # any large-cap below this → SUPPRESSED
+# $20B catches major Indian companies like BPCL (~$42B) that fall below
+# the previous $50B threshold but are clearly large established businesses.
+LARGE_CAP_USD       = 20_000_000_000   # $20 B
+LARGE_CAP_SCORE_FLOOR = 35             # any large-cap below this → SUPPRESSED
 
 # How many analysts constitute meaningful consensus
 MIN_ANALYST_COVERAGE = 3
@@ -81,6 +83,60 @@ ANALYST_CONSENSUS_THRESHOLD = 0.75     # 75 %
 
 # How far our score can deviate from consensus direction before a warning fires
 ANALYST_SCORE_GAP = 30                 # ± 30 pts
+
+
+# ── User-facing warning translation ───────────────────────────────────────────
+
+def _translate_warning(w: str) -> str:
+    """
+    Convert an internal rule-code warning string into a clean, human-readable
+    message suitable for display in the UI caveat indicator.
+
+    Internal codes (L1_, L2_, L3_, etc.) are useful in logs and the
+    verification_log.jsonl audit trail, but must never reach the user.
+    """
+    if w.startswith("L1_no_source"):
+        return "Data source not fully identified — score may not reflect latest fundamentals."
+
+    if w.startswith("L1_zero_fundamentals"):
+        return "Financial data appears incomplete for this stock — score may be based on defaults."
+
+    if w.startswith("L2_grade_mismatch"):
+        return "Scoring inconsistency detected internally — verify before acting on this grade."
+
+    if w.startswith("L2_disq_score_high"):
+        return "Stock is flagged as disqualified but shows an unusually high raw score — treat as disqualified."
+
+    if w.startswith("L2_speculative_grade_high"):
+        return "Pre-revenue company — no earnings track record to fully justify this grade."
+
+    if w.startswith("L3_analyst_buy_vs_low_score"):
+        # Extract the buy percentage: "L3_analyst_buy_vs_low_score: 77% analyst buy..."
+        try:
+            pct_str = w.split(":")[1].strip().split("%")[0].strip()
+            return (
+                f"Analysts are broadly bullish ({pct_str}% rate it Buy) but our model "
+                f"scores it lower — possible data gap. Worth reviewing manually."
+            )
+        except Exception:
+            return "Analyst consensus is more bullish than our model score — possible data gap, review manually."
+
+    if w.startswith("L3_analyst_sell_vs_high_score"):
+        try:
+            pct_str = w.split(":")[1].strip().split("%")[0].strip()
+            return (
+                f"Analysts are broadly bearish ({pct_str}% rate it Sell) while our score "
+                f"is relatively high — signals are mixed."
+            )
+        except Exception:
+            return "Analyst consensus is more bearish than our model score — signals are mixed."
+
+    # Fallback: strip the rule-code prefix and return the human-readable part
+    if ":" in w:
+        human_part = w.split(":", 1)[1].strip()
+        if human_part:
+            return human_part
+    return w
 
 
 # ── LAYER 1 — Data Verification ───────────────────────────────────────────────
@@ -380,12 +436,11 @@ def verify_trust_output(
 
     # ── Determine confidence from warning count ────────────────────────────
     soft_warnings = all_warnings  # at this point only non-critical remain
-    if len(soft_warnings) >= 2:
+    if soft_warnings:
         confidence = "MEDIUM"
-        caveat = soft_warnings[0][:80]
-    elif soft_warnings:
-        confidence = "MEDIUM"
-        caveat = soft_warnings[0][:80]
+        # Translate the first warning to a user-facing message.
+        # Never truncate mid-sentence — _translate_warning always returns complete text.
+        caveat = _translate_warning(soft_warnings[0])
     else:
         confidence = "HIGH"
         caveat = None

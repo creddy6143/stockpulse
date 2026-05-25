@@ -276,7 +276,15 @@ const getRecFromGroup = (group, trust, autoDisq) => {
 
 const mapPosition = (pos, earningsByTicker) => {
   const flag = getFlag(pos.market, pos.ticker);
-  const {rec, rcls} = getRecFromGroup(pos.group, pos.trust_score, pos.auto_disqualified);
+  // Compute verif first — needed to override rec when score is suppressed
+  const verifEarly = pos.verification || {};
+  const isSuppressed = (verifEarly.suppressed || pos.display_score === null) && !pos.auto_disqualified;
+  const {rec: groupRec, rcls: groupRcls} = getRecFromGroup(pos.group, pos.trust_score, pos.auto_disqualified);
+  // A suppressed score means we lack sufficient data for a directional call.
+  // Showing SELL alongside "Score suppressed — insufficient data" is a contradiction.
+  // Auto-disqualified stocks always get SELL regardless of suppression.
+  const rec = isSuppressed ? "Review" : groupRec;
+  const rcls = isSuppressed ? "rr-h" : groupRcls;
   const pnlPct = pos.pnl_pct || 0;
   const fmp = pos.fmp_profile || null;
   const scoreStr = pos.trust_score != null ? `${pos.trust_score}/100` : "score unavailable";
@@ -289,8 +297,8 @@ const mapPosition = (pos, earningsByTicker) => {
     else if (pnlPct > 30) verdict = `Up ${pnlPct.toFixed(0)}% from entry. Consider a trailing stop to protect gains.`;
     else verdict = `Trust ${scoreStr} — ${pos.grade}. Hold and monitor.`;
   }
-  // Verification layer — use display_score (suppressed → null → shows "?")
-  const verif = pos.verification || {};
+  // verifEarly was already computed above; alias for clarity in the return block
+  const verif = verifEarly;
   const displayTrust = pos.display_score !== undefined ? pos.display_score : pos.trust_score;
   const displayGrade = pos.display_grade || pos.grade;
   return {
@@ -1232,9 +1240,10 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
   const pnlPct = s.pnl_pct || ((s.price - s.buy) / s.buy * 100);
   const pnlPos = pnlPct >= 0;
   const isDataUnavailable = s.grade === "Data Unavailable";
+  const isReview = s.rec==="Review" || s.verifSuppressed;
   const recColor = s.rec==="SELL"?"var(--rose)":s.rec==="BUY"?"var(--emerald)":"var(--amber)";
   const recBg = s.rec==="SELL"?"var(--rose2)":s.rec==="BUY"?"var(--emerald2)":"var(--amber2)";
-  const recLabel = isDataUnavailable ? "—" : (s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec);
+  const recLabel = isDataUnavailable||isReview ? "—" : (s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec);
   // Use backend-provided SEK values — no frontend conversion needed
   const valueSEK = s.value_sek || 0;
   const priceSEK = s.shares > 0 ? valueSEK / s.shares : 0;
@@ -1331,7 +1340,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:2,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
             <button onClick={(e)=>{e.stopPropagation();onSetAlert&&onSetAlert(s.ticker,s.price,null,null);}} title="Set price alert" style={{flex:"0 0 36px",padding:"8px",borderRadius:8,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontSize:13,cursor:"pointer"}}>🔔</button>
             <button onClick={()=>onEdit&&onEdit(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Edit</button>
-            {s.rec==="SELL"
+            {s.rec==="SELL"&&!isReview
               ?<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
               :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>✕</button>
             }
