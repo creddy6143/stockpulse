@@ -2496,6 +2496,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!user) return; // Don't fetch until authenticated
     // Keep-alive ping every 10 min so Railway never sleeps mid-session
     const ping = setInterval(() => fetch(`${BASE}/api/ping`).catch(()=>{}), 10*60*1000);
 
@@ -2564,7 +2565,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(ping);
-  }, []);
+  }, [user?.uid]);
 
   // ── Derived data ──
   const earningsByTicker = Object.fromEntries(earnings.map(e=>[e.ticker, e.date]));
