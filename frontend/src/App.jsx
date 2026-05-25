@@ -2456,7 +2456,16 @@ function StrategyScreen({strategyData, onDetail}) {
 export default function App() {
   // Auth state: undefined = loading, null = signed out, object = signed in
   const [user, setUser] = useState(undefined);
-  useEffect(() => onAuthStateChanged(auth, u => setUser(u || null)), []);
+  useEffect(() => onAuthStateChanged(auth, async u => {
+    setUser(u || null);
+    if (u) {
+      // Always call auth/me on session start — triggers owner migration if not yet done
+      try {
+        const token = await u.getIdToken();
+        await fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      } catch (_) {}
+    }
+  }), []);
 
   const [tab,setTab] = useState(0);
   const [sel,setSel] = useState(null);
