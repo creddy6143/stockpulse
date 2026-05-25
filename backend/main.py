@@ -1258,7 +1258,7 @@ def strategy(user_id: str = Depends(get_current_user)):
     _picks_cache = db.get_picks_cache()
     cached_picks = _json.loads(_picks_cache["all_picks_json"]) if _picks_cache and _picks_cache.get("all_picks_json") else []
     smart_picks_strat = []
-    for pick in cached_picks[:5]:
+    for pick in cached_picks:
         t = pick.get("trust", {})
         score = t.get("total_score") or 0
         smart_picks_strat.append({
