@@ -112,6 +112,14 @@ def auth_me(user_id: str = Depends(get_current_user)):
     return {"uid": user_id, "status": "ok"}
 
 
+@app.get("/api/admin/my-uid")
+def admin_my_uid(user_id: str = Depends(get_current_user)):
+    """Returns the Firebase UID of the currently logged-in user.
+    Use this to find your UID so you can set OWNER_UID in Railway env vars.
+    Remove after use."""
+    return {"uid": user_id}
+
+
 @app.post("/api/admin/reset-migration")
 def admin_reset_migration():
     """One-time recovery: move all data back to OWNER and clear migration flags.

@@ -346,8 +346,17 @@ def clear_all_data(user_id=None):
 
 
 def migrate_owner_data(user_id: str):
-    """Reassign all 'OWNER' rows to the FIRST user who ever logs in.
-    Any subsequent user gets an empty portfolio — they are a new user."""
+    """Reassign all 'OWNER' rows to user_id.
+    Only runs if OWNER_UID env var matches user_id (or is unset — legacy fallback).
+    Any other user gets an empty portfolio."""
+    import os
+    owner_uid = os.getenv("OWNER_UID", "").strip()
+
+    # If OWNER_UID is set, only the real owner can claim OWNER data
+    if owner_uid and user_id != owner_uid:
+        print(f"[auth] Skipping migration — {user_id} is not the owner", flush=True)
+        return
+
     conn = get_connection()
 
     # Check if migration already completed
@@ -358,32 +367,16 @@ def migrate_owner_data(user_id: str):
         conn.close()
         return
 
-    # Check if a first user has already been recorded
-    first_user_row = conn.execute(
-        "SELECT value FROM app_config WHERE key='first_user_uid'"
-    ).fetchone()
-
-    if first_user_row is None:
-        # This IS the first user ever — record them and migrate OWNER data to them
+    for table in ("portfolio", "watchlist", "price_alerts"):
         conn.execute(
-            "INSERT OR REPLACE INTO app_config(key,value) VALUES('first_user_uid',?)",
+            f"UPDATE {table} SET user_id=? WHERE user_id='OWNER'",
             (user_id,),
         )
-        for table in ("portfolio", "watchlist", "price_alerts"):
-            conn.execute(
-                f"UPDATE {table} SET user_id=? WHERE user_id='OWNER'",
-                (user_id,),
-            )
-        conn.execute(
-            "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"
-        )
-        conn.commit()
-        print(f"[auth] Owner data migrated to first user {user_id}", flush=True)
-    else:
-        # Another user already claimed the data — this is a new user, skip migration
-        conn.close()
-        return
-
+    conn.execute(
+        "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"
+    )
+    conn.commit()
+    print(f"[auth] Owner data migrated to {user_id}", flush=True)
     conn.close()
 
 
