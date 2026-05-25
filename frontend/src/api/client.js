@@ -2,15 +2,28 @@
  * StockPulse API client
  * All calls to the FastAPI backend at localhost:8000
  */
+import { auth } from '../firebase';
 
 const BASE = process.env.REACT_APP_API_URL || '';
 
+async function getToken() {
+  const user = auth.currentUser;
+  if (!user) return null;
+  try { return await user.getIdToken(); } catch (_) { return null; }
+}
+
 async function request(path, options = {}) {
   try {
-    const res = await fetch(`${BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...options.headers },
-      ...options,
-    });
+    const token = await getToken();
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`${BASE}${path}`, { ...options, headers });
+    if (res.status === 401) {
+      // Token rejected — sign out so the auth screen appears
+      await auth.signOut();
+      return null;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   } catch (err) {

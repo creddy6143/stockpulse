@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert } from "./api/client";
+import { auth } from "./firebase";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import AuthScreen from "./screens/AuthScreen";
 const BASE = process.env.REACT_APP_API_URL || '';
 
 const CSS = `
@@ -2451,6 +2454,10 @@ function StrategyScreen({strategyData, onDetail}) {
 
 // ── APP ──────────────────────────────────────────────
 export default function App() {
+  // Auth state: undefined = loading, null = signed out, object = signed in
+  const [user, setUser] = useState(undefined);
+  useEffect(() => onAuthStateChanged(auth, u => setUser(u || null)), []);
+
   const [tab,setTab] = useState(0);
   const [sel,setSel] = useState(null);
   const [showEarnings,setShowEarnings] = useState(false);
@@ -2631,6 +2638,19 @@ export default function App() {
     {icon:"🎯",label:"Picks",badge:0},
     {icon:"🧭",label:"Strategy",badge:stratTotal},
   ];
+  // Auth guards
+  if (user === undefined) return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(180deg,#eaf2ff,#f8faff)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <style>{CSS}</style>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:12}}>⚡</div>
+        <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:16,color:"#0f172a"}}>StockPulse</div>
+        <div style={{fontFamily:"var(--mono)",fontSize:10,color:"#94a3b8",marginTop:6}}>Loading…</div>
+      </div>
+    </div>
+  );
+  if (!user) return <AuthScreen />;
+
   return (
     <div className="app">
       <style>{CSS}</style>
@@ -2652,6 +2672,7 @@ export default function App() {
               <span className="mptext">{mktLabel}</span>
             </div>
             <div className="bell" onClick={()=>setShowBellPanel(true)} style={{cursor:"pointer"}}>🔔{unreadCount>0&&<div className="bell-b">{unreadCount}</div>}</div>
+            <button onClick={()=>signOut(auth)} title="Sign out" style={{background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.28)",borderRadius:10,padding:"6px 8px",cursor:"pointer",fontSize:13,color:"#fff",lineHeight:1}}>↩</button>
           </div>
         </div>
       </div>

@@ -133,9 +133,9 @@ def _fire_price_alerts(ticker: str, current_price: float,
         pass
 
 
-def get_portfolio_with_pnl() -> dict:
+def get_portfolio_with_pnl(user_id=None) -> dict:
     """All positions with live P&L — prices + trust fetched in parallel."""
-    positions = get_portfolio()
+    positions = get_portfolio(user_id)
     if not positions:
         return {
             "positions": [],
@@ -335,9 +335,9 @@ def _build_watchlist_item(item: dict) -> dict:
     }
 
 
-def get_watchlist_with_signals() -> list:
+def get_watchlist_with_signals(user_id=None) -> list:
     """Watchlist items with trust scores — fetched in parallel."""
-    items = get_watchlist()
+    items = get_watchlist(user_id)
     if not items:
         return []
 

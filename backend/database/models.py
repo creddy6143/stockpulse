@@ -134,6 +134,11 @@ CREATE TABLE IF NOT EXISTS analyst_cache (
   target_low REAL,
   fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS app_config (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
 """
 
 
@@ -158,5 +163,19 @@ def init_db():
             )
         except Exception:
             pass  # column already exists
+
+    # Multi-user migration: add user_id to user-specific tables.
+    # ALTER TABLE fails silently if the column already exists.
+    _user_id_migrations = [
+        ("portfolio",    "TEXT DEFAULT 'OWNER'"),
+        ("watchlist",    "TEXT DEFAULT 'OWNER'"),
+        ("price_alerts", "TEXT DEFAULT 'OWNER'"),
+    ]
+    for table, typedef in _user_id_migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN user_id {typedef}")
+        except Exception:
+            pass  # column already exists
+
     conn.commit()
     conn.close()

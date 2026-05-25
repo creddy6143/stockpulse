@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -21,6 +21,7 @@ from datetime import datetime
 
 from database.models import init_db
 from database import db
+from auth import get_current_user
 from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data, get_stock_history, get_news, get_insider_data
 from data.india import get_india_signals, is_indian_stock
 from intelligence.trust_score import get_trust_score_with_fallback
@@ -104,6 +105,13 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
+@app.get("/api/auth/me")
+def auth_me(user_id: str = Depends(get_current_user)):
+    """Called once on login. Triggers owner-data migration. Returns user UID."""
+    db.migrate_owner_data(user_id)
+    return {"uid": user_id, "status": "ok"}
+
+
 @app.get("/api/ping")
 def ping():
     """Keep-alive endpoint — frontend pings every 10 min to prevent Railway sleep."""
@@ -170,15 +178,17 @@ class UpdatePositionRequest(BaseModel):
 
 
 @app.get("/api/portfolio")
-def portfolio():
+def portfolio(user_id: str = Depends(get_current_user)):
     """All portfolio positions with live P&L."""
-    return get_portfolio_with_pnl()
+    return get_portfolio_with_pnl(user_id=user_id)
 
 
 @app.post("/api/portfolio")
-def add_portfolio(req: AddPositionRequest):
+def add_portfolio(req: AddPositionRequest, user_id: str = Depends(get_current_user)):
     ticker = req.ticker.upper()
-    already_exists = db.ticker_in_portfolio(ticker)
+    if db.count_portfolio(user_id) >= 100:
+        raise HTTPException(status_code=429, detail="Free tier limit reached (100 stocks)")
+    already_exists = db.ticker_in_portfolio(ticker, user_id=user_id)
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
     # For tickers without exchange suffix, use price currency to infer market.
@@ -192,26 +202,26 @@ def add_portfolio(req: AddPositionRequest):
     from portfolio.tracker import _detect_currency
     currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
-    db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes)
+    db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes, user_id=user_id)
     return {"status": "added", "ticker": ticker, "already_had_position": already_exists}
 
 
 @app.put("/api/portfolio/{pos_id}")
-def update_portfolio(pos_id: int, req: UpdatePositionRequest):
-    db.update_position(pos_id, req.shares, req.buy_price, req.notes)
+def update_portfolio(pos_id: int, req: UpdatePositionRequest, user_id: str = Depends(get_current_user)):
+    db.update_position(pos_id, req.shares, req.buy_price, req.notes, user_id=user_id)
     return {"status": "updated"}
 
 
 @app.delete("/api/portfolio/all")
-def clear_all_portfolio():
+def clear_all_portfolio(user_id: str = Depends(get_current_user)):
     """Remove all portfolio positions and watchlist entries. Must be before /{pos_id}."""
-    db.clear_all_data()
+    db.clear_all_data(user_id=user_id)
     return {"status": "cleared"}
 
 
 @app.delete("/api/portfolio/{pos_id}")
-def delete_portfolio(pos_id: int):
-    db.delete_position(pos_id)
+def delete_portfolio(pos_id: int, user_id: str = Depends(get_current_user)):
+    db.delete_position(pos_id, user_id=user_id)
     return {"status": "deleted"}
 
 
@@ -223,14 +233,16 @@ class WatchlistRequest(BaseModel):
 
 
 @app.get("/api/watchlist")
-def watchlist():
-    return get_watchlist_with_signals()
+def watchlist(user_id: str = Depends(get_current_user)):
+    return get_watchlist_with_signals(user_id=user_id)
 
 
 @app.post("/api/watchlist")
-def add_watchlist(req: WatchlistRequest):
+def add_watchlist(req: WatchlistRequest, user_id: str = Depends(get_current_user)):
     ticker = req.ticker.upper()
-    already_exists = db.ticker_in_watchlist(ticker)
+    if db.count_watchlist(user_id) >= 100:
+        raise HTTPException(status_code=429, detail="Free tier limit reached (100 watchlist items)")
+    already_exists = db.ticker_in_watchlist(ticker, user_id=user_id)
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
     if "." not in ticker:
@@ -242,13 +254,13 @@ def add_watchlist(req: WatchlistRequest):
     from portfolio.tracker import _detect_currency
     currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
-    db.add_to_watchlist(ticker, req.notes)
+    db.add_to_watchlist(ticker, req.notes, user_id=user_id)
     return {"status": "added", "ticker": ticker, "already_exists": already_exists}
 
 
 @app.delete("/api/watchlist/{ticker}")
-def remove_watchlist(ticker: str):
-    db.remove_from_watchlist(ticker.upper())
+def remove_watchlist(ticker: str, user_id: str = Depends(get_current_user)):
+    db.remove_from_watchlist(ticker.upper(), user_id=user_id)
     return {"status": "removed"}
 
 
@@ -322,7 +334,7 @@ def stock_detail_full(ticker: str):
 
 
 @app.get("/api/stock/{ticker}/verdict")
-def stock_verdict(ticker: str):
+def stock_verdict(ticker: str, user_id: str = Depends(get_current_user)):
     ticker = ticker.upper()
     price_data = get_stock_price(ticker)
     fundamentals = get_fundamentals(ticker)
@@ -335,12 +347,12 @@ def stock_verdict(ticker: str):
 # ── ALERTS ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/alerts")
-def alerts():
+def alerts(user_id: str = Depends(get_current_user)):
     return db.get_alerts()
 
 
 @app.put("/api/alerts/{alert_id}/read")
-def mark_read(alert_id: int):
+def mark_read(alert_id: int, user_id: str = Depends(get_current_user)):
     db.mark_alert_read(alert_id)
     return {"status": "read"}
 
@@ -1013,12 +1025,12 @@ class PriceAlertToggle(BaseModel):
 
 
 @app.get("/api/price-alerts")
-def get_price_alerts_endpoint(ticker: Optional[str] = None):
-    return db.get_price_alerts(ticker=ticker)
+def get_price_alerts_endpoint(ticker: Optional[str] = None, user_id: str = Depends(get_current_user)):
+    return db.get_price_alerts(ticker=ticker, user_id=user_id)
 
 
 @app.post("/api/price-alerts")
-def create_price_alert_endpoint(req: PriceAlertRequest):
+def create_price_alert_endpoint(req: PriceAlertRequest, user_id: str = Depends(get_current_user)):
     alert_id = db.create_price_alert(
         ticker=req.ticker.upper(),
         alert_type=req.alert_type,
@@ -1026,19 +1038,20 @@ def create_price_alert_endpoint(req: PriceAlertRequest):
         entry_low=req.entry_low,
         entry_high=req.entry_high,
         alert_name=req.alert_name,
+        user_id=user_id,
     )
     return {"status": "created", "id": alert_id}
 
 
 @app.delete("/api/price-alerts/{alert_id}")
-def delete_price_alert_endpoint(alert_id: int):
-    db.delete_price_alert(alert_id)
+def delete_price_alert_endpoint(alert_id: int, user_id: str = Depends(get_current_user)):
+    db.delete_price_alert(alert_id, user_id=user_id)
     return {"status": "deleted"}
 
 
 @app.put("/api/price-alerts/{alert_id}")
-def toggle_price_alert_endpoint(alert_id: int, req: PriceAlertToggle):
-    db.toggle_price_alert(alert_id, req.is_active)
+def toggle_price_alert_endpoint(alert_id: int, req: PriceAlertToggle, user_id: str = Depends(get_current_user)):
+    db.toggle_price_alert(alert_id, req.is_active, user_id=user_id)
     return {"status": "updated"}
 
 
@@ -1141,14 +1154,14 @@ def verification_summary():
 # ── STRATEGY ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/strategy")
-def strategy():
+def strategy(user_id: str = Depends(get_current_user)):
     """Strategy situations — returns metadata instantly (NO AI calls).
     Playbooks are fetched on-demand via /api/strategy/{ticker}/playbook.
     This endpoint typically returns in <500ms.
     """
     market_data = get_market_data()
-    portfolio_data = get_portfolio_with_pnl()
-    watchlist_data = get_watchlist_with_signals()
+    portfolio_data = get_portfolio_with_pnl(user_id=user_id)
+    watchlist_data = get_watchlist_with_signals(user_id=user_id)
 
     my_stocks = []
     for pos in portfolio_data.get("positions", []):
@@ -1331,10 +1344,10 @@ def strategy_playbook(ticker: str, req: PlaybookRequest):
 # ── EARNINGS ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/earnings")
-def earnings():
+def earnings(user_id: str = Depends(get_current_user)):
     """Earnings calendar for portfolio + watchlist stocks with analyst consensus."""
-    portfolio = db.get_portfolio()
-    watchlist_items = db.get_watchlist()
+    portfolio = db.get_portfolio(user_id=user_id)
+    watchlist_items = db.get_watchlist(user_id=user_id)
     result = []
     seen = set()
 

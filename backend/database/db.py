@@ -29,72 +29,123 @@ def get_stock(ticker):
 
 # ── PORTFOLIO ────────────────────────────────────────────────────────────────
 
-def get_portfolio():
+def get_portfolio(user_id=None):
     conn = get_connection()
-    rows = conn.execute(
-        """SELECT p.*, s.name, s.market, s.exchange, s.currency
-           FROM portfolio p LEFT JOIN stocks s ON p.ticker=s.ticker
-           ORDER BY p.id"""
-    ).fetchall()
+    if user_id is not None:
+        rows = conn.execute(
+            """SELECT p.*, s.name, s.market, s.exchange, s.currency
+               FROM portfolio p LEFT JOIN stocks s ON p.ticker=s.ticker
+               WHERE p.user_id=?
+               ORDER BY p.id""",
+            (user_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT p.*, s.name, s.market, s.exchange, s.currency
+               FROM portfolio p LEFT JOIN stocks s ON p.ticker=s.ticker
+               ORDER BY p.id"""
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def add_position(ticker, shares, buy_price, buy_date=None, notes=None):
+def count_portfolio(user_id: str) -> int:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) FROM portfolio WHERE user_id=?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+def add_position(ticker, shares, buy_price, buy_date=None, notes=None, user_id="OWNER"):
     conn = get_connection()
     conn.execute(
-        "INSERT INTO portfolio (ticker, shares, buy_price, buy_date, notes) VALUES (?, ?, ?, ?, ?)",
-        (ticker, shares, buy_price, buy_date, notes),
+        "INSERT INTO portfolio (ticker, shares, buy_price, buy_date, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (ticker, shares, buy_price, buy_date, notes, user_id),
     )
     conn.commit()
     conn.close()
 
 
-def update_position(pos_id, shares=None, buy_price=None, notes=None):
+def update_position(pos_id, shares=None, buy_price=None, notes=None, user_id=None):
     conn = get_connection()
     if shares is not None:
-        conn.execute("UPDATE portfolio SET shares=? WHERE id=?", (shares, pos_id))
+        if user_id is not None:
+            conn.execute("UPDATE portfolio SET shares=? WHERE id=? AND user_id=?", (shares, pos_id, user_id))
+        else:
+            conn.execute("UPDATE portfolio SET shares=? WHERE id=?", (shares, pos_id))
     if buy_price is not None:
-        conn.execute("UPDATE portfolio SET buy_price=? WHERE id=?", (buy_price, pos_id))
+        if user_id is not None:
+            conn.execute("UPDATE portfolio SET buy_price=? WHERE id=? AND user_id=?", (buy_price, pos_id, user_id))
+        else:
+            conn.execute("UPDATE portfolio SET buy_price=? WHERE id=?", (buy_price, pos_id))
     if notes is not None:
-        conn.execute("UPDATE portfolio SET notes=? WHERE id=?", (notes, pos_id))
+        if user_id is not None:
+            conn.execute("UPDATE portfolio SET notes=? WHERE id=? AND user_id=?", (notes, pos_id, user_id))
+        else:
+            conn.execute("UPDATE portfolio SET notes=? WHERE id=?", (notes, pos_id))
     conn.commit()
     conn.close()
 
 
-def delete_position(pos_id):
+def delete_position(pos_id, user_id=None):
     conn = get_connection()
-    conn.execute("DELETE FROM portfolio WHERE id=?", (pos_id,))
+    if user_id is not None:
+        conn.execute("DELETE FROM portfolio WHERE id=? AND user_id=?", (pos_id, user_id))
+    else:
+        conn.execute("DELETE FROM portfolio WHERE id=?", (pos_id,))
     conn.commit()
     conn.close()
 
 
 # ── WATCHLIST ────────────────────────────────────────────────────────────────
 
-def get_watchlist():
+def get_watchlist(user_id=None):
     conn = get_connection()
-    rows = conn.execute(
-        """SELECT w.*, s.name, s.market, s.currency
-           FROM watchlist w LEFT JOIN stocks s ON w.ticker=s.ticker
-           ORDER BY w.added_at DESC"""
-    ).fetchall()
+    if user_id is not None:
+        rows = conn.execute(
+            """SELECT w.*, s.name, s.market, s.currency
+               FROM watchlist w LEFT JOIN stocks s ON w.ticker=s.ticker
+               WHERE w.user_id=?
+               ORDER BY w.added_at DESC""",
+            (user_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT w.*, s.name, s.market, s.currency
+               FROM watchlist w LEFT JOIN stocks s ON w.ticker=s.ticker
+               ORDER BY w.added_at DESC"""
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def add_to_watchlist(ticker, notes=None):
+def count_watchlist(user_id: str) -> int:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) FROM watchlist WHERE user_id=?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+def add_to_watchlist(ticker, notes=None, user_id="OWNER"):
     conn = get_connection()
     conn.execute(
-        "INSERT OR IGNORE INTO watchlist (ticker, notes) VALUES (?, ?)",
-        (ticker, notes),
+        "INSERT OR IGNORE INTO watchlist (ticker, notes, user_id) VALUES (?, ?, ?)",
+        (ticker, notes, user_id),
     )
     conn.commit()
     conn.close()
 
 
-def remove_from_watchlist(ticker):
+def remove_from_watchlist(ticker, user_id=None):
     conn = get_connection()
-    conn.execute("DELETE FROM watchlist WHERE ticker=?", (ticker,))
+    if user_id is not None:
+        conn.execute("DELETE FROM watchlist WHERE ticker=? AND user_id=?", (ticker, user_id))
+    else:
+        conn.execute("DELETE FROM watchlist WHERE ticker=?", (ticker,))
     conn.commit()
     conn.close()
 
@@ -280,14 +331,40 @@ def get_market_value(key):
     return dict(row) if row else None
 
 
-def clear_all_data():
+def clear_all_data(user_id=None):
     conn = get_connection()
-    conn.execute("DELETE FROM portfolio")
-    conn.execute("DELETE FROM watchlist")
+    if user_id is not None:
+        conn.execute("DELETE FROM portfolio WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM watchlist WHERE user_id=?", (user_id,))
+    else:
+        conn.execute("DELETE FROM portfolio")
+        conn.execute("DELETE FROM watchlist")
     conn.execute("DELETE FROM signals")
     conn.execute("DELETE FROM alerts")
     conn.commit()
     conn.close()
+
+
+def migrate_owner_data(user_id: str):
+    """Reassign all 'OWNER' rows to this user. Called once on first login."""
+    conn = get_connection()
+    already = conn.execute(
+        "SELECT value FROM app_config WHERE key='owner_migrated'"
+    ).fetchone()
+    if already and already["value"] == "true":
+        conn.close()
+        return
+    for table in ("portfolio", "watchlist", "price_alerts"):
+        conn.execute(
+            f"UPDATE {table} SET user_id=? WHERE user_id='OWNER'",
+            (user_id,),
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"
+    )
+    conn.commit()
+    conn.close()
+    print(f"[auth] Owner data migrated to user {user_id}", flush=True)
 
 
 # ── PICKS UNIVERSE ────────────────────────────────────────────────────────────
@@ -317,31 +394,50 @@ def remove_picks_universe(ticker: str):
     conn.close()
 
 
-def ticker_in_portfolio(ticker: str) -> bool:
+def ticker_in_portfolio(ticker: str, user_id=None) -> bool:
     conn = get_connection()
-    row = conn.execute(
-        "SELECT 1 FROM portfolio WHERE ticker=? LIMIT 1", (ticker,)
-    ).fetchone()
+    if user_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM portfolio WHERE ticker=? AND user_id=? LIMIT 1", (ticker, user_id)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM portfolio WHERE ticker=? LIMIT 1", (ticker,)
+        ).fetchone()
     conn.close()
     return row is not None
 
 
-def ticker_in_watchlist(ticker: str) -> bool:
+def ticker_in_watchlist(ticker: str, user_id=None) -> bool:
     conn = get_connection()
-    row = conn.execute(
-        "SELECT 1 FROM watchlist WHERE ticker=? LIMIT 1", (ticker,)
-    ).fetchone()
+    if user_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM watchlist WHERE ticker=? AND user_id=? LIMIT 1", (ticker, user_id)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM watchlist WHERE ticker=? LIMIT 1", (ticker,)
+        ).fetchone()
     conn.close()
     return row is not None
 
 
 # ── PRICE ALERTS ──────────────────────────────────────────────────────────────
 
-def get_price_alerts(ticker=None):
+def get_price_alerts(ticker=None, user_id=None):
     conn = get_connection()
-    if ticker:
+    if ticker and user_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM price_alerts WHERE ticker=? AND user_id=? ORDER BY created_at DESC",
+            (ticker, user_id),
+        ).fetchall()
+    elif ticker:
         rows = conn.execute(
             "SELECT * FROM price_alerts WHERE ticker=? ORDER BY created_at DESC", (ticker,)
+        ).fetchall()
+    elif user_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM price_alerts WHERE user_id=? ORDER BY created_at DESC", (user_id,)
         ).fetchall()
     else:
         rows = conn.execute(
@@ -352,13 +448,13 @@ def get_price_alerts(ticker=None):
 
 
 def create_price_alert(ticker, alert_type, threshold=None, entry_low=None,
-                       entry_high=None, alert_name=None):
+                       entry_high=None, alert_name=None, user_id="OWNER"):
     conn = get_connection()
     cursor = conn.execute(
         """INSERT INTO price_alerts
-           (ticker, alert_type, threshold, entry_low, entry_high, alert_name)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (ticker, alert_type, threshold, entry_low, entry_high, alert_name),
+           (ticker, alert_type, threshold, entry_low, entry_high, alert_name, user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (ticker, alert_type, threshold, entry_low, entry_high, alert_name, user_id),
     )
     alert_id = cursor.lastrowid
     conn.commit()
@@ -366,16 +462,25 @@ def create_price_alert(ticker, alert_type, threshold=None, entry_low=None,
     return alert_id
 
 
-def delete_price_alert(alert_id):
+def delete_price_alert(alert_id, user_id=None):
     conn = get_connection()
-    conn.execute("DELETE FROM price_alerts WHERE id=?", (alert_id,))
+    if user_id is not None:
+        conn.execute("DELETE FROM price_alerts WHERE id=? AND user_id=?", (alert_id, user_id))
+    else:
+        conn.execute("DELETE FROM price_alerts WHERE id=?", (alert_id,))
     conn.commit()
     conn.close()
 
 
-def toggle_price_alert(alert_id, is_active):
+def toggle_price_alert(alert_id, is_active, user_id=None):
     conn = get_connection()
-    conn.execute("UPDATE price_alerts SET is_active=? WHERE id=?", (is_active, alert_id))
+    if user_id is not None:
+        conn.execute(
+            "UPDATE price_alerts SET is_active=? WHERE id=? AND user_id=?",
+            (is_active, alert_id, user_id),
+        )
+    else:
+        conn.execute("UPDATE price_alerts SET is_active=? WHERE id=?", (is_active, alert_id))
     conn.commit()
     conn.close()
 
