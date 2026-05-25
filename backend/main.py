@@ -1254,10 +1254,9 @@ def strategy(user_id: str = Depends(get_current_user)):
     my_stocks.sort(key=lambda x: x["priority"])
     wl_situations.sort(key=lambda x: x["priority"])
 
-    # Populate smart_picks from cached picks result — reuse already-verified picks data.
-    # Falls back to empty list if picks haven't been loaded yet (will populate on next /api/picks call).
-    from data.cache import cache_get as _cg
-    cached_picks = _cg("picks:result", 60 * 60) or []
+    # Populate smart_picks from DB-backed picks cache — survives Railway restarts.
+    _picks_cache = db.get_picks_cache()
+    cached_picks = _json.loads(_picks_cache["all_picks_json"]) if _picks_cache and _picks_cache.get("all_picks_json") else []
     smart_picks_strat = []
     for pick in cached_picks[:5]:
         t = pick.get("trust", {})
