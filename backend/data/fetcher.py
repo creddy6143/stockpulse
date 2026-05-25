@@ -1589,7 +1589,21 @@ def get_fundamentals(ticker: str) -> dict:
 
     # Use a short retry TTL (5 min) when we got no usable data — prevents an empty
     # fetch from locking out the stock for the full 24-hour fundamentals cache window.
-    data_ok = (result.get("market_cap") or 0) > 0
+    #
+    # For Indian stocks (.NS/.BO): market_cap alone is not sufficient — FMP profile
+    # provides market_cap even when Screener.in and Yahoo are both down on Railway.
+    # We need actual fundamental data (revenue_growth or profit_margins) to cache
+    # for 24h; otherwise the "zero fundamentals + FMP market_cap" result gets locked
+    # in and SBIN.NS/BPCL.NS score suppress for a full day.
+    _is_indian = ticker.endswith((".NS", ".BO"))
+    if _is_indian:
+        _has_real_fundamentals = (
+            abs(result.get("revenue_growth") or 0) > 0.001
+            or abs(result.get("profit_margins") or 0) > 0.001
+        )
+        data_ok = (result.get("market_cap") or 0) > 0 and _has_real_fundamentals
+    else:
+        data_ok = (result.get("market_cap") or 0) > 0
     cache_set(key, result, ttl=TTL_FUNDAMENTALS if data_ok else (5 * 60))
     return result
 

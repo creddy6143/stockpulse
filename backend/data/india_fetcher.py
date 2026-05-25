@@ -313,7 +313,9 @@ def get_screener_fundamentals(ticker: str) -> dict:
 
     html = _get_screener_page(symbol)
     if not html:
-        cache_set(key, {})
+        # Short retry TTL — Screener.in may be temporarily unavailable (e.g. Railway IP block).
+        # 5-minute window so the next scan attempt re-tries rather than locking out for 24h.
+        cache_set(key, {}, ttl=5*60)
         return {}
 
     # Parse all sections
@@ -322,7 +324,7 @@ def get_screener_fundamentals(ticker: str) -> dict:
     sh     = _parse_shareholding(html)
 
     if not ratios and not pl:
-        cache_set(key, {})
+        cache_set(key, {}, ttl=5*60)
         return {}
 
     result = {"data_source": "screener.in"}

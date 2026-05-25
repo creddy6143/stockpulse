@@ -1313,8 +1313,8 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
       {open&&(
         <div style={{padding:"9px 12px 11px",background:"rgba(91,114,248,.02)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
           {s.verifConfidence==="SUPPRESSED"&&(
-            <div style={{fontSize:10,color:"var(--amber)",background:"var(--amber2)",borderRadius:7,padding:"6px 10px",marginBottom:8,fontFamily:"var(--mono)",lineHeight:1.5}}>
-              ⚠ Score suppressed — data insufficient for reliable display. P&L tracking continues.
+            <div style={{fontSize:9,color:"var(--t3)",marginBottom:6,fontFamily:"var(--mono)"}}>
+              ~ Score not available — data gap. P&amp;L tracking continues.
             </div>
           )}
           {s.verifConfidence==="MEDIUM"&&s.verifCaveat&&(
