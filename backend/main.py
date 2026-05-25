@@ -136,6 +136,26 @@ def db_status():
     }
 
 
+@app.post("/api/admin/claim-data")
+def claim_data(user_id: str = Depends(get_current_user)):
+    """Force-reassign ALL data to the authenticated user.
+    Only works if user_id matches OWNER_UID env var. Remove after use."""
+    import os
+    owner_uid = os.getenv("OWNER_UID", "").strip()
+    if not owner_uid or user_id != owner_uid:
+        raise HTTPException(status_code=403, detail="Not authorised")
+    from database.models import get_connection as _gc
+    conn = _gc()
+    for table in ("portfolio", "watchlist", "price_alerts"):
+        conn.execute(f"UPDATE {table} SET user_id=?", (user_id,))
+    conn.execute("INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')")
+    conn.commit()
+    rows = {t: conn.execute(f"SELECT COUNT(*) FROM {t} WHERE user_id=?", (user_id,)).fetchone()[0]
+            for t in ("portfolio", "watchlist")}
+    conn.close()
+    return {"status": "ok", "reassigned": rows}
+
+
 
 
 @app.get("/api/ping")
