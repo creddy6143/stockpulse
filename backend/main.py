@@ -1268,7 +1268,10 @@ def strategy(user_id: str = Depends(get_current_user)):
 
     # Populate smart_picks from DB-backed picks cache — survives Railway restarts.
     _picks_cache = db.get_picks_cache()
-    cached_picks = _json.loads(_picks_cache["all_picks_json"]) if _picks_cache and _picks_cache.get("all_picks_json") else []
+    _all = _json.loads(_picks_cache["all_picks_json"]) if _picks_cache and _picks_cache.get("all_picks_json") else []
+    _dips = [p for p in _all if p.get("is_dip")]
+    _mains = [p for p in _all if not p.get("is_dip")]
+    cached_picks = _mains[:100] + _dips[:10]  # Same cap as /api/picks
     smart_picks_strat = []
     for pick in cached_picks:
         t = pick.get("trust", {})
