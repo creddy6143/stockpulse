@@ -380,6 +380,18 @@ def mark_read(alert_id: int, user_id: str = Depends(get_current_user)):
     return {"status": "read"}
 
 
+@app.delete("/api/alerts/{alert_id}")
+def delete_alert(alert_id: int, user_id: str = Depends(get_current_user)):
+    db.delete_alert(alert_id, user_id=user_id)
+    return {"status": "deleted"}
+
+
+@app.delete("/api/alerts")
+def delete_all_alerts(user_id: str = Depends(get_current_user)):
+    db.delete_all_alerts(user_id=user_id)
+    return {"status": "cleared"}
+
+
 # ── SMART PICKS ───────────────────────────────────────────────────────────────
 
 # ── GICS SECTOR UNIVERSE (~325 stocks: US S&P500/Nasdaq100 + Europe + India) ──

@@ -80,6 +80,8 @@ export const getStockVerdict = (ticker) => request(`/api/stock/${ticker}/verdict
 
 export const getAlerts = () => request('/api/alerts');
 export const markAlertRead = (id) => request(`/api/alerts/${id}/read`, { method: 'PUT' });
+export const deleteAlert = (id) => request(`/api/alerts/${id}`, { method: 'DELETE' });
+export const deleteAllAlerts = () => request('/api/alerts', { method: 'DELETE' });
 
 // ── PICKS ────────────────────────────────────────────────────────────────────
 

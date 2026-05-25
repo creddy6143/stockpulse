@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts } from "./api/client";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import AuthScreen from "./screens/AuthScreen";
@@ -2765,17 +2765,23 @@ export default function App() {
                 ))}
               </>
             )}
-            {alerts.filter(a=>!a.is_read).length>0&&(
+            {alerts.length>0&&(
               <>
-                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1,marginTop:12,marginBottom:8}}>Unread Alerts</div>
-                {alerts.filter(a=>!a.is_read).slice(0,10).map((a,i)=>(
-                  <div key={i} style={{padding:"9px 12px",background:"var(--white)",borderRadius:9,marginBottom:6,border:"1px solid var(--t4)"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:12,marginBottom:8}}>
+                  <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1}}>Notifications</div>
+                  <button onClick={()=>deleteAllAlerts().then(()=>getAlerts().then(v=>setAlerts(v||[]))).catch(()=>{})}
+                    style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--rose)",background:"var(--rose2)",border:"1px solid #fca5a5",borderRadius:6,padding:"3px 8px",cursor:"pointer"}}>Clear all</button>
+                </div>
+                {alerts.map((a,i)=>(
+                  <div key={i} style={{padding:"9px 12px",background:"var(--white)",borderRadius:9,marginBottom:6,border:`1px solid ${a.is_read?"var(--t4)":"#c7d2fe"}`}}>
                     <div style={{display:"flex",alignItems:"center",gap:7}}>
                       <span style={{fontSize:13}}>{a.alert_type==="urgent"?"🚨":a.alert_type==="price_alert"?"🔔":"💡"}</span>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:11}}>{a.ticker||"System"}</div>
                         <div style={{fontSize:10,color:"var(--t2)",marginTop:1,lineHeight:1.4}}>{a.message}</div>
                       </div>
+                      <button onClick={()=>deleteAlert(a.id).then(()=>getAlerts().then(v=>setAlerts(v||[]))).catch(()=>{})}
+                        style={{fontSize:10,color:"var(--rose)",background:"var(--rose2)",border:"1px solid #fca5a5",borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"var(--mono)",flexShrink:0}}>✕</button>
                     </div>
                   </div>
                 ))}

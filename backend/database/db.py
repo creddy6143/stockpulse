@@ -286,6 +286,26 @@ def mark_alert_read(alert_id, user_id=None):
     conn.close()
 
 
+def delete_alert(alert_id, user_id=None):
+    conn = get_connection()
+    if user_id is not None:
+        conn.execute("DELETE FROM alerts WHERE id=? AND user_id=?", (alert_id, user_id))
+    else:
+        conn.execute("DELETE FROM alerts WHERE id=?", (alert_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_all_alerts(user_id=None):
+    conn = get_connection()
+    if user_id is not None:
+        conn.execute("DELETE FROM alerts WHERE user_id=?", (user_id,))
+    else:
+        conn.execute("DELETE FROM alerts")
+    conn.commit()
+    conn.close()
+
+
 def get_unread_alert_count(user_id=None):
     conn = get_connection()
     if user_id is not None:
