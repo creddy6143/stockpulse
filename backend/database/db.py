@@ -374,9 +374,9 @@ def clear_all_data(user_id=None):
 
 
 def migrate_owner_data(user_id: str):
-    """Reassign ALL data to user_id if they are the verified owner.
-    If OWNER_UID env var is set, only that UID can claim data.
-    Runs every login for the owner — safe because it is idempotent."""
+    """Reassign legacy 'OWNER' placeholder rows to the real owner UID.
+    If OWNER_UID env var is set, only that UID can claim the OWNER rows.
+    Only touches rows where user_id='OWNER' — never overwrites other users' data."""
     import os
     owner_uid = os.getenv("OWNER_UID", "").strip()
 
@@ -386,7 +386,12 @@ def migrate_owner_data(user_id: str):
 
     conn = get_connection()
     for table in ("portfolio", "watchlist", "price_alerts", "alerts"):
-        conn.execute(f"UPDATE {table} SET user_id=?", (user_id,))
+        # WHERE user_id='OWNER' is critical — without it every owner login
+        # would overwrite other users' rows and assign them to the owner.
+        conn.execute(
+            f"UPDATE {table} SET user_id=? WHERE user_id='OWNER'",
+            (user_id,)
+        )
     conn.execute(
         "INSERT OR REPLACE INTO app_config(key,value) VALUES('owner_migrated','true')"
     )
