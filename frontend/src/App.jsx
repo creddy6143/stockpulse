@@ -2346,11 +2346,11 @@ function StrategyScreen({strategyData, onDetail}) {
   const [exp,setExp] = useState(null);
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
-  const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[]};
-  const tabs = ["My Stocks","Watchlist","Smart Picks"];
-  const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy)];
+  const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[]};
+  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys"];
+  const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy), (SD.dipBuys||[]).map(mapStrategy)];
   const items = lists[tab];
-  const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length;
+  const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
 
   const handleExpand = (s, i) => {
     const wasOpen = exp === i;
@@ -2393,9 +2393,9 @@ function StrategyScreen({strategyData, onDetail}) {
       <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",overflow:"hidden"}}>
         <div style={{display:"flex",borderBottom:"1px solid var(--t4)"}}>
           {tabs.map((t,i)=>(
-            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:1,padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:1,padding:"10px 2px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
               {t}
-              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 6px",borderRadius:8,fontWeight:700}}>{lists[i].length}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{lists[i].length}</span>
             </button>
           ))}
         </div>
@@ -2483,7 +2483,7 @@ export default function App() {
   const [picksLoading, setPicksLoading] = useState(false);
   const [disq, setDisq] = useState([]);
   const [accuracy, setAccuracy] = useState("—");
-  const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[]});
+  const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[],dipBuys:[]});
   const [earnings, setEarnings] = useState([]);
   const [priceAlerts, setPriceAlerts] = useState([]);
   const loadPriceAlerts = () => getPriceAlerts().then(v=>setPriceAlerts(v||[])).catch(()=>{});
@@ -2560,6 +2560,7 @@ export default function App() {
           myStocks: v.my_stocks || [],
           watchlist: v.watchlist || [],
           smartPicks: v.smart_picks || [],
+          dipBuys: v.dip_buys || [],
         });
       }).catch(()=>{});
     }, 1000);
@@ -2587,7 +2588,7 @@ export default function App() {
   const unreadCount = (alerts||[]).filter(a=>!a.is_read).length;
 
   // ── Badges ──
-  const stratTotal = (strategyData.myStocks||[]).length+(strategyData.watchlist||[]).length+(strategyData.smartPicks||[]).length;
+  const stratTotal = (strategyData.myStocks||[]).length+(strategyData.watchlist||[]).length+(strategyData.smartPicks||[]).length+(strategyData.dipBuys||[]).length;
   const urgentCount = urgent.length;
 
   const screens = [

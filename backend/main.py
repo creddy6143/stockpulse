@@ -1304,13 +1304,83 @@ def strategy(user_id: str = Depends(get_current_user)):
             "sector": pick.get("sector", ""),
         })
 
-    total = len(my_stocks) + len(wl_situations) + len(smart_picks_strat)
+    # ── DIP BUYS ─────────────────────────────────────────────────────────────
+    # Healthy dip = fundamentally strong stock temporarily down.
+    # Criteria: trust ≥ 65, not auto-disqualified, business_score ≥ 20,
+    # down ≥ 4% today, no bearish analyst consensus, no bad patterns.
+    BAD_PATTERNS = {"dead_cat", "falling_knife"}
+    dip_buys = []
+    for pick in _all:
+        t = pick.get("trust", {})
+        score = t.get("total_score") or 0
+        biz   = t.get("business_score") or 0
+        disq  = t.get("auto_disqualified", False) or pick.get("auto_disqualified", False)
+        chg   = pick.get("change_pct", 0) or 0
+        patterns = [p.get("pattern","") for p in (pick.get("patterns") or [])]
+        analysts_bearish = (t.get("analyst_sell", 0) or 0) > (t.get("analyst_buy", 0) or 0)
+
+        if (score < 65 or disq or biz < 20 or chg > -4
+                or analysts_bearish
+                or any(p in BAD_PATTERNS for p in patterns)):
+            continue
+
+        grade = t.get("grade", "")
+        dip_pct = abs(chg)
+
+        # Plain English reason for why this is a healthy dip
+        reasons = []
+        if biz >= 30:
+            reasons.append("strong revenue & earnings")
+        elif biz >= 20:
+            reasons.append("solid business fundamentals")
+        sm = t.get("smart_money_score") or 0
+        if sm >= 25:
+            reasons.append("institutions still buying")
+        elif sm >= 15:
+            reasons.append("no institutional selling")
+        if (t.get("analyst_buy") or 0) > 0:
+            reasons.append(f"{t.get('analyst_buy')} analysts say buy")
+        reason_text = " · ".join(reasons) if reasons else "fundamentals intact"
+
+        dip_buys.append({
+            "ticker": pick["ticker"],
+            "flag": _get_flag(_detect_market(pick["ticker"])),
+            "situation_type": "dip_buy",
+            "label": "Healthy Dip",
+            "icon": "📉",
+            "action": "BUY",
+            "color": "var(--emerald)",
+            "summary": f"Down {dip_pct:.1f}% today — {reason_text}",
+            "priority": 1 if dip_pct >= 8 else 2,
+            "playbook": None,
+            "name": pick.get("name", pick["ticker"]),
+            "current_price": pick.get("price", 0),
+            "change_pct": chg,
+            "trust_score": score,
+            "grade": grade,
+            "business_score": biz,
+            "smart_money_score": sm,
+            "momentum_score": t.get("momentum_score", 0),
+            "is_speculative": t.get("is_speculative", False),
+            "analyst_buy": t.get("analyst_buy", 0),
+            "analyst_hold": t.get("analyst_hold", 0),
+            "analyst_sell": t.get("analyst_sell", 0),
+            "situation_label": t.get("situation_label"),
+            "situation_note": t.get("situation_note"),
+            "sector": pick.get("sector", ""),
+        })
+
+    # Sort by deepest dip first (bigger drop on strong stock = better entry)
+    dip_buys.sort(key=lambda x: x["change_pct"])
+
+    total = len(my_stocks) + len(wl_situations) + len(smart_picks_strat) + len(dip_buys)
 
     return {
         "total_situations": total,
         "my_stocks": my_stocks,
         "watchlist": wl_situations,
         "smart_picks": smart_picks_strat,
+        "dip_buys": dip_buys,
     }
 
 
