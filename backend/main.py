@@ -704,6 +704,28 @@ def _score_one_ticker(ticker: str) -> dict | None:
 
         patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
         verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
+
+        # ── CONSECUTIVE DIP DAYS ─────────────────────────────────────────────
+        # Count how many trading days in a row the stock has been declining.
+        # Uses the already-cached 1Y daily history — no extra API call in most cases.
+        consec_dip_days = 0
+        week_change = 0.0
+        try:
+            hist = get_stock_history(ticker)
+            week_change = float(hist.get("1W") or 0)
+            prices_list = hist.get("prices", [])
+            closes = [p["price"] for p in prices_list if p.get("price")]
+            if len(closes) >= 3:
+                streak = 0
+                for i in range(len(closes) - 1, 0, -1):
+                    if closes[i] < closes[i - 1]:
+                        streak += 1
+                    else:
+                        break
+                consec_dip_days = streak
+        except Exception:
+            pass
+
         return {
             "ticker": ticker,
             "name": price_data.get("name", ticker),
@@ -713,8 +735,9 @@ def _score_one_ticker(ticker: str) -> dict | None:
             "verdict": verdict,
             "patterns": patterns,
             "is_dip": is_dip,
+            "consec_dip_days": consec_dip_days,
+            "week_change": week_change,
             "sector": _get_sector(ticker, fundamentals),
-            # Surface verification metadata so frontend can show confidence badge
             "verification": trust.get("verification"),
         }
     except Exception:
@@ -1309,6 +1332,12 @@ def strategy(user_id: str = Depends(get_current_user)):
     # Criteria: trust ≥ 65, not auto-disqualified, business_score ≥ 20,
     # any negative change today, no bad patterns, not net-bearish analysts.
     BAD_PATTERNS = {"dead_cat", "falling_knife"}
+    # Market context for dip classification
+    _md = market_data or {}
+    _vix = (_md.get("vix") or {}).get("price", 0) or 0
+    _sp_chg = (_md.get("sp500") or {}).get("change_pct", 0) or 0
+    _market_driven = _vix > 18 or _sp_chg < -1.0
+
     dip_buys = []
     for pick in _all:
         t = pick.get("trust", {})
@@ -1326,6 +1355,22 @@ def strategy(user_id: str = Depends(get_current_user)):
 
         grade = t.get("grade", "")
         dip_pct = abs(chg)
+        consec = pick.get("consec_dip_days", 0) or 0
+        week_chg = pick.get("week_change", 0) or 0
+
+        # Label + icon upgrade for sustained multi-day dips
+        if consec >= 3:
+            label = f"{consec}-Day Dip"
+            icon = "🟢"
+            priority = 0  # Highest — sustained dip on strong stock
+        elif consec >= 2:
+            label = "2-Day Dip"
+            icon = "🟢"
+            priority = 1
+        else:
+            label = "Healthy Dip"
+            icon = "📉"
+            priority = 1 if dip_pct >= 8 else 2
 
         # Plain English reason for why this is a healthy dip
         reasons = []
@@ -1342,16 +1387,27 @@ def strategy(user_id: str = Depends(get_current_user)):
             reasons.append(f"{t.get('analyst_buy')} analysts say buy")
         reason_text = " · ".join(reasons) if reasons else "fundamentals intact"
 
+        # Build summary — richer for sustained dips
+        if consec >= 2:
+            week_str = f" ({week_chg:+.1f}% this week)" if week_chg else ""
+            if _market_driven:
+                summary = f"{consec} days down{week_str} — market-driven pullback, not company news · {reason_text}"
+            else:
+                summary = f"{consec} consecutive down days{week_str} — {reason_text}"
+        else:
+            market_note = " · broad market pulling it down" if _market_driven else ""
+            summary = f"Down {dip_pct:.1f}% today{market_note} — {reason_text}"
+
         dip_buys.append({
             "ticker": pick["ticker"],
             "flag": _get_flag(_detect_market(pick["ticker"])),
             "situation_type": "dip_buy",
-            "label": "Healthy Dip",
-            "icon": "📉",
+            "label": label,
+            "icon": icon,
             "action": "BUY",
             "color": "var(--emerald)",
-            "summary": f"Down {dip_pct:.1f}% today — {reason_text}",
-            "priority": 1 if dip_pct >= 8 else 2,
+            "summary": summary,
+            "priority": priority,
             "playbook": None,
             "name": pick.get("name", pick["ticker"]),
             "current_price": pick.get("price", 0),
@@ -1368,10 +1424,13 @@ def strategy(user_id: str = Depends(get_current_user)):
             "situation_label": t.get("situation_label"),
             "situation_note": t.get("situation_note"),
             "sector": pick.get("sector", ""),
+            "consec_dip_days": consec,
+            "week_change": week_chg,
+            "market_driven": _market_driven,
         })
 
-    # Sort by deepest dip first (bigger drop on strong stock = better entry)
-    dip_buys.sort(key=lambda x: x["change_pct"])
+    # Sort: sustained dips first (priority 0 > 1 > 2), then deepest daily drop
+    dip_buys.sort(key=lambda x: (x["priority"], x["change_pct"]))
 
     total = len(my_stocks) + len(wl_situations) + len(smart_picks_strat) + len(dip_buys)
 

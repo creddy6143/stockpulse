@@ -2412,10 +2412,18 @@ function StrategyScreen({strategyData, onDetail}) {
               <div onClick={()=>handleExpand(s,i)} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?"rgba(91,114,248,.025)":"transparent",transition:"background .15s"}}>
                 <span style={{fontSize:18,flexShrink:0}}>{s.icon}</span>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
                     <span style={{fontSize:12}}>{s.flag}</span>
                     <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:14}}>{s.ticker}</span>
                     <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:s.col,background:s.col==="var(--rose)"?"var(--rose2)":s.col==="var(--emerald)"?"var(--emerald2)":s.col==="var(--amber)"?"var(--amber2)":"#eef2ff",padding:"2px 8px",borderRadius:4}}>{s.label}</span>
+                    {s.situation_type==="dip_buy"&&(s.consec_dip_days||0)>=2&&(
+                      <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"#065f46",background:"#d1fae5",border:"1px solid #6ee7b7",padding:"2px 7px",borderRadius:4,animation:"pr 1.4s ease-in-out infinite"}}>
+                        {(s.consec_dip_days||0)>=3?`${s.consec_dip_days} DAYS ↓`:"2 DAYS ↓"} · GOOD ENTRY
+                      </span>
+                    )}
+                    {s.situation_type==="dip_buy"&&s.market_driven&&(
+                      <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",padding:"2px 6px",borderRadius:4,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)"}}>market-driven</span>
+                    )}
                   </div>
                   <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.4}}>{s.summary}</div>
                 </div>
