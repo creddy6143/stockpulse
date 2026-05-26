@@ -1307,7 +1307,7 @@ def strategy(user_id: str = Depends(get_current_user)):
     # ── DIP BUYS ─────────────────────────────────────────────────────────────
     # Healthy dip = fundamentally strong stock temporarily down.
     # Criteria: trust ≥ 65, not auto-disqualified, business_score ≥ 20,
-    # down ≥ 4% today, no bearish analyst consensus, no bad patterns.
+    # any negative change today, no bad patterns, not net-bearish analysts.
     BAD_PATTERNS = {"dead_cat", "falling_knife"}
     dip_buys = []
     for pick in _all:
@@ -1319,7 +1319,7 @@ def strategy(user_id: str = Depends(get_current_user)):
         patterns = [p.get("pattern","") for p in (pick.get("patterns") or [])]
         analysts_bearish = (t.get("analyst_sell", 0) or 0) > (t.get("analyst_buy", 0) or 0)
 
-        if (score < 65 or disq or biz < 20 or chg > -4
+        if (score < 65 or disq or biz < 20 or chg >= 0
                 or analysts_bearish
                 or any(p in BAD_PATTERNS for p in patterns)):
             continue
