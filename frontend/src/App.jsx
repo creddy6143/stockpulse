@@ -1073,15 +1073,49 @@ function HomeScreen({positions, summary, earnings, market, onEarnings}) {
   const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
   const upcomingEarnings = (earnings||[]).filter(e=>e.date!=="Today"&&e.date!=="—");
   const vix = market?.vix?.price || 0;
-  const vixLabel = vix >= 25 ? "🔴 Alert" : vix >= 15 ? "🟡 Choppy" : "🟢 Calm";
-  const vixColor = vix >= 25 ? "var(--rose)" : vix >= 15 ? "var(--amber)" : "var(--emerald)";
-  const vixSub = vix >= 25 ? "High fear — caution advised" : vix >= 15 ? "Some volatility — selective" : "Below 15 — signals reliable";
+  // US VIX: 13-20 = normal, 20-27 = choppy, 27-35 = stressed, 35+ = panic
+  const vixLabel = !vix      ? "—"
+                 : vix >= 35 ? "🔴 Panic"
+                 : vix >= 27 ? "🔴 Stressed"
+                 : vix >= 20 ? "🟡 Choppy"
+                 : vix >= 13 ? "🟢 Normal"
+                 : "🟢 Calm";
+  const vixColor = !vix      ? "var(--t3)"
+                 : vix >= 27 ? "var(--rose)"
+                 : vix >= 20 ? "var(--amber)"
+                 : "var(--emerald)";
+  const vixSub = !vix      ? "Data unavailable"
+               : vix >= 35 ? "Extreme fear — avoid new positions"
+               : vix >= 27 ? "High fear — reduce risk"
+               : vix >= 20 ? "Elevated volatility — be selective"
+               : vix >= 13 ? "Normal range — healthy market"
+               : "Very low fear — ideal conditions";
+
   const vstoxx = market?.vstoxx?.price || 0;
   const indiaVix = market?.india_vix?.price || 0;
-  const vstoxxLabel = vstoxx >= 30 ? "🔴 Alert" : vstoxx >= 20 ? "🟡 Choppy" : "🟢 Calm";
-  const vstoxxColor = vstoxx >= 30 ? "var(--rose)" : vstoxx >= 20 ? "var(--amber)" : "var(--emerald)";
-  const indiaVixLabel = indiaVix >= 25 ? "🔴 Alert" : indiaVix >= 15 ? "🟡 Choppy" : "🟢 Calm";
-  const indiaVixColor = indiaVix >= 25 ? "var(--rose)" : indiaVix >= 15 ? "var(--amber)" : "var(--emerald)";
+
+  // EU VSTOXX: structurally higher than VIX — 15-22 = normal, 22-30 = choppy, 30+ = stressed
+  const vstoxxLabel = !vstoxx      ? "—"
+                    : vstoxx >= 35 ? "🔴 Stressed"
+                    : vstoxx >= 22 ? "🟡 Choppy"
+                    : vstoxx >= 15 ? "🟢 Normal"
+                    : "🟢 Calm";
+  const vstoxxColor = !vstoxx      ? "var(--t3)"
+                    : vstoxx >= 35 ? "var(--rose)"
+                    : vstoxx >= 22 ? "var(--amber)"
+                    : "var(--emerald)";
+
+  // India VIX: similar range to US VIX — 14-20 = normal, 20-28 = choppy, 28+ = stressed
+  const indiaVixLabel = !indiaVix       ? "—"
+                      : indiaVix >= 35  ? "🔴 Panic"
+                      : indiaVix >= 28  ? "🔴 Stressed"
+                      : indiaVix >= 20  ? "🟡 Choppy"
+                      : indiaVix >= 14  ? "🟢 Normal"
+                      : "🟢 Calm";
+  const indiaVixColor = !indiaVix      ? "var(--t3)"
+                      : indiaVix >= 28 ? "var(--rose)"
+                      : indiaVix >= 20 ? "var(--amber)"
+                      : "var(--emerald)";
   const sessions = market?.market_sessions || {};
   const openCount = [sessions.us, sessions.eu, sessions.in].filter(s=>s?.state==="open").length;
   const indices = [
@@ -2589,9 +2623,22 @@ export default function App() {
   const wlAvoid = watchlistRaw.filter(w=>w.wl_group==="avoid").map(mapWatchlistItem);
 
   // ── Market status ──
+  // Header label is computed from VIX + index breadth — never hardcoded.
   const vix = market?.vix?.price || 0;
-  const mktLabel = vix >= 25 ? "Market Alert" : vix >= 15 ? "Market Choppy" : "Market Calm";
-  const mktDotColor = vix >= 25 ? "#ef4444" : vix >= 15 ? "#f59e0b" : "#4ade80";
+  const _sp  = market?.sp500?.change_pct  || 0;
+  const _nq  = market?.nasdaq?.change_pct || 0;
+  const _dax = market?.dax?.change_pct    || 0;
+  const _nft = market?.nifty?.change_pct  || 0;
+  const _idxGreen = [_sp, _nq, _dax, _nft].filter(c => c > 0).length;
+  const _majorityUp = _idxGreen >= 2;
+
+  const mktLabel = vix >= 35 ? "Market Alert"
+                 : vix >= 27 ? "Market Stressed"
+                 : vix >= 20 ? "Market Choppy"
+                 : vix >= 13 ? (_majorityUp ? "Market Calm" : "Market Stable")
+                 : vix > 0   ? "Market Calm"
+                 : (_majorityUp ? "Markets Up" : "Market Stable");
+  const mktDotColor = vix >= 27 ? "#ef4444" : vix >= 20 ? "#f59e0b" : "#4ade80";
 
   const unreadCount = (alerts||[]).filter(a=>!a.is_read).length;
 

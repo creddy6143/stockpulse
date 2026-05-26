@@ -757,13 +757,44 @@ def get_market_data() -> dict:
     for name in yf_map:
         result.setdefault(name, {"price": 0, "change_pct": 0})
 
-    vix_level = result.get("vix", {}).get("price", 15)
-    if vix_level < 15:
-        status = {"label": "Market Calm",   "dot": "calm",   "color": "green"}
-    elif vix_level < 25:
-        status = {"label": "Market Choppy", "dot": "choppy", "color": "amber"}
+    vix_level = result.get("vix", {}).get("price", 0)
+
+    # Count how many of the 4 major indices are positive today
+    _idx_chg = [
+        (result.get("sp500",  {}) or {}).get("change_pct", 0),
+        (result.get("nasdaq", {}) or {}).get("change_pct", 0),
+        (result.get("dax",    {}) or {}).get("change_pct", 0),
+        (result.get("nifty",  {}) or {}).get("change_pct", 0),
+    ]
+    _valid = [c for c in _idx_chg if c != 0]
+    _green = sum(1 for c in _valid if c > 0)
+    _majority_up = (_green >= len(_valid) / 2) if _valid else True
+
+    # Correct financial VIX thresholds — 16-17 is normal/stable, NOT choppy.
+    # <13 = very calm, 13-20 = normal range, 20-27 = elevated, 27-35 = stressed, 35+ = panic
+    if vix_level <= 0:
+        # VIX data unavailable — infer from index direction only
+        if not _valid:
+            status = {"label": "Market Data Unavailable", "dot": "calm", "color": "green"}
+        elif _majority_up:
+            status = {"label": "Markets Up",    "dot": "calm",   "color": "green"}
+        else:
+            status = {"label": "Markets Mixed", "dot": "choppy", "color": "amber"}
+    elif vix_level >= 35:
+        status = {"label": "Market Alert",   "dot": "alert",  "color": "rose"}
+    elif vix_level >= 27:
+        status = {"label": "Market Stressed","dot": "alert",  "color": "rose"}
+    elif vix_level >= 20:
+        status = {"label": "Market Choppy",  "dot": "choppy", "color": "amber"}
+    elif vix_level >= 13:
+        # Normal VIX range — refine label by whether indices are up or down
+        if _majority_up:
+            status = {"label": "Market Calm",   "dot": "calm",   "color": "green"}
+        else:
+            status = {"label": "Market Stable", "dot": "calm",   "color": "green"}
     else:
-        status = {"label": "Market Alert",  "dot": "alert",  "color": "rose"}
+        # VIX below 13 — very low fear regardless of direction
+        status = {"label": "Market Calm",    "dot": "calm",   "color": "green"}
 
     result["status"] = status
     result["market_sessions"] = _get_market_sessions()
