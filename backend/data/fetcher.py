@@ -412,8 +412,8 @@ def _finnhub_symbol(ticker: str) -> str | None:
 
 def get_exchange_rates() -> dict:
     """Live SEK per 1 unit of each currency.
-    Primary: Frankfurter.app (ECB-based, free, no key, no rate limiting).
-    Fallback: hardcoded sensible defaults.
+    Primary: Frankfurter.dev/v1 (ECB-based, free, no key).
+    Fallback: hardcoded approximate rates (updated May 2026).
     Cached 15 minutes.
     """
     key = "exchange_rates"
@@ -421,12 +421,15 @@ def get_exchange_rates() -> dict:
     if cached:
         return cached
 
-    rates = {"USDSEK": 10.4, "EURSEK": 11.2, "INRSEK": 0.124, "GBPSEK": 13.2}
+    # Fallback rates — approximate as of May 2026 (used only if API fails)
+    rates = {"USDSEK": 9.30, "EURSEK": 10.82, "INRSEK": 0.0972, "GBPSEK": 12.53}
 
     try:
+        # api.frankfurter.app moved to api.frankfurter.dev/v1 in 2026
         r = requests.get(
-            "https://api.frankfurter.app/latest?from=USD&to=SEK,EUR,GBP,INR",
+            "https://api.frankfurter.dev/v1/latest?from=USD&to=SEK,EUR,GBP,INR",
             timeout=8,
+            allow_redirects=True,
         )
         if r.status_code == 200:
             data = r.json().get("rates", {})
@@ -438,13 +441,12 @@ def get_exchange_rates() -> dict:
             rates["USDSEK"] = round(usd_to_sek, 4)
             if usd_to_inr > 0:
                 rates["INRSEK"] = round(usd_to_sek / usd_to_inr, 6)
-            # EUR and GBP per SEK: EUR→SEK = SEK/USD ÷ EUR/USD
             if usd_to_eur > 0:
                 rates["EURSEK"] = round(usd_to_sek / usd_to_eur, 4)
             if usd_to_gbp > 0:
                 rates["GBPSEK"] = round(usd_to_sek / usd_to_gbp, 4)
     except Exception:
-        pass
+        pass  # Fall back to approximate defaults above
 
     cache_set(key, rates)
     return rates
