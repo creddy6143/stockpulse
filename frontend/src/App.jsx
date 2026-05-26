@@ -318,6 +318,7 @@ const mapPosition = (pos, earningsByTicker) => {
     value_sek: pos.value_sek || 0,
     invested_sek: pos.invested_sek || 0,
     pnl_sek: pos.pnl_sek || 0,
+    sek_rate: pos.sek_rate || 0,
     currency: pos.currency || "USD", market: pos.market || "US",
     verdict,
     earn: (earningsByTicker || {})[pos.ticker] || "—",
@@ -1372,6 +1373,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Earnings <span style={{color:"var(--t1)",fontWeight:600}}>{s.earn}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust, s.grade)}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Köpt <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
+            {s.sek_rate > 0 && s.currency !== "SEK" && <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>Rate <span style={{color:"var(--t2)",fontWeight:600}}>1 {s.currency} = {s.sek_rate.toFixed(2)} kr</span></span>}
             {s.dataSource && !isDataUnavailable && <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)"}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
           </div>
           <div style={{display:"flex",gap:7}}>

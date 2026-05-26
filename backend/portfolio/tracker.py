@@ -61,7 +61,17 @@ def _build_position(pos: dict, rates: dict) -> dict:
     trust = get_trust_score_with_fallback(ticker, price_data)
 
     price = price_data.get("price") or pos["buy_price"]
-    currency = pos.get("currency") or _detect_currency(ticker)
+
+    # Currency priority: live price API (always accurate) > ticker suffix > DB stored value.
+    # The DB value can be stale or wrong from old code paths — never trust it over live data.
+    _known = {"USD", "EUR", "GBP", "INR", "SEK"}
+    _price_ccy = (price_data.get("currency") or "").upper()
+    if _price_ccy in _known:
+        currency = _price_ccy
+    else:
+        _detected = _detect_currency(ticker)
+        currency = _detected if _detected != "USD" else (pos.get("currency") or "USD")
+
     rate = _sek_rate(currency, rates)
 
     shares = pos["shares"]
