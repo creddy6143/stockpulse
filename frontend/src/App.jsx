@@ -1839,25 +1839,21 @@ function AddModal({onClose, onAdded}) {
     try {
       if (type === "portfolio") {
         const cleanPrice = +buyPrice.toString().replace(",", ".");
-        const res = await addPosition(t, +shares, cleanPrice, buyDate || null, null);
-        onAdded();
-        if (res?.already_had_position) {
-          setLoading(false);
-          setErr(`ℹ️ ${t} already in portfolio — new lot added.`);
-          return;
-        }
+        await addPosition(t, +shares, cleanPrice, buyDate || null, null);
       } else {
-        const res = await addToWatchlist(t, null);
-        if (res?.already_exists) {
-          setLoading(false);
-          setErr(`ℹ️ ${t} is already on your watchlist.`);
-          return;
-        }
-        onAdded();
+        await addToWatchlist(t, null);
       }
+      onAdded();
       onClose();
     } catch(e) {
-      setErr("Failed to add. Check the ticker and try again.");
+      const msg = e.message || "";
+      if (msg.includes("409")) {
+        setErr(type === "portfolio"
+          ? `${t} is already in your portfolio.`
+          : `${t} is already on your watchlist.`);
+      } else {
+        setErr("Failed to add. Check the ticker and try again.");
+      }
     }
     setLoading(false);
   };

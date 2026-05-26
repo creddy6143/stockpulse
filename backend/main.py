@@ -211,7 +211,8 @@ def add_portfolio(req: AddPositionRequest, user_id: str = Depends(get_current_us
     ticker = req.ticker.upper()
     if db.count_portfolio(user_id) >= 100:
         raise HTTPException(status_code=429, detail="Free tier limit reached (100 stocks)")
-    already_exists = db.ticker_in_portfolio(ticker, user_id=user_id)
+    if db.ticker_in_portfolio(ticker, user_id=user_id):
+        raise HTTPException(status_code=409, detail=f"{ticker} is already in your portfolio")
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
     # For tickers without exchange suffix, use price currency to infer market.
@@ -226,7 +227,7 @@ def add_portfolio(req: AddPositionRequest, user_id: str = Depends(get_current_us
     currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes, user_id=user_id)
-    return {"status": "added", "ticker": ticker, "already_had_position": already_exists}
+    return {"status": "added", "ticker": ticker}
 
 
 @app.put("/api/portfolio/{pos_id}")
@@ -265,7 +266,8 @@ def add_watchlist(req: WatchlistRequest, user_id: str = Depends(get_current_user
     ticker = req.ticker.upper()
     if db.count_watchlist(user_id) >= 100:
         raise HTTPException(status_code=429, detail="Free tier limit reached (100 watchlist items)")
-    already_exists = db.ticker_in_watchlist(ticker, user_id=user_id)
+    if db.ticker_in_watchlist(ticker, user_id=user_id):
+        raise HTTPException(status_code=409, detail=f"{ticker} is already on your watchlist")
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
     if "." not in ticker:
@@ -278,7 +280,7 @@ def add_watchlist(req: WatchlistRequest, user_id: str = Depends(get_current_user
     currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_to_watchlist(ticker, req.notes, user_id=user_id)
-    return {"status": "added", "ticker": ticker, "already_exists": already_exists}
+    return {"status": "added", "ticker": ticker}
 
 
 @app.delete("/api/watchlist/{ticker}")
