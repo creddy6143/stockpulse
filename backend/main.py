@@ -944,6 +944,26 @@ def picks():
     mains = [p for p in all_picks if not p.get("is_dip")]
     top_picks = mains[:100] + dips[:10]
 
+    # Freshen price + change_pct from the live price_cache (updated every time
+    # any endpoint touches that ticker).  The scan cache can be hours old, so
+    # AMD showing +4.8% from the scan while it's live at +7.87% is wrong.
+    # One bulk SQL query — no extra API calls.
+    all_tickers = [p["ticker"] for p in top_picks]
+    live_prices = db.get_cached_prices_bulk(all_tickers)
+    for p in top_picks:
+        live = live_prices.get(p["ticker"])
+        if live and live.get("price"):
+            p["price"] = live["price"]
+            p["change_pct"] = live["change_pct"] or 0
+
+    # Apply same freshening to sector_picks
+    for sector_list in sector_picks.values():
+        for p in sector_list:
+            live = live_prices.get(p["ticker"])
+            if live and live.get("price"):
+                p["price"] = live["price"]
+                p["change_pct"] = live["change_pct"] or 0
+
     return {
         "picks": top_picks,
         "sector_picks": sector_picks,
@@ -1297,6 +1317,16 @@ def strategy(user_id: str = Depends(get_current_user)):
     _dips = [p for p in _all if p.get("is_dip")]
     _mains = [p for p in _all if not p.get("is_dip")]
     cached_picks = _mains[:100] + _dips[:10]  # Same cap as /api/picks
+
+    # Freshen prices from live price_cache — scan cache can be hours old
+    _strat_tickers = [p["ticker"] for p in cached_picks]
+    _live_strat = db.get_cached_prices_bulk(_strat_tickers)
+    for pick in cached_picks:
+        _lv = _live_strat.get(pick["ticker"])
+        if _lv and _lv.get("price"):
+            pick["price"] = _lv["price"]
+            pick["change_pct"] = _lv["change_pct"] or 0
+
     smart_picks_strat = []
     for pick in cached_picks:
         t = pick.get("trust", {})

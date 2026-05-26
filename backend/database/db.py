@@ -339,6 +339,22 @@ def get_cached_price(ticker):
     return dict(row) if row else None
 
 
+def get_cached_prices_bulk(tickers: list) -> dict:
+    """Return {ticker: {price, change_pct}} for all tickers that have a cached price.
+    Single SQL query — used to refresh stale scan-cache prices without new API calls.
+    """
+    if not tickers:
+        return {}
+    placeholders = ",".join("?" * len(tickers))
+    conn = get_connection()
+    rows = conn.execute(
+        f"SELECT ticker, price, change_pct FROM price_cache WHERE ticker IN ({placeholders})",
+        tickers,
+    ).fetchall()
+    conn.close()
+    return {r["ticker"]: {"price": r["price"], "change_pct": r["change_pct"]} for r in rows}
+
+
 # ── MARKET CACHE ──────────────────────────────────────────────────────────────
 
 def save_market_value(key, value):
