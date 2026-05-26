@@ -405,6 +405,7 @@ const mapPick = pick => {
     risk: total >= 80 ? "LOW-MED" : "MEDIUM", horizon: verdict.time_horizon || "12 months",
     is_dip: pick.is_dip || false,
     change_pct: pick.change_pct || 0,
+    price, curr,
     sector: pick.sector || "Other",
     situationLabel: trust.situation_label || null,
     situationNote: trust.situation_note || null,
@@ -2090,6 +2091,7 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
             {trackedSet.has(s.ticker)&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 4px",borderRadius:3}}>✓</span>}
           </div>
           <div style={{fontSize:8,color:"var(--t3)",marginTop:1,paddingLeft:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+          {s.price > 0 && <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t2)",paddingLeft:10,marginTop:1}}>{s.curr}{s.price < 1000 ? s.price.toFixed(2) : s.price.toFixed(0)}<span style={{marginLeft:4,color:s.change_pct>=0?"var(--emerald)":"var(--rose)"}}>{s.change_pct>=0?"+":""}{s.change_pct.toFixed(1)}%</span></div>}
         </div>
         <div><span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:600,color:recColor,background:recBg,padding:"2px 6px",borderRadius:4}}>{s.rec}</span></div>
         <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span></div>
@@ -2459,6 +2461,7 @@ function StrategyScreen({strategyData, onDetail}) {
                       <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",padding:"2px 6px",borderRadius:4,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)"}}>market-driven</span>
                     )}
                   </div>
+                  {(s.current_price||0) > 0 && <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",marginBottom:2}}>{cu(s.ticker)}{(s.current_price<1000?(s.current_price).toFixed(2):(s.current_price).toFixed(0))}<span style={{marginLeft:5,color:(s.change_pct||0)>=0?"var(--emerald)":"var(--rose)"}}>{(s.change_pct||0)>=0?"+":""}{(s.change_pct||0).toFixed(1)}%</span></div>}
                   <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.4}}>{s.summary}</div>
                 </div>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5,flexShrink:0}}>
