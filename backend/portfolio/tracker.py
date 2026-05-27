@@ -2,7 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import db as _db
 from database.db import get_portfolio, get_watchlist
-from data.fetcher import get_stock_price, get_exchange_rates, get_analyst_data, get_fundamentals, get_fmp_profile
+from data.fetcher import get_stock_price, get_exchange_rates, get_historical_sek_rate, get_analyst_data, get_fundamentals, get_fmp_profile
 from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.verification import verify_watchlist_signal
 
@@ -74,13 +74,25 @@ def _build_position(pos: dict, rates: dict) -> dict:
 
     rate = _sek_rate(currency, rates)
 
-    shares = pos["shares"]
+    shares    = pos["shares"]
     buy_price = pos["buy_price"]
+    buy_date  = pos.get("buy_date")
 
-    pnl = (price - buy_price) * shares
+    # Native-currency P&L (stock performance, currency-neutral)
+    pnl     = (price - buy_price) * shares
     pnl_pct = ((price - buy_price) / buy_price * 100) if buy_price else 0
+
+    # SEK P&L — use historical rate on buy date when available.
+    # If no buy_date (or fetch fails), fall back to current rate on both sides
+    # (old behaviour, shows stock gain only, hides currency drift).
     value_sek = price * shares * rate
-    invested_sek = buy_price * shares * rate
+    hist_rate = get_historical_sek_rate(buy_date, currency) if buy_date else None
+    if hist_rate:
+        invested_sek = buy_price * shares * hist_rate
+        buy_rate_sek = hist_rate          # expose for UI display
+    else:
+        invested_sek = buy_price * shares * rate
+        buy_rate_sek = None               # signals "no historical rate"
     pnl_sek = value_sek - invested_sek
 
     group = _classify_position(trust, pnl_pct)
@@ -100,6 +112,7 @@ def _build_position(pos: dict, rates: dict) -> dict:
         "invested_sek": round(invested_sek, 0),
         "pnl_sek": round(pnl_sek, 0),
         "sek_rate": rate,
+        "buy_rate_sek": buy_rate_sek,   # historical rate on buy date (None if no date)
         "market": pos.get("market", "US"),
         "currency": currency,
         "trust_score": trust["total_score"],

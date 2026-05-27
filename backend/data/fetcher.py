@@ -452,6 +452,69 @@ def get_exchange_rates() -> dict:
     return rates
 
 
+def get_historical_sek_rate(buy_date: str, currency: str) -> float | None:
+    """Return the SEK rate for a given currency on a specific past date.
+    Uses Frankfurter historical endpoint (ECB data, free, no key).
+    Result cached permanently — historical rates never change.
+
+    Returns None if the date is invalid, in the future, or the API fails.
+    Weekends/holidays: Frankfurter returns the closest prior business day.
+
+    Example: get_historical_sek_rate("2024-06-15", "USD") → 10.7423
+    """
+    if not buy_date or not currency:
+        return None
+    currency = currency.upper()
+    if currency == "SEK":
+        return 1.0
+
+    # Permanent cache — historical rates are immutable
+    cache_key = f"hist_rate:{buy_date}:{currency}"
+    cached = cache_get(cache_key, ttl=365 * 24 * 3600)  # 1 year TTL
+    if cached is not None:
+        return cached
+
+    try:
+        from datetime import date as _date
+        # Reject future dates
+        if buy_date > _date.today().isoformat():
+            return None
+
+        # Frankfurter returns rates relative to USD base
+        r = requests.get(
+            f"https://api.frankfurter.dev/v1/{buy_date}?from=USD&to=SEK,EUR,GBP,INR",
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return None
+
+        data = r.json().get("rates", {})
+        usd_to_sek = float(data.get("SEK", 0))
+        if usd_to_sek <= 0:
+            return None
+
+        if currency == "USD":
+            rate = usd_to_sek
+        elif currency == "EUR":
+            usd_to_eur = float(data.get("EUR", 0))
+            rate = usd_to_sek / usd_to_eur if usd_to_eur > 0 else None
+        elif currency == "GBP":
+            usd_to_gbp = float(data.get("GBP", 0))
+            rate = usd_to_sek / usd_to_gbp if usd_to_gbp > 0 else None
+        elif currency == "INR":
+            usd_to_inr = float(data.get("INR", 0))
+            rate = usd_to_sek / usd_to_inr if usd_to_inr > 0 else None
+        else:
+            rate = None
+
+        if rate:
+            rate = round(rate, 6)
+            cache_set(cache_key, rate, ttl=365 * 24 * 3600)
+        return rate
+    except Exception:
+        return None
+
+
 # ── PRICE DATA ────────────────────────────────────────────────────────────────
 
 def get_stock_price(ticker: str) -> dict:
