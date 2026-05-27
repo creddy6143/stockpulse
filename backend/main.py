@@ -15,7 +15,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
@@ -188,15 +188,15 @@ def market():
 
 class AddPositionRequest(BaseModel):
     ticker: str
-    shares: float
-    buy_price: float
+    shares: float = Field(..., gt=0)
+    buy_price: float = Field(..., gt=0)
     buy_date: Optional[str] = None
     notes: Optional[str] = None
 
 
 class UpdatePositionRequest(BaseModel):
-    shares: Optional[float] = None
-    buy_price: Optional[float] = None
+    shares: Optional[float] = Field(None, gt=0)
+    buy_price: Optional[float] = Field(None, gt=0)
     buy_date: Optional[str] = None
     notes: Optional[str] = None
 
