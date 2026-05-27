@@ -753,6 +753,13 @@ def _score_one_ticker(ticker: str) -> dict | None:
 _scan_lock = threading.Lock()
 _scan_running = False
 
+# Live price overlay for picks — updated in parallel on each /api/picks call.
+# Scores and fundamentals stay in the scan cache (hours old is fine).
+# Prices must be current — scan-time prices are misleading to users.
+_picks_live_prices: dict = {}   # {ticker: {price, change_pct}}
+_picks_live_ts: float = 0.0
+_PICKS_PRICE_TTL = 90           # seconds — refresh live prices at most every 90s
+
 
 def _run_picks_scan_background():
     """Full curated-universe scan — runs in a daemon thread, saves to DB when done."""
@@ -944,33 +951,75 @@ def picks():
     mains = [p for p in all_picks if not p.get("is_dip")]
     top_picks = mains[:100] + dips[:10]
 
-    # Freshen price + change_pct from the live price_cache (updated every time
-    # any endpoint touches that ticker).  The scan cache can be hours old, so
-    # AMD showing +4.8% from the scan while it's live at +7.87% is wrong.
-    # One bulk SQL query — no extra API calls.
-    all_tickers = [p["ticker"] for p in top_picks]
-    live_prices = db.get_cached_prices_bulk(all_tickers)
-    for p in top_picks:
-        live = live_prices.get(p["ticker"])
-        if live and live.get("price"):
-            p["price"] = live["price"]
-            p["change_pct"] = live["change_pct"] or 0
+    # ── LIVE PRICE OVERLAY ───────────────────────────────────────────────────
+    # ── LIVE PRICE OVERLAY ───────────────────────────────────────────────────
+    # The scan cache (scores, fundamentals) can be hours/days old — fine.
+    # But price and daily-change shown to the user must be current.
+    #
+    # Strategy: non-blocking background refresh.
+    #   • If _picks_live_prices is non-empty → return immediately using those
+    #     prices (from a previous refresh), then kick off a background refresh
+    #     if the TTL has expired.
+    #   • If _picks_live_prices is completely empty (first server start ever) →
+    #     do one blocking fetch so the very first load isn't all-zeros.
+    #     This is rare (only on cold start with no prior data).
+    #
+    # Either way, the endpoint returns in <50ms on repeat calls.
+    global _picks_live_prices, _picks_live_ts
+    now = _time.monotonic()
+    ttl_expired = (now - _picks_live_ts) > _PICKS_PRICE_TTL
 
-    # Apply same freshening to sector_picks
-    for sector_list in sector_picks.values():
-        for p in sector_list:
-            live = live_prices.get(p["ticker"])
+    def _refresh_live_prices(tickers):
+        """Fetch live prices for all pick tickers in parallel. Runs in background."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
+        new_prices: dict = {}
+        with ThreadPoolExecutor(max_workers=min(20, len(tickers))) as ex:
+            futs = {ex.submit(get_stock_price, t): t for t in tickers}
+            for fut in _asc(futs):
+                t = futs[fut]
+                try:
+                    pd = fut.result()
+                    if pd and pd.get("price"):
+                        new_prices[t] = {
+                            "price":      pd["price"],
+                            "change_pct": float(pd.get("change_pct") or 0),
+                        }
+                except Exception:
+                    pass
+        if new_prices:
+            global _picks_live_prices, _picks_live_ts
+            _picks_live_prices = new_prices
+            _picks_live_ts = _time.monotonic()
+
+    all_tickers = list({p["ticker"] for p in top_picks})
+
+    if not _picks_live_prices:
+        # Cold start: block once so the first response has real prices
+        _refresh_live_prices(all_tickers)
+    elif ttl_expired:
+        # TTL expired: return stale prices now, refresh in background
+        threading.Thread(target=_refresh_live_prices, args=(all_tickers,), daemon=True).start()
+
+    # Apply live prices (may still be scan-cache prices on the very first cold start
+    # if the blocking refresh above failed for every ticker — extremely rare)
+    def _apply_live(pick_list):
+        for p in pick_list:
+            live = _picks_live_prices.get(p["ticker"])
             if live and live.get("price"):
-                p["price"] = live["price"]
-                p["change_pct"] = live["change_pct"] or 0
+                p["price"]      = live["price"]
+                p["change_pct"] = live["change_pct"]
+
+    _apply_live(top_picks)
+    for sector_list in sector_picks.values():
+        _apply_live(sector_list)
 
     return {
-        "picks": top_picks,
-        "sector_picks": sector_picks,
-        "updated_at": cache.get("updated_at"),
-        "scan_status": cache.get("scan_status", "complete"),
+        "picks":           top_picks,
+        "sector_picks":    sector_picks,
+        "updated_at":      cache.get("updated_at"),
+        "scan_status":     cache.get("scan_status", "complete"),
         "tickers_scanned": cache.get("tickers_scanned", 0),
-        "tickers_ok": cache.get("tickers_ok", 0),
+        "tickers_ok":      cache.get("tickers_ok", 0),
     }
 
 
@@ -1318,14 +1367,13 @@ def strategy(user_id: str = Depends(get_current_user)):
     _mains = [p for p in _all if not p.get("is_dip")]
     cached_picks = _mains[:100] + _dips[:10]  # Same cap as /api/picks
 
-    # Freshen prices from live price_cache — scan cache can be hours old
-    _strat_tickers = [p["ticker"] for p in cached_picks]
-    _live_strat = db.get_cached_prices_bulk(_strat_tickers)
+    # Use the same live price overlay populated by /api/picks (90s TTL).
+    # If /api/picks was called recently _picks_live_prices is already warm.
     for pick in cached_picks:
-        _lv = _live_strat.get(pick["ticker"])
+        _lv = _picks_live_prices.get(pick["ticker"])
         if _lv and _lv.get("price"):
-            pick["price"] = _lv["price"]
-            pick["change_pct"] = _lv["change_pct"] or 0
+            pick["price"]      = _lv["price"]
+            pick["change_pct"] = _lv["change_pct"]
 
     smart_picks_strat = []
     for pick in cached_picks:
