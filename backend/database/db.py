@@ -68,23 +68,23 @@ def add_position(ticker, shares, buy_price, buy_date=None, notes=None, user_id="
     conn.close()
 
 
-def update_position(pos_id, shares=None, buy_price=None, notes=None, user_id=None):
+def update_position(pos_id, shares=None, buy_price=None, buy_date=None, notes=None, user_id=None):
     conn = get_connection()
+    updates = []
     if shares is not None:
-        if user_id is not None:
-            conn.execute("UPDATE portfolio SET shares=? WHERE id=? AND user_id=?", (shares, pos_id, user_id))
-        else:
-            conn.execute("UPDATE portfolio SET shares=? WHERE id=?", (shares, pos_id))
+        updates.append(("shares", shares))
     if buy_price is not None:
-        if user_id is not None:
-            conn.execute("UPDATE portfolio SET buy_price=? WHERE id=? AND user_id=?", (buy_price, pos_id, user_id))
-        else:
-            conn.execute("UPDATE portfolio SET buy_price=? WHERE id=?", (buy_price, pos_id))
+        updates.append(("buy_price", buy_price))
+    if buy_date is not None:
+        # Empty string means clear the date; otherwise store as-is
+        updates.append(("buy_date", buy_date if buy_date else None))
     if notes is not None:
+        updates.append(("notes", notes))
+    for col, val in updates:
         if user_id is not None:
-            conn.execute("UPDATE portfolio SET notes=? WHERE id=? AND user_id=?", (notes, pos_id, user_id))
+            conn.execute(f"UPDATE portfolio SET {col}=? WHERE id=? AND user_id=?", (val, pos_id, user_id))
         else:
-            conn.execute("UPDATE portfolio SET notes=? WHERE id=?", (notes, pos_id))
+            conn.execute(f"UPDATE portfolio SET {col}=? WHERE id=?", (val, pos_id))
     conn.commit()
     conn.close()
 

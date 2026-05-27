@@ -197,6 +197,7 @@ class AddPositionRequest(BaseModel):
 class UpdatePositionRequest(BaseModel):
     shares: Optional[float] = None
     buy_price: Optional[float] = None
+    buy_date: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -232,7 +233,7 @@ def add_portfolio(req: AddPositionRequest, user_id: str = Depends(get_current_us
 
 @app.put("/api/portfolio/{pos_id}")
 def update_portfolio(pos_id: int, req: UpdatePositionRequest, user_id: str = Depends(get_current_user)):
-    db.update_position(pos_id, req.shares, req.buy_price, req.notes, user_id=user_id)
+    db.update_position(pos_id, req.shares, req.buy_price, req.buy_date, req.notes, user_id=user_id)
     return {"status": "updated"}
 
 

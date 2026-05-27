@@ -91,6 +91,7 @@ def _build_position(pos: dict, rates: dict) -> dict:
         "name": pos.get("name") or price_data.get("name", ticker),
         "shares": shares,
         "buy_price": buy_price,
+        "buy_date": pos.get("buy_date"),
         "current_price": round(float(price), 4),
         "change_pct": round(float(price_data.get("change_pct", 0)), 2),
         "pnl": round(float(pnl), 2),

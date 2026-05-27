@@ -306,7 +306,7 @@ const mapPosition = (pos, earningsByTicker) => {
   const displayGrade = pos.display_grade || pos.grade;
   return {
     id: pos.id, ticker: pos.ticker, flag, price: pos.current_price, change: pos.change_pct,
-    name: fmp?.name || pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares,
+    name: fmp?.name || pos.name || pos.ticker, buy: pos.buy_price, shares: pos.shares, buy_date: pos.buy_date || "",
     rec, rcls,
     trust: displayTrust,        // null when suppressed → shows "?" in CompactRow
     grade: displayGrade,
@@ -1666,6 +1666,7 @@ function EditModal({pos, onClose, onSaved}) {
   const [mode, setMode] = useState("edit");           // "edit" | "add"
   const [shares, setShares]   = useState(String(pos.shares));
   const [price,  setPrice]    = useState(String(pos.buy));
+  const [buyDate,setBuyDate]  = useState(pos.buy_date || "");
   const [addSh,  setAddSh]    = useState("");         // add-more: new lot shares
   const [addPr,  setAddPr]    = useState("");         // add-more: new lot price
   const [saving, setSaving]   = useState(false);
@@ -1700,7 +1701,7 @@ function EditModal({pos, onClose, onSaved}) {
     }
     setSaving(true);
     try {
-      await updatePosition(pos.id, { shares: newShares, buy_price: newPrice });
+      await updatePosition(pos.id, { shares: newShares, buy_price: newPrice, buy_date: buyDate || null });
       onSaved();
       onClose();
     } catch {
@@ -1722,18 +1723,26 @@ function EditModal({pos, onClose, onSaved}) {
         </div>
 
         {mode==="edit" ? (
-          <div className="modal-row" style={{marginTop:14}}>
-            <div>
-              <div className="modal-label">Shares / Units</div>
-              <input className="modal-inp" type="number" value={shares}
-                onChange={e=>setShares(e.target.value)} placeholder={String(pos.shares)}/>
+          <>
+            <div className="modal-row" style={{marginTop:14}}>
+              <div>
+                <div className="modal-label">Shares / Units</div>
+                <input className="modal-inp" type="number" value={shares}
+                  onChange={e=>setShares(e.target.value)} placeholder={String(pos.shares)}/>
+              </div>
+              <div>
+                <div className="modal-label">Avg Buy Price</div>
+                <input className="modal-inp" type="number" value={price}
+                  onChange={e=>setPrice(e.target.value)} placeholder={String(pos.buy)}/>
+              </div>
             </div>
-            <div>
-              <div className="modal-label">Avg Buy Price</div>
-              <input className="modal-inp" type="number" value={price}
-                onChange={e=>setPrice(e.target.value)} placeholder={String(pos.buy)}/>
+            <div style={{marginTop:10}}>
+              <div className="modal-label">Buy Date <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",fontWeight:400}}>(optional — used for SEK return accuracy)</span></div>
+              <input className="modal-inp" type="date" value={buyDate}
+                onChange={e=>setBuyDate(e.target.value)}
+                style={{width:"100%",boxSizing:"border-box"}}/>
             </div>
-          </div>
+          </>
         ) : (
           <>
             <div style={{background:"var(--card2)",borderRadius:10,padding:"9px 12px",marginTop:14,marginBottom:10}}>
