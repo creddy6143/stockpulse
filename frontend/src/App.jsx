@@ -1375,11 +1375,13 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust, s.grade)}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Köpt <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
             {s.sek_rate > 0 && s.currency !== "SEK" && (
-              s.buy_rate_sek
+              s.buy_rate_sek && Math.abs(s.buy_rate_sek - s.sek_rate) > 0.05
                 ? <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
                     Bought <span style={{color:"var(--t2)",fontWeight:600}}>1 {s.currency} = {s.buy_rate_sek.toFixed(2)} kr</span>
                     {" · "}Today <span style={{color: s.sek_rate < s.buy_rate_sek ? "var(--rose)" : "var(--emerald)",fontWeight:600}}>{s.sek_rate.toFixed(2)} kr</span>
-                    {s.sek_rate < s.buy_rate_sek && <span style={{color:"var(--rose)"}}> ↓{((1 - s.sek_rate/s.buy_rate_sek)*100).toFixed(1)}%</span>}
+                    {" "}<span style={{color: s.sek_rate < s.buy_rate_sek ? "var(--rose)" : "var(--emerald)"}}>
+                      {s.sek_rate < s.buy_rate_sek ? "↓" : "↑"}{Math.abs((1 - s.sek_rate/s.buy_rate_sek)*100).toFixed(1)}%
+                    </span>
                   </span>
                 : <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>Rate <span style={{color:"var(--t2)",fontWeight:600}}>1 {s.currency} = {s.sek_rate.toFixed(2)} kr</span></span>
             )}

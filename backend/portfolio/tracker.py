@@ -89,10 +89,10 @@ def _build_position(pos: dict, rates: dict) -> dict:
     hist_rate = get_historical_sek_rate(buy_date, currency) if buy_date else None
     if hist_rate:
         invested_sek = buy_price * shares * hist_rate
-        buy_rate_sek = hist_rate          # expose for UI display
+        buy_rate_sek = hist_rate          # historical rate — shows depreciation
     else:
         invested_sek = buy_price * shares * rate
-        buy_rate_sek = None               # signals "no historical rate"
+        buy_rate_sek = rate               # no buy_date → treat as bought at today's rate
     pnl_sek = value_sek - invested_sek
 
     group = _classify_position(trust, pnl_pct)
