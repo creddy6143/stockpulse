@@ -212,8 +212,6 @@ def add_portfolio(req: AddPositionRequest, user_id: str = Depends(get_current_us
     ticker = req.ticker.upper()
     if db.count_portfolio(user_id) >= 100:
         raise HTTPException(status_code=429, detail="Free tier limit reached (100 stocks)")
-    if db.ticker_in_portfolio(ticker, user_id=user_id):
-        raise HTTPException(status_code=409, detail=f"{ticker} is already in your portfolio")
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
     # For tickers without exchange suffix, use price currency to infer market.

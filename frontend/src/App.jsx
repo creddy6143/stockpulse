@@ -326,6 +326,12 @@ const mapPosition = (pos, earningsByTicker) => {
     auto_disqualified: pos.auto_disqualified,
     situationLabel: pos.situation_label || null,
     situationNote: pos.situation_note || null,
+    lots: (pos.lots && pos.lots.length > 0)
+      ? pos.lots
+      : [{ id: pos.id, shares: pos.shares, buy_price: pos.buy_price,
+           buy_date: pos.buy_date || null, buy_rate_sek: pos.buy_rate_sek || null,
+           invested_sek: pos.invested_sek || 0, value_sek: pos.value_sek || 0,
+           pnl_sek: pos.pnl_sek || 0 }],
   };
 };
 
@@ -1273,7 +1279,7 @@ function FmpProfileCard({p}) {
 }
 
 // ── COMPACT TABLE ROW (portfolio) ────────────────────
-function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
+function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, onEditLot, onDeleteLot}) {
   const [open, setOpen] = useState(false);
   const [showScore, setShowScore] = useState(false);
   const c = tc(s.trust, s.grade);
@@ -1387,13 +1393,69 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert}) {
             )}
             {s.dataSource && !isDataUnavailable && <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)"}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
           </div>
+          {/* Lots section */}
+          {s.lots && s.lots.length > 0 && (
+            <div style={{marginBottom:8,marginTop:4}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".04em"}}>
+                  {s.lots.length === 1 ? "1 Lot" : `${s.lots.length} Lots`}
+                </span>
+                <button onClick={(e)=>{e.stopPropagation();onAddLot&&onAddLot(s);}}
+                  style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--indigo)",background:"rgba(91,114,248,.08)",
+                    border:"1px solid rgba(91,114,248,.2)",borderRadius:6,padding:"3px 8px",cursor:"pointer"}}>
+                  + Add Lot
+                </button>
+              </div>
+              {s.lots.map((lot,i)=>(
+                <div key={lot.id}
+                  style={{display:"flex",alignItems:"center",gap:6,padding:"5px 0",
+                    borderBottom: i < s.lots.length-1 ? "1px solid var(--t4)" : "none"}}>
+                  <span style={{flex:1,fontFamily:"var(--mono)",fontSize:10,color:"var(--t1)"}}>
+                    {lot.shares} sh @ {cu(s.ticker)}{lot.buy_price}
+                    {lot.buy_date && <span style={{color:"var(--t3)"}}> · {lot.buy_date}</span>}
+                  </span>
+                  <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,
+                    color:lot.pnl_sek>=0?"var(--emerald)":"var(--rose)"}}>
+                    {fmtSEK(lot.pnl_sek)}
+                  </span>
+                  {lot.buy_rate_sek && s.currency!=="SEK" &&
+                    <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
+                      {lot.buy_rate_sek.toFixed(2)}kr
+                    </span>}
+                  <button onClick={(e)=>{e.stopPropagation();onEditLot&&onEditLot(lot,s);}}
+                    style={{fontFamily:"var(--dm)",fontSize:10,padding:"2px 7px",borderRadius:5,
+                      border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",cursor:"pointer"}}>
+                    Edit
+                  </button>
+                  <button onClick={(e)=>{e.stopPropagation();onDeleteLot&&onDeleteLot(lot.id,s);}}
+                    style={{fontFamily:"var(--dm)",fontSize:10,padding:"2px 6px",borderRadius:5,
+                      border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",cursor:"pointer"}}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {s.lots.length > 1 && (
+                <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0 0",marginTop:2}}>
+                  <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>
+                    Total {s.shares} sh · Avg {cu(s.ticker)}{(+s.buy).toFixed(2)}
+                  </span>
+                  <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,
+                    color:s.pnl_sek>=0?"var(--emerald)":"var(--rose)"}}>
+                    {fmtSEK(s.pnl_sek)}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>onDetail&&onDetail(s)} style={{flex:2,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
             <button onClick={(e)=>{e.stopPropagation();onSetAlert&&onSetAlert(s.ticker,s.price,null,null);}} title="Set price alert" style={{flex:"0 0 36px",padding:"8px",borderRadius:8,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontSize:13,cursor:"pointer"}}>🔔</button>
-            <button onClick={()=>onEdit&&onEdit(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Edit</button>
+            {(!s.lots || s.lots.length <= 1) && (
+              <button onClick={()=>onEdit&&onEdit(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Edit</button>
+            )}
             {s.rec==="SELL"&&!isReview
               ?<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
-              :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>✕</button>
+              :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>{s.lots&&s.lots.length>1?`✕ All ${s.lots.length}`:"✕"}</button>
             }
           </div>
         </div>
@@ -1569,7 +1631,7 @@ function PivotSection({title, accentColor, slices}) {
         ? <div style={{padding:"12px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:"var(--t3)"}}>No stocks in this category</div>
         : slice.items.map(s=>slice.isWatch
             ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove} onSetAlert={slice.onSetAlert}/>
-            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} onEdit={slice.onEdit} onSetAlert={slice.onSetAlert}/>
+            :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} onEdit={slice.onEdit} onSetAlert={slice.onSetAlert} onAddLot={slice.onAddLot} onEditLot={slice.onEditLot} onDeleteLot={slice.onDeleteLot}/>
           )
       }
     </div>
@@ -1674,42 +1736,18 @@ function ConfirmDialog({message, confirmLabel, confirmColor, onConfirm, onCancel
 
 // ── EDIT POSITION MODAL ──────────────────────────────
 function EditModal({pos, onClose, onSaved}) {
-  const [mode, setMode] = useState("edit");           // "edit" | "add"
-  const [shares, setShares]   = useState(String(pos.shares));
-  const [price,  setPrice]    = useState(String(pos.buy));
-  const [buyDate,setBuyDate]  = useState(pos.buy_date || "");
-  const [addSh,  setAddSh]    = useState("");         // add-more: new lot shares
-  const [addPr,  setAddPr]    = useState("");         // add-more: new lot price
-  const [saving, setSaving]   = useState(false);
-  const [err,    setErr]      = useState("");
-
-  // Weighted average preview
-  const wavg = (() => {
-    const existSh = +pos.shares;
-    const existPr = +pos.buy;
-    const newSh   = +addSh;
-    const newPr   = +(addPr.toString().replace(",","."));
-    if (!newSh || newSh <= 0 || !newPr || newPr <= 0) return null;
-    const total   = existSh + newSh;
-    const avg     = (existSh * existPr + newSh * newPr) / total;
-    return { total, avg: avg.toFixed(4) };
-  })();
+  const [shares, setShares]  = useState(String(pos.shares));
+  const [price,  setPrice]   = useState(String(pos.buy));
+  const [buyDate,setBuyDate] = useState(pos.buy_date || "");
+  const [saving, setSaving]  = useState(false);
+  const [err,    setErr]     = useState("");
 
   const submit = async () => {
     setErr("");
-    let newShares, newPrice;
-    if (mode === "edit") {
-      newShares = +shares;
-      newPrice  = +(price.toString().replace(",","."));
-      if (!newShares || newShares <= 0) return setErr("Enter a valid number of shares.");
-      if (!newPrice  || newPrice  <= 0) return setErr("Enter a valid buy price.");
-    } else {
-      if (!addSh || +addSh <= 0) return setErr("Enter the new lot size.");
-      if (!addPr || +(addPr.toString().replace(",",".")) <= 0) return setErr("Enter the new lot price.");
-      if (!wavg) return setErr("Check the lot details.");
-      newShares = wavg.total;
-      newPrice  = +wavg.avg;
-    }
+    const newShares = +shares;
+    const newPrice  = +(price.toString().replace(",","."));
+    if (!newShares || newShares <= 0) return setErr("Enter a valid number of shares.");
+    if (!newPrice  || newPrice  <= 0) return setErr("Enter a valid buy price.");
     setSaving(true);
     try {
       await updatePosition(pos.id, { shares: newShares, buy_price: newPrice, buy_date: buyDate || null });
@@ -1727,66 +1765,90 @@ function EditModal({pos, onClose, onSaved}) {
         <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 16px"}}/>
         <div className="modal-title">{pos.ticker}</div>
         <div className="modal-sub">{pos.name}</div>
-
-        <div className="modal-seg" style={{marginTop:12}}>
-          <button className={`modal-seg-btn${mode==="edit"?" on":""}`} onClick={()=>setMode("edit")}>✏️ Edit</button>
-          <button className={`modal-seg-btn${mode==="add"?" on":""}`} onClick={()=>setMode("add")}>➕ Add More Shares</button>
+        <div className="modal-row" style={{marginTop:14}}>
+          <div>
+            <div className="modal-label">Shares / Units</div>
+            <input className="modal-inp" type="number" value={shares}
+              onChange={e=>setShares(e.target.value)} placeholder={String(pos.shares)}/>
+          </div>
+          <div>
+            <div className="modal-label">Buy Price ({cu(pos.ticker)})</div>
+            <input className="modal-inp" type="number" value={price}
+              onChange={e=>setPrice(e.target.value)} placeholder={String(pos.buy)}/>
+          </div>
         </div>
-
-        {mode==="edit" ? (
-          <>
-            <div className="modal-row" style={{marginTop:14}}>
-              <div>
-                <div className="modal-label">Shares / Units</div>
-                <input className="modal-inp" type="number" value={shares}
-                  onChange={e=>setShares(e.target.value)} placeholder={String(pos.shares)}/>
-              </div>
-              <div>
-                <div className="modal-label">Avg Buy Price</div>
-                <input className="modal-inp" type="number" value={price}
-                  onChange={e=>setPrice(e.target.value)} placeholder={String(pos.buy)}/>
-              </div>
-            </div>
-            <div style={{marginTop:10}}>
-              <div className="modal-label">Buy Date <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",fontWeight:400}}>(optional — used for SEK return accuracy)</span></div>
-              <input className="modal-inp" type="date" value={buyDate}
-                onChange={e=>setBuyDate(e.target.value)}
-                style={{width:"100%",boxSizing:"border-box"}}/>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{background:"var(--card2)",borderRadius:10,padding:"9px 12px",marginTop:14,marginBottom:10}}>
-              <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginBottom:3}}>Current position</div>
-              <div style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--t1)",fontWeight:600}}>
-                {pos.shares} shares @ {pos.buy}
-              </div>
-            </div>
-            <div className="modal-row">
-              <div>
-                <div className="modal-label">New Lot — Shares</div>
-                <input className="modal-inp" type="number" value={addSh}
-                  onChange={e=>setAddSh(e.target.value)} placeholder="e.g. 10"/>
-              </div>
-              <div>
-                <div className="modal-label">New Lot — Price</div>
-                <input className="modal-inp" type="number" value={addPr}
-                  onChange={e=>setAddPr(e.target.value)} placeholder="e.g. 220.00"/>
-              </div>
-            </div>
-            {wavg && (
-              <div style={{background:"var(--emerald2)",borderRadius:8,padding:"7px 10px",marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--emerald)",fontWeight:600}}>
-                  New avg: {wavg.avg} × {wavg.total} shares
-                </span>
-              </div>
-            )}
-          </>
-        )}
-
+        <div style={{marginTop:10}}>
+          <div className="modal-label">Buy Date <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",fontWeight:400}}>(optional — used for SEK return accuracy)</span></div>
+          <input className="modal-inp" type="date" value={buyDate}
+            onChange={e=>setBuyDate(e.target.value)}
+            style={{width:"100%",boxSizing:"border-box"}}/>
+        </div>
         {err && <div className="modal-err">{err}</div>}
         <button className="modal-submit" onClick={submit} disabled={saving}>
-          {saving ? "Saving…" : mode==="edit" ? "Save Changes" : `Confirm — ${wavg?.total||""} shares @ avg ${wavg?.avg||""}`}
+          {saving ? "Saving…" : "Save Changes"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+// ── ADD LOT MODAL ────────────────────────────────────
+function AddLotModal({ticker, name, onClose, onAdded}) {
+  const [shares,  setShares]  = useState("");
+  const [price,   setPrice]   = useState("");
+  const [buyDate, setBuyDate] = useState("");
+  const [saving,  setSaving]  = useState(false);
+  const [err,     setErr]     = useState("");
+
+  const submit = async () => {
+    const sh = +shares;
+    const pr = +(price.toString().replace(",","."));
+    if (!sh || sh <= 0) return setErr("Enter a valid number of shares.");
+    if (!pr || pr <= 0) return setErr("Enter a valid buy price.");
+    setSaving(true);
+    try {
+      await addPosition(ticker, sh, pr, buyDate || null, null);
+      onAdded();
+      onClose();
+    } catch { setErr("Failed to add lot. Please try again."); }
+    setSaving(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 16px"}}/>
+        <div className="modal-title">Add Lot — {ticker}</div>
+        <div className="modal-sub">{name}</div>
+        <div className="modal-row" style={{marginTop:14}}>
+          <div style={{flex:1}}>
+            <div className="modal-label">Shares</div>
+            <input className="modal-inp" type="number" min="0.0001" step="any"
+              placeholder="e.g. 10" value={shares}
+              onChange={e=>{ setShares(e.target.value); setErr(""); }}/>
+          </div>
+          <div style={{flex:1}}>
+            <div className="modal-label">Buy Price ({cu(ticker)})</div>
+            <input className="modal-inp" type="number" min="0.0001" step="any"
+              placeholder="e.g. 210.00" value={price}
+              onChange={e=>{ setPrice(e.target.value); setErr(""); }}/>
+          </div>
+        </div>
+        <div style={{marginTop:10}}>
+          <div className="modal-label">
+            Buy Date
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",fontWeight:400}}>
+              {" "}(optional — used for SEK return accuracy)
+            </span>
+          </div>
+          <input className="modal-inp" type="date" value={buyDate}
+            onChange={e=>setBuyDate(e.target.value)}
+            style={{width:"100%",boxSizing:"border-box"}}/>
+        </div>
+        {err && <div className="modal-err">{err}</div>}
+        <button className="modal-submit" onClick={submit} disabled={saving}>
+          {saving ? "Adding…" : "Add Lot"}
         </button>
       </div>
     </div>
@@ -1869,10 +1931,8 @@ function AddModal({onClose, onAdded}) {
       onClose();
     } catch(e) {
       const msg = e.message || "";
-      if (msg.includes("409")) {
-        setErr(type === "portfolio"
-          ? `${t} is already in your portfolio.`
-          : `${t} is already on your watchlist.`);
+      if (msg.includes("409") && type === "watchlist") {
+        setErr(`${t} is already on your watchlist.`);
       } else {
         setErr("Failed to add. Check the ticker and try again.");
       }
@@ -1954,16 +2014,28 @@ function AddModal({onClose, onAdded}) {
 function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail, onAdd, onSetAlert}) {
   const [f, setF] = useState("All");
   const [showAdd, setShowAdd] = useState(false);
+  const [showAddLot, setShowAddLot] = useState(null);  // {ticker, name} | null
   const [confirm, setConfirm] = useState(null);   // {message, onConfirm} or null
   const [editPos, setEditPos]  = useState(null);   // position object to edit, or null
   const U=urgent||[], W=watch||[], G=good||[], WR=wlReady||[], WW=wlWatch||[], WA=wlAvoid||[];
 
   const handleRemove = (s) => {
+    const lotCount = s.lots ? s.lots.length : 1;
+    const msg = lotCount > 1
+      ? `Remove all ${lotCount} lots of ${s.ticker} from your portfolio?`
+      : `Remove ${s.ticker} from your portfolio?`;
     setConfirm({
-      message: `Remove ${s.ticker} from your portfolio?`,
+      message: msg,
       onConfirm: async () => {
         setConfirm(null);
-        try { await deletePosition(s.id); onAdd && onAdd(); } catch {}
+        try {
+          if (s.lots && s.lots.length > 1) {
+            await Promise.all(s.lots.map(lot => deletePosition(lot.id)));
+          } else {
+            await deletePosition(s.id);
+          }
+          onAdd && onAdd();
+        } catch {}
       },
     });
   };
@@ -1977,15 +2049,34 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
     });
   };
   const handleEdit = (s) => setEditPos(s);
+  const handleEditLot = (lot, stock) => {
+    setEditPos({
+      id:       lot.id,
+      shares:   lot.shares,
+      buy:      lot.buy_price,
+      buy_date: lot.buy_date || "",
+      ticker:   stock.ticker,
+      name:     stock.name,
+    });
+  };
+  const handleDeleteLot = (lotId, stock) => {
+    setConfirm({
+      message: `Remove this lot of ${stock.ticker}?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        try { await deletePosition(lotId); onAdd && onAdd(); } catch {}
+      },
+    });
+  };
 
   const byC = arr => f==="🇺🇸 US"?arr.filter(s=>s.flag==="🇺🇸"):f==="🇪🇺 Europe"?arr.filter(s=>s.flag==="🇪🇺"):f==="🇮🇳 India"?arr.filter(s=>s.flag==="🇮🇳"):arr;
   const fU=byC(U), fW=byC(W), fG=byC(G);
   const fWR=byC(WR), fWW=byC(WW), fWA=byC(WA);
 
   const myStocksSlices = [
-    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert},
-    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert},
-    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert},
+    {label:"Urgent",  color:"var(--rose)",    items:fU, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert, onAddLot:s=>setShowAddLot({ticker:s.ticker,name:s.name}), onEditLot:handleEditLot, onDeleteLot:handleDeleteLot},
+    {label:"Monitor", color:"var(--amber)",   items:fW, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert, onAddLot:s=>setShowAddLot({ticker:s.ticker,name:s.name}), onEditLot:handleEditLot, onDeleteLot:handleDeleteLot},
+    {label:"Stable",  color:"var(--emerald)", items:fG, onDetail, onRemove:handleRemove, onEdit:handleEdit, onSetAlert, onAddLot:s=>setShowAddLot({ticker:s.ticker,name:s.name}), onEditLot:handleEditLot, onDeleteLot:handleDeleteLot},
   ];
   const watchlistSlices = [
     {label:"Ready",   color:"var(--emerald)", items:fWR, isWatch:true, onRemove:handleRemoveWL, onSetAlert},
@@ -2007,6 +2098,14 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
           pos={editPos}
           onClose={()=>setEditPos(null)}
           onSaved={()=>{ setEditPos(null); onAdd && onAdd(); }}
+        />
+      )}
+      {showAddLot && (
+        <AddLotModal
+          ticker={showAddLot.ticker}
+          name={showAddLot.name}
+          onClose={()=>setShowAddLot(null)}
+          onAdded={()=>{ setShowAddLot(null); onAdd && onAdd(); }}
         />
       )}
       <div className="search-wrap">

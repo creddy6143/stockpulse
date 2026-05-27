@@ -1,4 +1,5 @@
 """Portfolio P&L and positions management — all values in native currency + SEK."""
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import db as _db
 from database.db import get_portfolio, get_watchlist
@@ -144,6 +145,96 @@ def _build_position(pos: dict, rates: dict) -> dict:
     }
 
 
+def _build_position_group(lots: list, rates: dict) -> dict:
+    """Accept all DB rows for one ticker; return a single aggregated position dict.
+    For a single lot it is identical to _build_position but adds a `lots` key.
+    For multiple lots it recalculates all financial fields using per-lot historical rates.
+    """
+    # Fetch price + trust once (same ticker for all lots)
+    base = _build_position(lots[0], rates)
+
+    if len(lots) == 1:
+        base["lots"] = [{
+            "id":           lots[0]["id"],
+            "shares":       lots[0]["shares"],
+            "buy_price":    lots[0]["buy_price"],
+            "buy_date":     lots[0].get("buy_date"),
+            "buy_rate_sek": base.get("buy_rate_sek"),
+            "invested_sek": base.get("invested_sek", 0),
+            "value_sek":    base.get("value_sek", 0),
+            "pnl_sek":      base.get("pnl_sek", 0),
+        }]
+        return base
+
+    # Multi-lot: recalculate aggregated financials
+    currency = base["currency"]
+    rate     = base["sek_rate"]   # today's SEK rate (already in base)
+    price    = base["current_price"]
+
+    total_shares       = 0.0
+    total_value_sek    = 0.0
+    total_invested_sek = 0.0
+    total_pnl_native   = 0.0
+    weighted_buy_numer = 0.0
+    lot_details        = []
+
+    for lot in lots:
+        sh = lot["shares"]
+        bp = lot["buy_price"]
+        bd = lot.get("buy_date")
+        hist = get_historical_sek_rate(bd, currency) if bd else None
+        lot_rate = hist if hist else rate
+
+        lot_val      = price * sh * rate
+        lot_invested = bp * sh * lot_rate
+        lot_pnl_sek  = lot_val - lot_invested
+
+        total_shares       += sh
+        total_value_sek    += lot_val
+        total_invested_sek += lot_invested
+        total_pnl_native   += (price - bp) * sh
+        weighted_buy_numer += bp * sh
+
+        lot_details.append({
+            "id":           lot["id"],
+            "shares":       sh,
+            "buy_price":    bp,
+            "buy_date":     bd,
+            "buy_rate_sek": round(lot_rate, 6),
+            "invested_sek": round(lot_invested, 0),
+            "value_sek":    round(lot_val, 0),
+            "pnl_sek":      round(lot_pnl_sek, 0),
+        })
+
+    wavg_buy  = weighted_buy_numer / total_shares if total_shares else 0
+    pnl_pct   = ((price - wavg_buy) / wavg_buy * 100) if wavg_buy else 0
+    total_pnl_sek = total_value_sek - total_invested_sek
+    wavg_rate = (total_invested_sek / (wavg_buy * total_shares)
+                 if wavg_buy * total_shares > 0 else rate)
+
+    # Re-classify based on aggregated P&L using the trust dict already in base
+    trust_dict = {
+        "total_score":      base["trust_score"],
+        "display_score":    base["display_score"],
+        "auto_disqualified": base["auto_disqualified"],
+        "grade":            base["grade"],
+    }
+    base["group"] = _classify_position(trust_dict, pnl_pct)
+
+    base.update({
+        "shares":       total_shares,
+        "buy_price":    round(wavg_buy, 4),
+        "pnl":          round(total_pnl_native, 2),
+        "pnl_pct":      round(pnl_pct, 2),
+        "value_sek":    round(total_value_sek, 0),
+        "invested_sek": round(total_invested_sek, 0),
+        "pnl_sek":      round(total_pnl_sek, 0),
+        "buy_rate_sek": round(wavg_rate, 6),
+        "lots":         lot_details,
+    })
+    return base
+
+
 def _fire_price_alerts(ticker: str, current_price: float,
                        trust_score, auto_disq: bool) -> None:
     """Check price alerts and generate in-app notifications if triggered.
@@ -172,11 +263,17 @@ def get_portfolio_with_pnl(user_id=None) -> dict:
 
     rates = get_exchange_rates()
 
-    # Parallel fetch — all stocks at once instead of one-by-one
-    workers = min(20, len(positions))
+    # Group DB rows by ticker so multi-lot positions are aggregated
+    ticker_lots: dict = defaultdict(list)
+    for pos in positions:
+        ticker_lots[pos["ticker"]].append(pos)
+
+    grouped = list(ticker_lots.values())
+    workers = min(20, len(grouped))
     result = []
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_build_position, pos, rates): pos for pos in positions}
+        futures = {ex.submit(_build_position_group, lots, rates): lots
+                   for lots in grouped}
         for future in as_completed(futures):
             try:
                 result.append(future.result())
