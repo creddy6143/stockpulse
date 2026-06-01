@@ -210,20 +210,20 @@ def evaluate_dip_candidate(
                       f"Today {chg_pct:+.1f}%, week {h1w:+.1f}%",
                       "Down today + week < -1%"))
 
-    # F6 — Cumulative drop between -3% and -15%
+    # F6 — Cumulative drop between -2% and -18%
     cumulative = h1w   # 1-week return as proxy for cumulative pullback
-    if cumulative < -15.0:
-        filters.append(_f(6, "Cumulative drop -3% to -15%", 2, "FAIL",
+    if cumulative < -18.0:
+        filters.append(_f(6, "Cumulative drop -2% to -18%", 2, "FAIL",
                           f"{cumulative:.1f}% (1W)",
-                          "-3% to -15%", "Drop too severe — falling knife risk"))
+                          "-2% to -18%", "Drop too severe — falling knife risk"))
         return None
-    if cumulative > -3.0:
-        filters.append(_f(6, "Cumulative drop -3% to -15%", 2, "FAIL",
+    if cumulative > -2.0:
+        filters.append(_f(6, "Cumulative drop -2% to -18%", 2, "FAIL",
                           f"{cumulative:.1f}% (1W)",
-                          "-3% to -15%", "Drop too small — not a meaningful pullback"))
+                          "-2% to -18%", "Drop too small — not a meaningful pullback"))
         return None
-    filters.append(_f(6, "Cumulative drop -3% to -15%", 2, "PASS",
-                      f"{cumulative:.1f}% (1W)", "-3% to -15%"))
+    filters.append(_f(6, "Cumulative drop -2% to -18%", 2, "PASS",
+                      f"{cumulative:.1f}% (1W)", "-2% to -18%"))
 
     # F7 — Still above 200-day MA (long-term uptrend intact)
     if ma200 > 0 and price > 0:
@@ -240,34 +240,34 @@ def evaluate_dip_candidate(
         filters.append(_f(7, "Price above 200-day MA (uptrend intact)", 2, "UNKNOWN",
                           "MA data unavailable", "Price > MA200"))
 
-    # F8 — Within 10% of 50-day MA (pulling back toward support)
+    # F8 — Within 15% of 50-day MA (pulling back toward support)
     if ma50 > 0 and price > 0:
         dist_from_50 = abs(price - ma50) / ma50 * 100
-        if dist_from_50 > 10.0:
-            filters.append(_f(8, "Within 10% of 50-day MA (at support)", 2, "FAIL",
+        if dist_from_50 > 15.0:
+            filters.append(_f(8, "Within 15% of 50-day MA (at support)", 2, "FAIL",
                               f"{dist_from_50:.1f}% from MA50 ${ma50:.2f}",
-                              "≤ 10% away",
+                              "≤ 15% away",
                               "Too far from 50d MA — not a controlled pullback"))
             return None
-        filters.append(_f(8, "Within 10% of 50-day MA (at support)", 2, "PASS",
-                          f"{dist_from_50:.1f}% from MA50 ${ma50:.2f}", "≤ 10% away"))
+        filters.append(_f(8, "Within 15% of 50-day MA (at support)", 2, "PASS",
+                          f"{dist_from_50:.1f}% from MA50 ${ma50:.2f}", "≤ 15% away"))
     else:
-        filters.append(_f(8, "Within 10% of 50-day MA (at support)", 2, "UNKNOWN",
-                          "MA50 data unavailable", "≤ 10% away"))
+        filters.append(_f(8, "Within 15% of 50-day MA (at support)", 2, "UNKNOWN",
+                          "MA50 data unavailable", "≤ 15% away"))
 
-    # F9 — RSI 30–50 (oversold sweet spot)
+    # F9 — RSI 28–58 (cooling off sweet spot)
     if rsi is not None:
-        if not (30.0 <= rsi <= 55.0):   # 55 vs 50: slight tolerance for weekly RSI
-            filters.append(_f(9, "RSI between 30 and 50 (oversold sweet spot)", 2, "FAIL",
+        if not (28.0 <= rsi <= 58.0):
+            filters.append(_f(9, "RSI between 28 and 58 (cooling off sweet spot)", 2, "FAIL",
                               f"RSI {rsi:.1f}",
-                              "30–50",
-                              "Overbought" if rsi > 55 else "Extremely oversold"))
+                              "28–58",
+                              "Overbought" if rsi > 58 else "Extremely oversold"))
             return None
-        filters.append(_f(9, "RSI between 30 and 50 (oversold sweet spot)", 2, "PASS",
-                          f"RSI {rsi:.1f}", "30–55"))
+        filters.append(_f(9, "RSI between 28 and 58 (cooling off sweet spot)", 2, "PASS",
+                          f"RSI {rsi:.1f}", "28–58"))
     else:
-        filters.append(_f(9, "RSI between 30 and 50 (oversold sweet spot)", 2, "UNKNOWN",
-                          "Insufficient price history for RSI", "30–50"))
+        filters.append(_f(9, "RSI between 28 and 58 (cooling off sweet spot)", 2, "UNKNOWN",
+                          "Insufficient price history for RSI", "28–58"))
 
     # F10 — Not down >25% from 52-week high (healthy dip, not a crash)
     if w52h > 0 and price > 0:
@@ -448,14 +448,14 @@ def evaluate_dip_candidate(
 
     # ── TIER 6 — SANITY CHECKS ────────────────────────────────────────────────
 
-    # F24 — Up ≥ 5% over trailing 6 months (mid-term uptrend)
-    if h6m < 5.0:
-        filters.append(_f(24, "Up ≥ 5% over trailing 6 months", 6, "FAIL",
-                          f"{h6m:+.1f}%", "≥ +5%",
-                          "Mid-term trend is negative"))
+    # F24 — Not down more than 2% over trailing 6 months (no sustained decline)
+    if h6m < -2.0:
+        filters.append(_f(24, "Not down more than 2% over trailing 6 months", 6, "FAIL",
+                          f"{h6m:+.1f}%", "≥ -2%",
+                          "Mid-term trend is declining"))
         return None
-    filters.append(_f(24, "Up ≥ 5% over trailing 6 months", 6, "PASS",
-                      f"{h6m:+.1f}%", "≥ +5%"))
+    filters.append(_f(24, "Not down more than 2% over trailing 6 months", 6, "PASS",
+                      f"{h6m:+.1f}%", "≥ -2%"))
 
     # F25 — At least flat over trailing 12 months (long-term trend intact)
     if h1y < -5.0:   # slight tolerance: allow -5% (some year-ago peaks were ATHs)

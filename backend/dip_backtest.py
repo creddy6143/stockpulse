@@ -250,10 +250,10 @@ def run_filters(ticker, closes, vix, fund):
     # ── T2: Dip Quality ───────────────────────────────────────────────────────
     if chg_pct >= -0.3:                return False, "F5a_not_down_today"
     if h1w >= -1.0:                    return False, "F5b_multiday"
-    if h1w < -15.0 or h1w > -3.0:     return False, "F6_drop_range"
+    if h1w < -18.0 or h1w > -2.0:     return False, "F6_drop_range"
     if ma200 and price <= ma200:       return False, "F7_ma200"
-    if ma50 and abs(price-ma50)/ma50*100 > 10.0: return False, "F8_ma50dist"
-    if rsi is not None and not (30 <= rsi <= 55): return False, "F9_rsi"
+    if ma50 and abs(price-ma50)/ma50*100 > 15.0: return False, "F8_ma50dist"
+    if rsi is not None and not (28 <= rsi <= 58): return False, "F9_rsi"
     if w52h > 0 and (price-w52h)/w52h*100 < -25: return False, "F10_52whigh"
 
     # ── T3: Conviction ────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ def run_filters(ticker, closes, vix, fund):
     if si_pct >= 15.0:                 return False, "F23_shortint"
 
     # ── T6: Sanity Checks ────────────────────────────────────────────────────
-    if h6m < 5.0:                      return False, "F24_6m"
+    if h6m < -2.0:                     return False, "F24_6m"
     if h1y < -5.0:                     return False, "F25_1y"
     sp_pe = SECTOR_PE.get(sector, 22.0)
     if pe and pe > 0 and pe > sp_pe*1.5: return False, "F26_pe"
@@ -343,10 +343,10 @@ FILTER_LABELS = {
     "F4_marketcap":       "F4: Market cap ≥ $1B",
     "F5a_not_down_today": "F5a: Down today (> −0.3%)",
     "F5b_multiday":       "F5b: Multi-day pullback (week < −1%)",
-    "F6_drop_range":      "F6: Cumulative drop −3% to −15%",
+    "F6_drop_range":      "F6: Cumulative drop −2% to −18%",
     "F7_ma200":           "F7: Price above 200-day MA",
-    "F8_ma50dist":        "F8: Within 10% of 50-day MA",
-    "F9_rsi":             "F9: RSI between 30 and 55",
+    "F8_ma50dist":        "F8: Within 15% of 50-day MA",
+    "F9_rsi":             "F9: RSI between 28 and 58",
     "F10_52whigh":        "F10: Not >25% below 52W high",
     "F11_conviction":     "F11: Analyst conviction ≥ 0.60",
     "F13_coverage":       "F13: At least 8 analysts",
@@ -355,7 +355,7 @@ FILTER_LABELS = {
     "F20_vix":            "F20: VIX < 30",
     "F22_deathcross":     "F22: No death cross (MA50 ≥ MA200×0.97)",
     "F23_shortint":       "F23: Short interest < 15%",
-    "F24_6m":             "F24: 6M return ≥ +5%",
+    "F24_6m":             "F24: 6M return ≥ -2%",
     "F25_1y":             "F25: 1Y return ≥ −5%",
     "F26_pe":             "F26: P/E ≤ 1.5× sector median",
     "F27_de":             "F27: Debt-to-equity < 2.0",

@@ -1,6 +1,6 @@
 # Dip Filter Calibration Report
 
-**Generated:** 2026-06-01 19:36:01
+**Generated:** 2026-06-01 20:09:24
 **Production universe:** 120 stocks (smart_picks_cache)
 **F1-eligible candidates:** 41 stocks (trust ≥ 70, not auto-disqualified)
 
@@ -29,17 +29,18 @@
 | 2026-05-30 | Yesterday (~1 td ago) | **0** | 0.0 | 15.3 | — |
 | 2026-05-25 | 5 td ago (~2026-05-23) | **0** | 0.4 | 16.6 | — |
 | 2026-05-18 | 10 td ago (~2026-05-16) | **0** | 1.4 | 17.8 | — |
-| 2026-05-03 | 20 td ago (~2026-05-02) | **1** | 0.0 | 17.0 | NEM |
-| 2026-03-09 | 60 td ago (~2026-03-09) | **0** | 0.8 | 25.5 | — |
-| 2025-12-15 | 120 td ago (~2025-12-15) | **0** | 0.2 | 16.5 | — |
-| 2025-06-16 | 250 td ago (~2025-06-06) | **0** | 0.0 | 19.1 | — |
-| — | **Average** | **0.1** | — | — | — |
+| 2026-05-03 | 20 td ago (~2026-05-02) | **2** | 0.2 | 17.0 | APH, NEM |
+| 2026-03-09 | 60 td ago (~2026-03-09) | **0** | 1.0 | 25.5 | — |
+| 2025-12-15 | 120 td ago (~2025-12-15) | **0** | 0.4 | 16.5 | — |
+| 2025-06-16 | 250 td ago (~2025-06-06) | **0** | 0.2 | 19.1 | — |
+| — | **Average** | **0.2** | — | — | — |
 
 
 ### Stocks qualifying most frequently
 
 | Ticker | Sector | N dates (out of 8) |
 |--------|--------|--------------------|
+| **APH** | Information Technology | 1/8 |
 | **NEM** | Materials | 1/8 |
 
 ---
@@ -48,7 +49,7 @@
 
 ### 🔴 FILTERS TOO TIGHT
 
-Average **0.1 qualifiers/day** is below the minimum useful threshold (3). The screener fires too rarely to be a product feature. Users will see 0 stocks on most trading days regardless of market conditions.
+Average **0.2 qualifiers/day** is below the minimum useful threshold (3). The screener fires too rarely to be a product feature. Users will see 0 stocks on most trading days regardless of market conditions.
 
 Today's 0 is explained by filters being too tight, not by market conditions.
 
@@ -63,19 +64,19 @@ Starting candidates: **41** (all with trust ≥ 70)
 |--------|-----------|-----------|-----------|
 | F5a: Down today (> −0.3%) | 22 | 54% | 19 |
 | F5b: Multi-day pullback (week < −1%) | 3 | 7% | 16 |
-| F6: Cumulative drop −3% to −15% | 3 | 7% | 13 |
-| F8: Within 10% of 50-day MA | 8 | 20% | 5 |
-| F11: Analyst conviction ≥ 0.60 | 2 | 5% | 3 |
-| F19: Drop > 1.5% | 1 | 2% | 2 |
+| F6: Cumulative drop −2% to −18% | 2 | 5% | 14 |
+| F8: Within 15% of 50-day MA | 5 | 12% | 9 |
+| F11: Analyst conviction ≥ 0.60 | 4 | 10% | 5 |
+| F19: Drop > 1.5% | 3 | 7% | 2 |
 | **QUALIFIED** | — | — | **0** |
 
 ### Attrition by tier:
 
 | Tier | Stocks eliminated | % of candidates |
 |------|-------------------|-----------------|
-| Tier 2 — Dip Quality | 36 | 88% |
-| Tier 3 — Conviction | 2 | 5% |
-| Tier 4 — Macro & News | 1 | 2% |
+| Tier 2 — Dip Quality | 32 | 78% |
+| Tier 3 — Conviction | 4 | 10% |
+| Tier 4 — Macro & News | 3 | 7% |
 
 ---
 
@@ -85,25 +86,25 @@ Starting candidates: **41** (all with trust ≥ 70)
 
 **Expected behavior.** On any given day, ~80% of large-cap stocks are flat or up. A dip screener requires the stock to be down today. This is a structural pre-condition, not a miscalibrated threshold.
 
-### F8: Within 10% of 50-day MA — eliminated 8 stocks (20%)
+### F8: Within 15% of 50-day MA — eliminated 5 stocks (12%)
 
 **Controlled pullback check.** More than 10% from MA50 means the stock has overshot normal support. Either in freefall (risky) or recovering (MA50 irrelevant). If this blocks many valid candidates, consider widening to 15%.
 
-### F6: Cumulative drop −3% to −15% — eliminated 3 stocks (7%)
+### F11: Analyst conviction ≥ 0.60 — eliminated 4 stocks (10%)
 
-**Core precision filter.** The −3% to −15% range targets stocks in a controlled pullback. Too shallow (>−3%): noise. Too deep (<−15%): falling knife risk. If this eliminates too many legitimate dips, consider widening to −2% / −18%.
+**Analyst signal.** Conviction ratio <0.60 means analysts are bearish or mixed. A quality dip should have at least 60% buy-weighted analyst sentiment. If this blocks many stocks, check analyst data coverage for those tickers.
 
 ### F5b: Multi-day pullback (week < −1%) — eliminated 3 stocks (7%)
 
 **Expected behavior.** This eliminates single-day spikes that reverse immediately. A genuine pullback is multi-day. The weekly return of <−1% is the right criterion.
 
-### F11: Analyst conviction ≥ 0.60 — eliminated 2 stocks (5%)
-
-**Analyst signal.** Conviction ratio <0.60 means analysts are bearish or mixed. A quality dip should have at least 60% buy-weighted analyst sentiment. If this blocks many stocks, check analyst data coverage for those tickers.
-
-### F19: Drop > 1.5% — eliminated 1 stocks (2%)
+### F19: Drop > 1.5% — eliminated 3 stocks (7%)
 
 **Ex-dividend artifact filter.** A drop of <1.5% could be just the dividend going ex-, not a real pullback. If this blocks legitimate small daily drops, consider lowering to 0.8%.
+
+### F6: Cumulative drop −2% to −18% — eliminated 2 stocks (5%)
+
+**Core precision filter.** The −3% to −15% range targets stocks in a controlled pullback. Too shallow (>−3%): noise. Too deep (<−15%): falling knife risk. If this eliminates too many legitimate dips, consider widening to −2% / −18%.
 
 ---
 
