@@ -315,6 +315,21 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     hold_n = analyst.get("hold_count", 0)
     sell_n = analyst.get("sell_count", 0)
 
+    # ── International stocks with no analyst coverage ─────────────────────────
+    # Finnhub free tier returns 0 analysts for NSE/BSE and many EU stocks.
+    # Zero analyst coverage → smart_money score is near-zero by default.
+    # This produces a synthetically low total score that (without this guard)
+    # would classify SBIN, RELIANCE etc. as Urgent — a garbage result.
+    # Fix: mark data_quality "limited" so the hysteresis classifier routes them
+    # to Watch (not Urgent) and the verification layer suppresses the SELL rec.
+    _analyst_count = buy_n + hold_n + sell_n
+    _international_suffixes = (".NS", ".BO", ".PA", ".AS", ".DE", ".MC", ".L",
+                               ".MI", ".BR", ".ST", ".F")
+    _is_international = any(ticker.endswith(s) for s in _international_suffixes)
+    _base_quality = "limited" if not _has_real_data(fundamentals) else "full"
+    if _analyst_count == 0 and _is_international and _base_quality == "full":
+        _base_quality = "limited"
+
     return {
         "ticker": ticker,
         "total_score": total,
@@ -332,7 +347,7 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
         "analyst_hold": hold_n,
         "analyst_sell": sell_n,
         "analyst_target": analyst.get("target_price"),
-        "data_quality": "limited" if not _has_real_data(fundamentals) else "full",
+        "data_quality": _base_quality,
         "data_source": fundamentals.get("data_source"),
     }
 

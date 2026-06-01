@@ -250,6 +250,18 @@ def delete_portfolio(pos_id: int, user_id: str = Depends(get_current_user)):
     return {"status": "deleted"}
 
 
+@app.get("/api/portfolio/classification-audit")
+def classification_audit(ticker: str = None, limit: int = 50,
+                         user_id: str = Depends(get_current_user)):
+    """Return hysteresis classification change history.
+
+    Optional ?ticker=SBIN.NS to filter to one stock.
+    Optional ?limit=N (default 50).
+    """
+    entries = db.get_classification_audit(ticker=ticker, user_id=user_id, limit=limit)
+    return {"audit": entries, "count": len(entries)}
+
+
 # ── WATCHLIST ────────────────────────────────────────────────────────────────
 
 class WatchlistRequest(BaseModel):

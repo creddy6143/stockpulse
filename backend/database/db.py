@@ -704,3 +704,115 @@ def get_analyst_cache(ticker: str, max_age_days: int = 7):
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ── CLASSIFICATION STATE (hysteresis engine) ───────────────────────────────
+
+
+def get_classification_state(ticker: str, user_id: str) -> dict | None:
+    """Return current classification state row for (ticker, user_id), or None."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM classification_state WHERE ticker=? AND user_id=?",
+        (ticker, user_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def set_pending_classification(ticker: str, user_id: str,
+                                pending_group: str, pending_since: datetime):
+    """Start or restart the hysteresis pending timer for a new group direction."""
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO classification_state (ticker, user_id, stable_group, pending_group, pending_since)
+           VALUES (?, ?, 'watch', ?, ?)
+           ON CONFLICT(ticker, user_id) DO UPDATE SET
+             pending_group=excluded.pending_group,
+             pending_since=excluded.pending_since""",
+        (ticker, user_id, pending_group, pending_since.isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_pending_classification(ticker: str, user_id: str):
+    """Clear pending group/timer when signal reverts to stable group."""
+    conn = get_connection()
+    conn.execute(
+        """UPDATE classification_state
+           SET pending_group=NULL, pending_since=NULL
+           WHERE ticker=? AND user_id=?""",
+        (ticker, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_stable_classification(ticker: str, user_id: str, new_group: str):
+    """Commit a new stable group (clears any pending state)."""
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        """INSERT INTO classification_state
+           (ticker, user_id, stable_group, pending_group, pending_since, stable_since)
+           VALUES (?, ?, ?, NULL, NULL, ?)
+           ON CONFLICT(ticker, user_id) DO UPDATE SET
+             stable_group=excluded.stable_group,
+             pending_group=NULL,
+             pending_since=NULL,
+             stable_since=excluded.stable_since""",
+        (ticker, user_id, new_group, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def log_classification_change(ticker: str, user_id: str, old_group: str,
+                               new_group: str, trigger: str,
+                               days_req: float, days_elapsed: float):
+    """Write an audit entry every time hysteresis commits a group change."""
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO classification_audit
+           (ticker, user_id, old_group, new_group, trigger_signal,
+            hysteresis_days_required, hysteresis_days_elapsed)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (ticker, user_id, old_group, new_group, trigger, days_req, days_elapsed),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_classification_audit(ticker: str = None, user_id: str = None,
+                              limit: int = 50) -> list:
+    """Return recent classification change audit entries."""
+    conn = get_connection()
+    if ticker and user_id:
+        rows = conn.execute(
+            """SELECT * FROM classification_audit
+               WHERE ticker=? AND user_id=?
+               ORDER BY changed_at DESC LIMIT ?""",
+            (ticker, user_id, limit),
+        ).fetchall()
+    elif ticker:
+        rows = conn.execute(
+            """SELECT * FROM classification_audit
+               WHERE ticker=?
+               ORDER BY changed_at DESC LIMIT ?""",
+            (ticker, limit),
+        ).fetchall()
+    elif user_id:
+        rows = conn.execute(
+            """SELECT * FROM classification_audit
+               WHERE user_id=?
+               ORDER BY changed_at DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM classification_audit ORDER BY changed_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

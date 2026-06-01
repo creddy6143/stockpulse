@@ -6,6 +6,7 @@ boilerplate — part of the Real Money Test verification layer.
 """
 import os
 import json
+from datetime import datetime
 from .prompts import SYSTEM_PROMPT, STRATEGY_SYSTEM_PROMPT, build_strategy_user_prompt
 from .verification import verify_ai_text
 from data.cache import cache_get, cache_set, TTL_STRATEGY
@@ -168,11 +169,19 @@ def get_verdict(
     """Returns AI verdict for a stock. Falls back to blocked-stock text or generic verdict if all AI providers fail."""
     clean = ticker.replace(".NS", "").replace(".BO", "").replace(".ST", "")
 
-    # Cache non-blocked AI verdicts for 1 hour so /api/picks doesn't re-call AI on every load
+    live_chg = float(price_data.get("change_pct") or 0)
+
+    # Cache non-blocked AI verdicts for 2 hours so /api/picks doesn't re-call AI on every load.
+    # Single-source-of-truth check: if the live change_pct has drifted more than 0.5 percentage
+    # points from the value that was baked into the cached prose, the commentary will
+    # contradict the header. Invalidate and regenerate with current data.
     _verdict_cache_key = f"verdict:{ticker}"
     _cached = cache_get(_verdict_cache_key, TTL_STRATEGY)
     if _cached and clean not in _BLOCKED_VERDICTS:
-        return _cached
+        cached_chg = _cached.get("_change_pct_at_generation")
+        if cached_chg is None or abs(live_chg - float(cached_chg)) <= 0.5:
+            return _cached
+        # Drift > 0.5pp — fall through to regenerate with current data
 
     # Build user prompt
     patterns_text = (
@@ -202,6 +211,12 @@ Give a plain English verdict following the system rules."""
         elif verified_text != verdict_text:
             parsed["verdict"] = verified_text   # use cleaned version
         if clean not in _BLOCKED_VERDICTS:
+            # Tag every cached verdict with the change_pct and UTC timestamp used
+            # at generation time. The drift check above uses _change_pct_at_generation
+            # to detect when the prose has become inconsistent with the live header.
+            # _generated_at is returned to the frontend for the "updated N min ago" label.
+            parsed["_change_pct_at_generation"] = live_chg
+            parsed["_generated_at"] = datetime.utcnow().isoformat()
             cache_set(_verdict_cache_key, parsed)
         return parsed
 

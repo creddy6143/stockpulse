@@ -752,6 +752,15 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
                 ? <span style={{color:"var(--t3)"}}>Analysing with AI… <span style={{animation:"pr 1s infinite",display:"inline-block"}}>●</span></span>
                 : (verdict?.verdict || (d && d.verdict) || "Analysis unavailable — check back shortly.")}
             </div>
+            {!vLoading && verdict?._generated_at && (() => {
+              const ms = Date.now() - new Date(verdict._generated_at.endsWith('Z') ? verdict._generated_at : verdict._generated_at + 'Z').getTime();
+              const mins = Math.max(0, Math.round(ms / 60000));
+              return (
+                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:4,letterSpacing:.3}}>
+                  AI analysis updated {mins < 1 ? "just now" : `${mins} min ago`}
+                </div>
+              );
+            })()}
             {!vLoading && verdict?.recommendation && (
               <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:4,

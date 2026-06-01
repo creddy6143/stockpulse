@@ -7,6 +7,7 @@ from data.fetcher import get_stock_price, get_exchange_rates, get_historical_sek
 from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.verification import verify_watchlist_signal
 from portfolio.entry_zone import compute_entry_zone
+from portfolio.classification import classify_with_hysteresis
 
 
 def _detect_currency(ticker: str) -> str:
@@ -56,7 +57,7 @@ def _extract_fmp_profile(fundamentals: dict) -> dict | None:
     }
 
 
-def _build_position(pos: dict, rates: dict) -> dict:
+def _build_position(pos: dict, rates: dict, user_id: str = "OWNER") -> dict:
     """Fetch live data + trust for a single position. Runs in thread pool."""
     ticker = pos["ticker"]
     price_data = get_stock_price(ticker)
@@ -97,7 +98,7 @@ def _build_position(pos: dict, rates: dict) -> dict:
         buy_rate_sek = rate               # no buy_date → treat as bought at today's rate
     pnl_sek = value_sek - invested_sek
 
-    group = _classify_position(trust, pnl_pct)
+    group = classify_with_hysteresis(ticker, user_id, trust)
 
     return {
         "id": pos["id"],
@@ -146,13 +147,13 @@ def _build_position(pos: dict, rates: dict) -> dict:
     }
 
 
-def _build_position_group(lots: list, rates: dict) -> dict:
+def _build_position_group(lots: list, rates: dict, user_id: str = "OWNER") -> dict:
     """Accept all DB rows for one ticker; return a single aggregated position dict.
     For a single lot it is identical to _build_position but adds a `lots` key.
     For multiple lots it recalculates all financial fields using per-lot historical rates.
     """
     # Fetch price + trust once (same ticker for all lots)
-    base = _build_position(lots[0], rates)
+    base = _build_position(lots[0], rates, user_id=user_id)
 
     if len(lots) == 1:
         base["lots"] = [{
@@ -213,14 +214,18 @@ def _build_position_group(lots: list, rates: dict) -> dict:
     wavg_rate = (total_invested_sek / (wavg_buy * total_shares)
                  if wavg_buy * total_shares > 0 else rate)
 
-    # Re-classify based on aggregated P&L using the trust dict already in base
+    # Re-classify using the hysteresis-aware classifier (same trust dict as base)
     trust_dict = {
-        "total_score":      base["trust_score"],
-        "display_score":    base["display_score"],
+        "total_score":       base["trust_score"],
+        "display_score":     base["display_score"],
         "auto_disqualified": base["auto_disqualified"],
-        "grade":            base["grade"],
+        "grade":             base["grade"],
+        "business_score":    base.get("business_score"),
+        "smart_money_score": base.get("smart_money_score"),
+        "data_quality":      base.get("data_quality", "full"),
     }
-    base["group"] = _classify_position(trust_dict, pnl_pct)
+    ticker = lots[0]["ticker"]
+    base["group"] = classify_with_hysteresis(ticker, user_id, trust_dict)
 
     base.update({
         "shares":       total_shares,
@@ -272,8 +277,9 @@ def get_portfolio_with_pnl(user_id=None) -> dict:
     grouped = list(ticker_lots.values())
     workers = min(20, len(grouped))
     result = []
+    _uid = user_id or "OWNER"
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_build_position_group, lots, rates): lots
+        futures = {ex.submit(_build_position_group, lots, rates, _uid): lots
                    for lots in grouped}
         for future in as_completed(futures):
             try:
@@ -334,22 +340,6 @@ def get_portfolio_with_pnl(user_id=None) -> dict:
         },
     }
 
-
-def _classify_position(trust: dict, pnl_pct: float) -> str:
-    # Suppressed score (display_score is None) and NOT auto-disqualified means we
-    # don't have enough data to make a confident call — put in Watch, never Urgent.
-    # Saying "Action Required" when data is insufficient is worse than saying nothing.
-    if trust.get("display_score") is None and not trust.get("auto_disqualified"):
-        return "watch"
-    score = trust["total_score"]
-    if trust["auto_disqualified"] or (score is not None and score < 40):
-        return "urgent"
-    if score is None:
-        # Data Unavailable — put in watch group (visible but not alarming)
-        return "watch"
-    if pnl_pct < -20 or score < 60:
-        return "watch"
-    return "good"
 
 
 def _build_watchlist_item(item: dict) -> dict:

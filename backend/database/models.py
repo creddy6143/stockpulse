@@ -139,6 +139,28 @@ CREATE TABLE IF NOT EXISTS app_config (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS classification_state (
+  ticker       TEXT    NOT NULL,
+  user_id      TEXT    NOT NULL DEFAULT 'OWNER',
+  stable_group TEXT    NOT NULL DEFAULT 'watch',
+  pending_group TEXT,
+  pending_since TIMESTAMP,
+  stable_since  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (ticker, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS classification_audit (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticker                TEXT    NOT NULL,
+  user_id               TEXT    NOT NULL DEFAULT 'OWNER',
+  old_group             TEXT,
+  new_group             TEXT    NOT NULL,
+  changed_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  trigger_signal        TEXT,
+  hysteresis_days_required REAL,
+  hysteresis_days_elapsed  REAL
+);
 """
 
 
