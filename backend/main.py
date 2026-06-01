@@ -29,6 +29,8 @@ from intelligence.patterns import detect_all_patterns
 from intelligence.claude_ai import get_verdict, generate_strategy_playbook
 from intelligence.signals import evaluate_and_fire_signals
 from intelligence.verification import verify_pick, get_verification_log
+from intelligence.dip_filter import run_dip_scan
+from intelligence.multi_lens_filter import compute_conviction_score
 from portfolio.tracker import get_portfolio_with_pnl, get_watchlist_with_signals
 
 app = FastAPI(title="StockPulse API", version="1.0.0")
@@ -707,10 +709,9 @@ def _score_one_ticker(ticker: str) -> dict | None:
         verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
 
         # ── CONSECUTIVE DIP DAYS ─────────────────────────────────────────────
-        # Count how many trading days in a row the stock has been declining.
-        # Uses the already-cached 1Y daily history — no extra API call in most cases.
         consec_dip_days = 0
         week_change = 0.0
+        hist = {}
         try:
             hist = get_stock_history(ticker)
             week_change = float(hist.get("1W") or 0)
@@ -727,6 +728,22 @@ def _score_one_ticker(ticker: str) -> dict | None:
         except Exception:
             pass
 
+        # ── MULTI-LENS CONVICTION SCORE ───────────────────────────────────────
+        # Computed here using already-fetched data — no extra API calls.
+        conviction_lens: dict = {}
+        try:
+            conviction_lens = compute_conviction_score(
+                ticker=ticker,
+                trust=trust,
+                fundamentals=fundamentals,
+                hist=hist,
+                price=float(price_data.get("price") or 0),
+                patterns=patterns,
+                sector=_get_sector(ticker, fundamentals),
+            )
+        except Exception:
+            pass
+
         return {
             "ticker": ticker,
             "name": price_data.get("name", ticker),
@@ -740,6 +757,7 @@ def _score_one_ticker(ticker: str) -> dict | None:
             "week_change": week_change,
             "sector": _get_sector(ticker, fundamentals),
             "verification": trust.get("verification"),
+            "conviction_lens": conviction_lens,
         }
     except Exception:
         return None
@@ -942,13 +960,16 @@ def picks():
     all_picks = _json.loads(cache["all_picks_json"])
     sector_picks = _json.loads(cache["sector_json"])
 
-    # Return all qualified picks (threshold ≥60, quality gate passed).
-    # Sector grouping (top 10 per sector) is in sector_picks.
-    # Frontend shows sector_picks for the sector view and all_picks sorted
-    # globally for the "All" view. Cap at 100 to keep response size reasonable.
+    # Sort main picks by conviction score (new multi-lens score) then trust score.
+    # Cap main picks at 50 — quality over quantity.
+    # Dip picks stay at 10 (separate category, not ranked by conviction).
     dips = [p for p in all_picks if p.get("is_dip")]
     mains = [p for p in all_picks if not p.get("is_dip")]
-    top_picks = mains[:100] + dips[:10]
+    mains.sort(key=lambda p: (
+        -(p.get("conviction_lens") or {}).get("conviction_score", 0),
+        -((p.get("trust") or {}).get("total_score") or 0),
+    ))
+    top_picks = mains[:50] + dips[:10]
 
     # ── LIVE PRICE OVERLAY ───────────────────────────────────────────────────
     # ── LIVE PRICE OVERLAY ───────────────────────────────────────────────────
@@ -1406,110 +1427,59 @@ def strategy(user_id: str = Depends(get_current_user)):
             "sector": pick.get("sector", ""),
         })
 
-    # ── DIP BUYS ─────────────────────────────────────────────────────────────
-    # Healthy dip = fundamentally strong stock temporarily down.
-    # Criteria: trust ≥ 65, not auto-disqualified, business_score ≥ 20,
-    # any negative change today, no bad patterns, not net-bearish analysts.
-    BAD_PATTERNS = {"dead_cat", "falling_knife"}
-    # Market context for dip classification
-    _md = market_data or {}
-    _vix = (_md.get("vix") or {}).get("price", 0) or 0
-    _sp_chg = (_md.get("sp500") or {}).get("change_pct", 0) or 0
-    _market_driven = _vix > 18 or _sp_chg < -1.0
+    # ── DIP BUYS — Quality Pullback / Healthy Dip Filter ────────────────────
+    # Runs the 28-filter stack from intelligence/dip_filter.py.
+    # All 28 filters must pass (UNKNOWN tolerated). Hard FAILs disqualify.
+    dip_candidates = run_dip_scan(
+        picks_universe=cached_picks,
+        market_data=market_data,
+        user_portfolio=portfolio_data.get("positions", []),
+        user_watchlist=watchlist_data if isinstance(watchlist_data, list) else [],
+        current_picks_tickers={p["ticker"] for p in _mains},
+        top_n=15,
+    )
 
     dip_buys = []
-    for pick in _all:
-        t = pick.get("trust", {})
-        score = t.get("total_score") or 0
-        biz   = t.get("business_score") or 0
-        disq  = t.get("auto_disqualified", False) or pick.get("auto_disqualified", False)
-        chg   = pick.get("change_pct", 0) or 0
-        patterns = [p.get("pattern","") for p in (pick.get("patterns") or [])]
-        analysts_bearish = (t.get("analyst_sell", 0) or 0) > (t.get("analyst_buy", 0) or 0)
-
-        if (score < 65 or disq or biz < 20 or chg >= 0
-                or analysts_bearish
-                or any(p in BAD_PATTERNS for p in patterns)):
-            continue
-
-        grade = t.get("grade", "")
-        dip_pct = abs(chg)
-        consec = pick.get("consec_dip_days", 0) or 0
-        week_chg = pick.get("week_change", 0) or 0
-
-        # Label + icon upgrade for sustained multi-day dips
-        if consec >= 3:
-            label = f"{consec}-Day Dip"
-            icon = "🟢"
-            priority = 0  # Highest — sustained dip on strong stock
-        elif consec >= 2:
-            label = "2-Day Dip"
-            icon = "🟢"
-            priority = 1
-        else:
-            label = "Healthy Dip"
-            icon = "📉"
-            priority = 1 if dip_pct >= 8 else 2
-
-        # Plain English reason for why this is a healthy dip
-        reasons = []
-        if biz >= 30:
-            reasons.append("strong revenue & earnings")
-        elif biz >= 20:
-            reasons.append("solid business fundamentals")
-        sm = t.get("smart_money_score") or 0
-        if sm >= 25:
-            reasons.append("institutions still buying")
-        elif sm >= 15:
-            reasons.append("no institutional selling")
-        if (t.get("analyst_buy") or 0) > 0:
-            reasons.append(f"{t.get('analyst_buy')} analysts say buy")
-        reason_text = " · ".join(reasons) if reasons else "fundamentals intact"
-
-        # Build summary — richer for sustained dips
-        if consec >= 2:
-            week_str = f" ({week_chg:+.1f}% this week)" if week_chg else ""
-            if _market_driven:
-                summary = f"{consec} days down{week_str} — market-driven pullback, not company news · {reason_text}"
-            else:
-                summary = f"{consec} consecutive down days{week_str} — {reason_text}"
-        else:
-            market_note = " · broad market pulling it down" if _market_driven else ""
-            summary = f"Down {dip_pct:.1f}% today{market_note} — {reason_text}"
-
+    for d in dip_candidates:
         dip_buys.append({
-            "ticker": pick["ticker"],
-            "flag": _get_flag(_detect_market(pick["ticker"])),
+            "ticker": d["ticker"],
+            "flag": d.get("flag", "🇺🇸"),
             "situation_type": "dip_buy",
-            "label": label,
-            "icon": icon,
+            "label": d.get("label", "Quality Pullback"),
+            "icon": d.get("icon", "📉"),
             "action": "BUY",
-            "color": "var(--emerald)",
-            "summary": summary,
-            "priority": priority,
+            "color": "var(--amber)",
+            "summary": d.get("evidence", ""),
+            "priority": 0 if d.get("on_watchlist") or d.get("is_smart_pick") else 1,
             "playbook": None,
-            "name": pick.get("name", pick["ticker"]),
-            "current_price": pick.get("price", 0),
-            "change_pct": chg,
-            "trust_score": score,
-            "grade": grade,
-            "business_score": biz,
-            "smart_money_score": sm,
-            "momentum_score": t.get("momentum_score", 0),
-            "is_speculative": t.get("is_speculative", False),
-            "analyst_buy": t.get("analyst_buy", 0),
-            "analyst_hold": t.get("analyst_hold", 0),
-            "analyst_sell": t.get("analyst_sell", 0),
-            "situation_label": t.get("situation_label"),
-            "situation_note": t.get("situation_note"),
-            "sector": pick.get("sector", ""),
-            "consec_dip_days": consec,
-            "week_change": week_chg,
-            "market_driven": _market_driven,
+            "name": d.get("name", d["ticker"]),
+            "current_price": d.get("price", 0),
+            "change_pct": d.get("change_pct", 0),
+            "trust_score": d.get("trust_score", 0),
+            "grade": d.get("grade", ""),
+            "quality_score": d.get("quality_score", 0),
+            "filter_results": d.get("filter_results", {}),
+            "filters_passed": d.get("filters_passed", 0),
+            "filters_unknown": d.get("filters_unknown", 0),
+            "evidence": d.get("evidence", ""),
+            "week_change": d.get("week_change", 0),
+            "ma200": d.get("ma200"),
+            "ma50": d.get("ma50"),
+            "rsi": d.get("rsi"),
+            "pct_above_ma200": d.get("pct_above_ma200"),
+            "analyst_target": d.get("analyst_target"),
+            "analyst_buy_pct": d.get("analyst_buy_pct"),
+            "analyst_count": d.get("analyst_count"),
+            "conv_ratio": d.get("conv_ratio"),
+            "days_to_earnings": d.get("days_to_earnings"),
+            "sector": d.get("sector", ""),
+            "on_watchlist": d.get("on_watchlist", False),
+            "is_smart_pick": d.get("is_smart_pick", False),
+            "scanned_at": d.get("scanned_at", ""),
         })
 
-    # Sort: sustained dips first (priority 0 > 1 > 2), then deepest daily drop
-    dip_buys.sort(key=lambda x: (x["priority"], x["change_pct"]))
+    # Sort: watchlist/smart-pick overlap first, then by quality score desc
+    dip_buys.sort(key=lambda x: (x["priority"], -x.get("quality_score", 0)))
 
     total = len(my_stocks) + len(wl_situations) + len(smart_picks_strat) + len(dip_buys)
 
@@ -1584,6 +1554,48 @@ def strategy_playbook(ticker: str, req: PlaybookRequest):
         news=news,
     )
     return {"ticker": ticker, "playbook": playbook}
+
+
+# ── DIP BUYS (standalone) ────────────────────────────────────────────────────
+
+@app.get("/api/dips")
+def get_dips(user_id: str = Depends(get_current_user)):
+    """Standalone Quality Pullback endpoint — top 15 dip-buy setups from
+    the 28-filter stack. Data sourced from picks cache (no extra API calls).
+    Returns full filter_results so the frontend can display evidence per filter.
+    """
+    market_data = get_market_data()
+    portfolio_data = get_portfolio_with_pnl(user_id=user_id)
+    watchlist_data = get_watchlist_with_signals(user_id=user_id)
+
+    _picks_cache = db.get_picks_cache()
+    _all_picks = _json.loads(_picks_cache["all_picks_json"]) if _picks_cache and _picks_cache.get("all_picks_json") else []
+    _mains_only = [p for p in _all_picks if not p.get("is_dip")]
+    cached = _mains_only[:100]
+    for pick in cached:
+        _lv = _picks_live_prices.get(pick["ticker"])
+        if _lv and _lv.get("price"):
+            pick["price"]      = _lv["price"]
+            pick["change_pct"] = _lv["change_pct"]
+
+    dip_candidates = run_dip_scan(
+        picks_universe=cached,
+        market_data=market_data,
+        user_portfolio=portfolio_data.get("positions", []),
+        user_watchlist=watchlist_data if isinstance(watchlist_data, list) else [],
+        current_picks_tickers={p["ticker"] for p in _mains_only},
+        top_n=15,
+    )
+
+    _PRIVATE = {"_watchlist_boost", "_pick_boost", "sector_concentrated"}
+    clean_dips = [{k: v for k, v in d.items() if k not in _PRIVATE} for d in dip_candidates]
+
+    return {
+        "dips": clean_dips,
+        "total": len(clean_dips),
+        "universe_size": len(cached),
+        "scanned_at": clean_dips[0].get("scanned_at", "") if clean_dips else "",
+    }
 
 
 # ── EARNINGS ─────────────────────────────────────────────────────────────────

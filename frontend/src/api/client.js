@@ -121,6 +121,10 @@ export const getEarnings = () => request('/api/earnings');
 export const searchTicker = (q) => request(`/api/search?q=${encodeURIComponent(q)}`);
 export const clearAllPortfolio = () => request('/api/portfolio/all', { method: 'DELETE' });
 
+// ── DIPS ─────────────────────────────────────────────────────────────────────
+
+export const getDips = () => request('/api/dips');
+
 // ── PRICE ALERTS ─────────────────────────────────────────────────────────────
 
 export const getPriceAlerts = () => request('/api/price-alerts');

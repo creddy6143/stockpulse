@@ -373,16 +373,28 @@ def _build_watchlist_item(item: dict) -> dict:
         upside_pct = None
         upside_str = "—"
 
-    # Entry zone: 52W support +15% → current price -3%
+    # Entry zone: tight, meaningful range anchored to analyst target or 52W low
     entry_str = "—"
     w52_low = fundamentals.get("w52_low")
-    if w52_low and price > 0:
-        entry_low = w52_low * 1.15
-        entry_high = price * 0.97
-        if entry_low < entry_high:
-            entry_str = f"{entry_low:.0f}–{entry_high:.0f}"
+    if price > 0:
+        if target_price and target_price > 0 and 0.5 < target_price / price < 1.5:
+            # Anchor to analyst consensus target ±5%
+            entry_low = target_price * 0.93
+            entry_high = min(target_price * 1.03, price * 0.995)
+            if entry_low > 0 and entry_low < entry_high:
+                entry_str = f"{entry_low:.0f}–{entry_high:.0f}"
+            else:
+                entry_str = f"{price*0.93:.0f}–{price*0.99:.0f}"
+        elif w52_low and w52_low > 0:
+            # Tight range near 52W support — max width 8%
+            entry_low = min(w52_low * 1.20, price * 0.88)
+            entry_high = min(w52_low * 1.30, price * 0.96)
+            if entry_low < entry_high:
+                entry_str = f"{entry_low:.0f}–{entry_high:.0f}"
+            else:
+                entry_str = f"{price*0.93:.0f}–{price*0.99:.0f}"
         else:
-            entry_str = f"{price*0.92:.0f}–{price*0.98:.0f}"
+            entry_str = f"{price*0.93:.0f}–{price*0.99:.0f}"
 
     # Signal group — also considers analyst consensus now
     total_analysts = (trust.get("analyst_buy", 0) + trust.get("analyst_hold", 0)
@@ -392,7 +404,16 @@ def _build_watchlist_item(item: dict) -> dict:
     score = trust["total_score"]
     if score is not None and score >= 75 and not trust["auto_disqualified"]:
         wl_group = "ready"
-        signal = "Entry zone now"
+        # Label reflects whether price is at, above, or well above entry zone
+        if target_price and price > 0:
+            if price > target_price * 1.15:
+                signal = "Above target — wait for dip"
+            elif price > target_price * 1.05:
+                signal = "Near target zone"
+            else:
+                signal = "Entry zone now"
+        else:
+            signal = "Entry zone now"
     elif trust["auto_disqualified"] or (score is not None and score < 30):
         # score < 30 = genuinely distressed or blocked — "Avoid"
         # score 30–59 falls through to "watching" below — weak but not a red flag.

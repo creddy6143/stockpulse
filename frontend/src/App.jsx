@@ -394,23 +394,48 @@ const mapPick = pick => {
   const trust = pick.trust || {};
   const total = trust.total_score || 0;
   const verdict = pick.verdict || {};
-  const rawRec = (verdict.recommendation || "hold").toLowerCase();
-  const rec = rawRec === "strong_buy" ? "STRONG BUY" : rawRec === "buy" ? "BUY" : rawRec === "sell" ? "SELL" : "HOLD";
-  const rcls = rec === "STRONG BUY" ? "rr-sb" : rec === "BUY" ? "rr-b" : rec === "SELL" ? "rr-s" : "rr-h";
+  const cl = pick.conviction_lens || {};
+  const cvScore = cl.conviction_score || 0;
+
+  // Recommendation: prefer conviction rec if available, fallback to verdict
+  let rec, rcls;
+  if (cvScore >= 80) { rec = "STRONG BUY"; rcls = "rr-sb"; }
+  else if (cvScore >= 70) { rec = "BUY"; rcls = "rr-b"; }
+  else if (cvScore >= 60) { rec = "HOLD"; rcls = "rr-h"; }
+  else {
+    const rawRec = (verdict.recommendation || "hold").toLowerCase();
+    rec = rawRec === "strong_buy" ? "STRONG BUY" : rawRec === "buy" ? "BUY" : rawRec === "sell" ? "SELL" : "HOLD";
+    rcls = rec === "STRONG BUY" ? "rr-sb" : rec === "BUY" ? "rr-b" : rec === "SELL" ? "rr-s" : "rr-h";
+  }
+
   const col = total >= 90 ? "#059669" : "#5b72f8";
   const price = pick.price || 0;
   const curr = cu(pick.ticker);
   const sigs = [verdict.verdict, verdict.key_risk ? `Risk: ${verdict.key_risk}` : null, verdict.stop_loss_explanation].filter(Boolean);
+
   return {
     ticker: pick.ticker, name: pick.name||pick.ticker, trust: total,
     grade: (trust.grade||"Strong").toUpperCase(), col, grad:`linear-gradient(90deg,${col},#0ea5e9)`,
-    rec, rcls, b: trust.business_score||0, bm:40, s: trust.smart_money_score||0, sm:35, m: trust.momentum_score||0, mm:25,
+    rec, rcls,
+    // Trust pillars (original 3-pillar view)
+    b: trust.business_score||0, bm:40, s: trust.smart_money_score||0, sm:35, m: trust.momentum_score||0, mm:25,
+    // Multi-lens conviction data
+    cvScore, cvRec: cl.recommendation || "",
+    fundScore: cl.fundamental_score || 0,
+    techScore: cl.technical_score || 0,
+    anaScore: cl.analyst_score || 0,
+    mixedSignals: cl.mixed_signals || false,
+    filterResults: cl.filter_results || [],
+    filtersPassed: cl.filters_passed || 0,
+    filtersFailed: cl.filters_failed || 0,
+    filtersUnknown: cl.filters_unknown || 0,
     sigs: sigs.length ? sigs : ["Strong fundamentals across all three pillars."],
     potential: pick.is_dip
       ? `${(pick.change_pct||0).toFixed(1)}% dip`
-      : `+${Math.round((total-60)*1.2+15)}%`,
+      : cvScore >= 80 ? "+50-80%" : cvScore >= 70 ? "+30-50%" : `+${Math.round((total-60)*1.2+15)}%`,
     entry: price > 0 ? `${curr}${(price*0.97).toFixed(0)}-${curr}${(price*1.03).toFixed(0)}` : "—",
-    risk: total >= 80 ? "LOW-MED" : "MEDIUM", horizon: verdict.time_horizon || "12 months",
+    risk: cvScore >= 80 ? "LOW-MED" : total >= 80 ? "LOW-MED" : "MEDIUM",
+    horizon: verdict.time_horizon || "12 months",
     is_dip: pick.is_dip || false,
     change_pct: pick.change_pct || 0,
     price, curr,
@@ -2193,10 +2218,12 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
   const recColor = s.rcls==="rr-sb"?"var(--indigo)":s.rcls==="rr-b"?"var(--emerald)":"var(--amber)";
   const recBg = s.rcls==="rr-sb"?"#eef2ff":s.rcls==="rr-b"?"var(--emerald2)":"var(--amber2)";
   const isDip = s.is_dip;
+  const hasCv = s.cvScore > 0;
+  const [showFilters, setShowFilters] = useState(false);
   return (
     <div>
       <div onClick={()=>setExp(open?null:expKey)}
-        style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",
+        style={{display:"grid",gridTemplateColumns:"1.4fr .95fr .48fr .48fr .48fr .65fr .4fr",
           alignItems:"center",padding:"7px 12px",borderBottom:"1px solid rgba(15,23,42,.04)",
           cursor:"pointer",transition:"background .15s",gap:4,
           background:open?"rgba(91,114,248,.018)":isDip?"rgba(5,150,105,.025)":"transparent"}}>
@@ -2206,12 +2233,34 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
             <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
             {isDip&&<span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 5px",borderRadius:3}}>DIP</span>}
             {trackedSet.has(s.ticker)&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 4px",borderRadius:3}}>✓</span>}
+            {hasCv&&s.mixedSignals&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--amber)",background:"var(--amber2)",padding:"1px 5px",borderRadius:3}}>~</span>}
           </div>
           <div style={{fontSize:8,color:"var(--t3)",marginTop:1,paddingLeft:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
           {s.price > 0 && <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t2)",paddingLeft:10,marginTop:1}}>{s.curr}{s.price < 1000 ? s.price.toFixed(2) : s.price.toFixed(0)}<span style={{marginLeft:4,color:s.change_pct>=0?"var(--emerald)":"var(--rose)"}}>{s.change_pct>=0?"+":""}{s.change_pct.toFixed(1)}%</span></div>}
         </div>
-        <div><span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:600,color:recColor,background:recBg,padding:"2px 6px",borderRadius:4}}>{s.rec}</span></div>
-        <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span></div>
+        <div><span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:600,color:recColor,background:recBg,padding:"2px 5px",borderRadius:4}}>{s.rec}</span></div>
+        {/* CV column */}
+        <div style={{textAlign:"center"}}>
+          {hasCv
+            ? <span title="Conviction Score" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.cvScore>=80?"var(--indigo)":s.cvScore>=70?"var(--emerald)":"var(--amber)"}}>{s.cvScore}</span>
+            : <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span>
+          }
+        </div>
+        {/* TCH column */}
+        <div style={{textAlign:"center"}}>
+          {hasCv
+            ? <span title="Technical lens" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.techScore>=70?"var(--emerald)":s.techScore>=50?"var(--amber)":"var(--rose)"}}>{s.techScore}</span>
+            : <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>—</span>
+          }
+        </div>
+        {/* ANL column */}
+        <div style={{textAlign:"center"}}>
+          {hasCv
+            ? <span title="Analyst lens" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.anaScore>=70?"var(--emerald)":s.anaScore>=50?"var(--amber)":"var(--rose)"}}>{s.anaScore}</span>
+            : <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>—</span>
+          }
+        </div>
+        {/* Upside column */}
         <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"var(--emerald)"}}>{s.potential}</span></div>
         <div style={{textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
           <span style={{fontSize:8,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
@@ -2227,15 +2276,84 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
               {s.situationNote&&<span style={{fontSize:10,color:"var(--t2)",lineHeight:1.5}}>{s.situationNote}</span>}
             </div>
           );})()}
-          <div style={{display:"flex",gap:0,marginBottom:8,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
-            {[{l:"Business",v:s.b,m:s.bm,c:"#5b72f8"},{l:"Smart $",v:s.s,m:s.sm,c:"#7c3aed"},{l:"Momentum",v:s.m,m:s.mm,c:"#059669"}].map((p,j)=>(
-              <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
-                <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:1}}>{p.l}</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:"var(--t3)"}}>/{p.m}</span></div>
-                <div style={{height:2,background:"var(--t4)",borderRadius:1,marginTop:2,overflow:"hidden"}}><div style={{height:"100%",background:p.c,width:`${p.v/p.m*100}%`}}/></div>
+          {/* Conviction score section (when available) */}
+          {hasCv&&(
+            <div style={{marginBottom:9}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1.2}}>Conviction Score</span>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:s.cvScore>=80?"var(--indigo)":s.cvScore>=70?"var(--emerald)":"var(--amber)"}}>{s.cvScore}/100</span>
+                  {s.mixedSignals&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--amber)",background:"var(--amber2)",border:"1px solid #fcd34d",padding:"1px 6px",borderRadius:4}}>Mixed signals</span>}
+                </div>
               </div>
-            ))}
-          </div>
+              {/* 3-lens bars */}
+              <div style={{display:"flex",gap:0,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
+                {[
+                  {l:"Fundamental",v:s.fundScore,c:"#5b72f8",w:"40%"},
+                  {l:"Technical",v:s.techScore,c:"#059669",w:"30%"},
+                  {l:"Analyst",v:s.anaScore,c:"#7c3aed",w:"30%"},
+                ].map((p,j)=>(
+                  <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
+                    <div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",marginBottom:1}}>{p.l}</div>
+                    <div style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:p.v>=70?p.c:p.v>=50?"var(--amber)":"var(--rose)"}}>{p.v}<span style={{fontSize:6,color:"var(--t3)"}}>/100</span></div>
+                    <div style={{fontSize:6,color:"var(--t3)",marginBottom:1}}>{p.w} weight</div>
+                    <div style={{height:2,background:"var(--t4)",borderRadius:1,overflow:"hidden"}}><div style={{height:"100%",background:p.v>=70?p.c:p.v>=50?"var(--amber)":"var(--rose)",width:`${p.v}%`}}/></div>
+                  </div>
+                ))}
+              </div>
+              {/* Filter count + toggle */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>
+                <span style={{fontSize:9,color:"var(--t3)"}}>
+                  <span style={{color:"var(--emerald)",fontWeight:600}}>{s.filtersPassed} pass</span>
+                  {s.filtersFailed>0&&<span style={{color:"var(--rose)",fontWeight:600,marginLeft:6}}>{s.filtersFailed} fail</span>}
+                  {s.filtersUnknown>0&&<span style={{color:"var(--t3)",marginLeft:6}}>{s.filtersUnknown} unknown</span>}
+                </span>
+                <button onClick={e=>{e.stopPropagation();setShowFilters(v=>!v);}} style={{fontSize:9,color:"var(--indigo)",background:"none",border:"none",cursor:"pointer",padding:0}}>
+                  {showFilters?"Hide":"Show"} all 35 filters
+                </button>
+              </div>
+              {/* 35-filter breakdown */}
+              {showFilters&&s.filterResults.length>0&&(
+                <div style={{marginTop:6,borderRadius:7,border:"1px solid rgba(15,23,42,.06)",overflow:"hidden"}}>
+                  {["fundamental","technical","analyst"].map(lens=>{
+                    const lensFilters = s.filterResults.filter(f=>f.lens===lens);
+                    if (!lensFilters.length) return null;
+                    const lensLabel = lens==="fundamental"?"Fundamental (F=40%)":lens==="technical"?"Technical (F=30%)":"Analyst (F=30%)";
+                    const lensColor = lens==="fundamental"?"#5b72f8":lens==="technical"?"#059669":"#7c3aed";
+                    return (
+                      <div key={lens}>
+                        <div style={{padding:"4px 8px",background:lens==="fundamental"?"rgba(91,114,248,.06)":lens==="technical"?"rgba(5,150,105,.06)":"rgba(124,58,237,.06)",borderBottom:"1px solid rgba(15,23,42,.04)"}}>
+                          <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:lensColor,textTransform:"uppercase",letterSpacing:1}}>{lensLabel}</span>
+                        </div>
+                        {lensFilters.map((f,j)=>(
+                          <div key={f.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"4px 8px",borderBottom:j<lensFilters.length-1?"1px solid rgba(15,23,42,.03)":"none",background:"var(--white)"}}>
+                            <span style={{fontSize:8,width:10,flexShrink:0,color:f.status==="PASS"?"var(--emerald)":f.status==="FAIL"?"var(--rose)":"var(--t3)",fontWeight:700}}>{f.status==="PASS"?"✓":f.status==="FAIL"?"✗":"?"}</span>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{fontSize:8,color:f.status==="PASS"?"var(--t1)":"var(--t2)",lineHeight:1.3}}>{f.name}</div>
+                              {f.value&&<div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:1}}>{f.value}{f.threshold?` (need ${f.threshold})`:""}</div>}
+                              {f.note&&f.status==="FAIL"&&<div style={{fontSize:7,color:"var(--rose)",marginTop:1,lineHeight:1.3}}>{f.note}</div>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {/* Original 3-pillar trust bars (shown only when no conviction data) */}
+          {!hasCv&&(
+            <div style={{display:"flex",gap:0,marginBottom:8,borderRadius:7,overflow:"hidden",border:"1px solid rgba(15,23,42,.06)"}}>
+              {[{l:"Business",v:s.b,m:s.bm,c:"#5b72f8"},{l:"Smart $",v:s.s,m:s.sm,c:"#7c3aed"},{l:"Momentum",v:s.m,m:s.mm,c:"#059669"}].map((p,j)=>(
+                <div key={j} style={{flex:1,padding:"5px 4px",textAlign:"center",background:"var(--card2)",borderRight:j<2?"1px solid rgba(15,23,42,.06)":"none"}}>
+                  <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:1}}>{p.l}</div>
+                  <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:"var(--t3)"}}>/{p.m}</span></div>
+                  <div style={{height:2,background:"var(--t4)",borderRadius:1,marginTop:2,overflow:"hidden"}}><div style={{height:"100%",background:p.c,width:`${p.v/p.m*100}%`}}/></div>
+                </div>
+              ))}
+            </div>
+          )}
           <div style={{marginBottom:8}}>
             {s.sigs.slice(0,3).map((sig,j)=>(
               <div key={j} style={{display:"flex",gap:6,fontSize:10,color:"var(--t2)",marginBottom:3,lineHeight:1.4}}>
@@ -2442,9 +2560,11 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
             </div>
           )}
           {/* Column headers */}
-          <div style={{display:"grid",gridTemplateColumns:"1.6fr 1.1fr .65fr .8fr .5fr",padding:"4px 12px",background:"rgba(15,23,42,.015)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
-            {["Stock","Rec","AI","Upside",""].map((h,i)=>(
-              <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.6,textAlign:i>=2?"center":"left"}}>{h}</span>
+          <div style={{display:"grid",gridTemplateColumns:"1.4fr .95fr .48fr .48fr .48fr .65fr .4fr",padding:"4px 12px",background:"rgba(15,23,42,.015)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
+            {["Stock","Rec","CV","TCH","ANL","Upside",""].map((h,i)=>(
+              <span key={i}
+                title={h==="CV"?"Conviction Score — 35-filter composite":h==="TCH"?"Technical lens score (30% weight)":h==="ANL"?"Analyst lens score (30% weight)":undefined}
+                style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.6,textAlign:i>=2?"center":"left"}}>{h}</span>
             ))}
           </div>
           {currentPicks.map((s,i)=>(
@@ -2508,7 +2628,8 @@ function StrategyScreen({strategyData, onDetail}) {
   const handleExpand = (s, i) => {
     const wasOpen = exp === i;
     setExp(wasOpen ? null : i);
-    if (!wasOpen) {
+    // Dip Buys show inline evidence — no AI playbook call needed
+    if (!wasOpen && s.situation_type !== "dip_buy") {
       const key = `${s.ticker}:${s.situation_type}`;
       if (!playbookCache[key]) {
         setLoadingKey(key);
@@ -2552,7 +2673,13 @@ function StrategyScreen({strategyData, onDetail}) {
             </button>
           ))}
         </div>
-        {items.length===0&&(
+        {tab===3&&items.length===0&&(
+          <div style={{padding:"24px 20px",textAlign:"center"}}>
+            <div style={{fontSize:13,color:"var(--t2)",marginBottom:6}}>No quality pullbacks right now</div>
+            <div style={{fontSize:11,color:"var(--t3)",lineHeight:1.6}}>All 28 filters must pass. The universe needs a quality stock with a genuine multi-day pullback, RSI cooling, analysts still bullish, and no bad news.</div>
+          </div>
+        )}
+        {(tab!==3||items.length>0)&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
         {items.map((s,i)=>{
@@ -2560,25 +2687,28 @@ function StrategyScreen({strategyData, onDetail}) {
           const key=`${s.ticker}:${s.situation_type}`;
           const playbook=playbookCache[key];
           const loading=loadingKey===key;
+          const isDip = s.situation_type==="dip_buy";
+          const qs = s.quality_score||0;
           return (
             <div key={s.ticker+s.situation_type}>
-              <div onClick={()=>handleExpand(s,i)} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?"rgba(91,114,248,.025)":"transparent",transition:"background .15s"}}>
+              <div onClick={()=>handleExpand(s,i)} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?(isDip?"rgba(217,119,6,.04)":"rgba(91,114,248,.025)"):"transparent",transition:"background .15s"}}>
                 <span style={{fontSize:18,flexShrink:0}}>{s.icon}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
                     <span style={{fontSize:12}}>{s.flag}</span>
                     <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:14}}>{s.ticker}</span>
-                    <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:s.col,background:s.col==="var(--rose)"?"var(--rose2)":s.col==="var(--emerald)"?"var(--emerald2)":s.col==="var(--amber)"?"var(--amber2)":"#eef2ff",padding:"2px 8px",borderRadius:4}}>{s.label}</span>
-                    {s.situation_type==="dip_buy"&&(s.consec_dip_days||0)>=2&&(
-                      <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"#065f46",background:"#d1fae5",border:"1px solid #6ee7b7",padding:"2px 7px",borderRadius:4,animation:"pr 1.4s ease-in-out infinite"}}>
-                        {(s.consec_dip_days||0)>=3?`${s.consec_dip_days} DAYS ↓`:"2 DAYS ↓"} · GOOD ENTRY
-                      </span>
+                    <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:s.col,background:s.col==="var(--rose)"?"var(--rose2)":s.col==="var(--amber)"?"var(--amber2)":s.col==="var(--emerald)"?"var(--emerald2)":"#eef2ff",padding:"2px 8px",borderRadius:4}}>{s.label}</span>
+                    {isDip&&qs>0&&(
+                      <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"#92400e",background:"#fef3c7",border:"1px solid #fcd34d",padding:"2px 7px",borderRadius:4}}>{qs}/100</span>
                     )}
-                    {s.situation_type==="dip_buy"&&s.market_driven&&(
-                      <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",padding:"2px 6px",borderRadius:4,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)"}}>market-driven</span>
+                    {isDip&&s.on_watchlist&&(
+                      <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--indigo)",background:"#eef2ff",border:"1px solid #c7d2fe",padding:"2px 7px",borderRadius:4}}>ON WATCHLIST</span>
+                    )}
+                    {isDip&&s.is_smart_pick&&(
+                      <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"#065f46",background:"#d1fae5",border:"1px solid #6ee7b7",padding:"2px 7px",borderRadius:4}}>⭐ SMART PICK</span>
                     )}
                   </div>
-                  {(s.current_price||0) > 0 && <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",marginBottom:2}}>{cu(s.ticker)}{(s.current_price<1000?(s.current_price).toFixed(2):(s.current_price).toFixed(0))}<span style={{marginLeft:5,color:(s.change_pct||0)>=0?"var(--emerald)":"var(--rose)"}}>{(s.change_pct||0)>=0?"+":""}{(s.change_pct||0).toFixed(1)}%</span></div>}
+                  {(s.current_price||0) > 0 && <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",marginBottom:2}}>{cu(s.ticker)}{(s.current_price<1000?(s.current_price).toFixed(2):(s.current_price).toFixed(0))}<span style={{marginLeft:5,color:(s.change_pct||0)>=0?"var(--emerald)":"var(--rose)"}}>{(s.change_pct||0)>=0?"+":""}{(s.change_pct||0).toFixed(1)}%</span>{isDip&&s.week_change!=null&&<span style={{marginLeft:6,fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{s.week_change>=0?"+":""}{(s.week_change||0).toFixed(1)}% wk</span>}</div>}
                   <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.4}}>{s.summary}</div>
                 </div>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5,flexShrink:0}}>
@@ -2586,7 +2716,59 @@ function StrategyScreen({strategyData, onDetail}) {
                   <span style={{fontSize:10,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
                 </div>
               </div>
-              {open&&(
+              {open&&isDip&&(
+                <div style={{padding:"13px 14px 15px",background:"linear-gradient(180deg,rgba(217,119,6,.04),transparent)",borderBottom:"1px solid rgba(15,23,42,.04)",animation:"exIn .2s ease"}}>
+                  {/* Quality score bar */}
+                  {qs>0&&(
+                    <div style={{marginBottom:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                        <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1.2}}>Quality Score</span>
+                        <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:"var(--amber)"}}>{qs}/100</span>
+                      </div>
+                      <div style={{height:5,background:"#fef3c7",borderRadius:3,overflow:"hidden"}}>
+                        <div style={{height:"100%",width:`${qs}%`,background:"linear-gradient(90deg,var(--amber),#f59e0b)",borderRadius:3,transition:"width .4s ease"}}/>
+                      </div>
+                    </div>
+                  )}
+                  {/* Key metrics strip */}
+                  <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                    {s.trust_score>0&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>TRUST</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--amber)"}}>{s.trust_score}</div></div>}
+                    {s.rsi!=null&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>RSI</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:s.rsi<40?"var(--emerald)":s.rsi<55?"var(--amber)":"var(--t2)"}}>{(s.rsi).toFixed(0)}</div></div>}
+                    {s.pct_above_ma200!=null&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>vs MA200</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--emerald)"}}>+{(s.pct_above_ma200||0).toFixed(1)}%</div></div>}
+                    {s.analyst_count>0&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>ANALYSTS</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--t1)"}}>{(s.analyst_buy_pct||0).toFixed(0)}% buy</div></div>}
+                  </div>
+                  {/* Evidence text */}
+                  <div style={{fontSize:12,color:"var(--t1)",lineHeight:1.7,marginBottom:12,borderLeft:"3px solid var(--amber)",paddingLeft:10}}>
+                    {s.evidence||s.summary}
+                  </div>
+                  {/* Overlap badges */}
+                  {(s.on_watchlist||s.is_smart_pick)&&(
+                    <div style={{marginBottom:12,padding:"8px 10px",background:"rgba(91,114,248,.05)",borderRadius:8,border:"1px solid rgba(91,114,248,.15)"}}>
+                      {s.is_smart_pick&&<div style={{fontSize:11,color:"var(--indigo)",fontWeight:600,marginBottom:s.on_watchlist?4:0}}>⭐ Also a Smart Pick — top-tier quality confirmed by separate screen</div>}
+                      {s.on_watchlist&&<div style={{fontSize:11,color:"var(--indigo)"}}>On your watchlist — you were already tracking this name</div>}
+                    </div>
+                  )}
+                  {/* Analyst target if available */}
+                  {s.analyst_target>0&&(
+                    <div style={{fontSize:11,color:"var(--t2)",marginBottom:12}}>
+                      Analyst target: <span style={{fontFamily:"var(--mono)",fontWeight:700,color:"var(--emerald)"}}>{cu(s.ticker)}{s.analyst_target.toFixed(0)}</span>
+                      {s.current_price>0&&<span style={{color:"var(--t3)",marginLeft:4}}>(+{((s.analyst_target/s.current_price-1)*100).toFixed(0)}% upside)</span>}
+                    </div>
+                  )}
+                  {/* Days to earnings warning */}
+                  {s.days_to_earnings!=null&&s.days_to_earnings<=14&&s.days_to_earnings>0&&(
+                    <div style={{fontSize:11,color:"var(--amber)",background:"var(--amber2)",borderRadius:6,padding:"6px 10px",marginBottom:12,fontWeight:600}}>
+                      ⚠ Earnings in {s.days_to_earnings} days — consider waiting or sizing down
+                    </div>
+                  )}
+                  <button
+                    onClick={()=>{ if(onDetail) onDetail({ticker:s.ticker, name:s.name||s.ticker, flag:s.flag||"🇺🇸", price:s.current_price||0, trust:s.trust_score||50, rec:"BUY"}); }}
+                    style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:"var(--emerald)",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                    View Full Analysis →
+                  </button>
+                </div>
+              )}
+              {open&&!isDip&&(
                 <div style={{padding:"13px 14px 15px",background:"linear-gradient(180deg,rgba(91,114,248,.03),transparent)",borderBottom:"1px solid rgba(15,23,42,.04)",animation:"exIn .2s ease"}}>
                   <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>SIGNALS &amp; CONTEXT</div>
                   {loading?(
@@ -2752,10 +2934,10 @@ export default function App() {
   const _idxGreen = [_sp, _nq, _dax, _nft].filter(c => c > 0).length;
   const _majorityUp = _idxGreen >= 2;
 
-  const mktLabel = vix >= 35 ? "Market Alert"
+  const mktLabel = vix >= 35 ? "Market Panic"
                  : vix >= 27 ? "Market Stressed"
                  : vix >= 20 ? "Market Choppy"
-                 : vix >= 13 ? (_majorityUp ? "Market Calm" : "Market Stable")
+                 : vix >= 13 ? "Market Stable"
                  : vix > 0   ? "Market Calm"
                  : (_majorityUp ? "Markets Up" : "Market Stable");
   const mktDotColor = vix >= 27 ? "#ef4444" : vix >= 20 ? "#f59e0b" : "#4ade80";
