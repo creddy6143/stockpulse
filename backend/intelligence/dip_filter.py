@@ -210,20 +210,20 @@ def evaluate_dip_candidate(
                       f"Today {chg_pct:+.1f}%, week {h1w:+.1f}%",
                       "Down today + week < -1%"))
 
-    # F6 — Cumulative drop between -2% and -18%
+    # F6 — Cumulative drop between -1.5% and -18%
     cumulative = h1w   # 1-week return as proxy for cumulative pullback
     if cumulative < -18.0:
-        filters.append(_f(6, "Cumulative drop -2% to -18%", 2, "FAIL",
+        filters.append(_f(6, "Cumulative drop -1.5% to -18%", 2, "FAIL",
                           f"{cumulative:.1f}% (1W)",
-                          "-2% to -18%", "Drop too severe — falling knife risk"))
+                          "-1.5% to -18%", "Drop too severe — falling knife risk"))
         return None
-    if cumulative > -2.0:
-        filters.append(_f(6, "Cumulative drop -2% to -18%", 2, "FAIL",
+    if cumulative > -1.5:
+        filters.append(_f(6, "Cumulative drop -1.5% to -18%", 2, "FAIL",
                           f"{cumulative:.1f}% (1W)",
-                          "-2% to -18%", "Drop too small — not a meaningful pullback"))
+                          "-1.5% to -18%", "Drop too small — not a meaningful pullback"))
         return None
-    filters.append(_f(6, "Cumulative drop -2% to -18%", 2, "PASS",
-                      f"{cumulative:.1f}% (1W)", "-2% to -18%"))
+    filters.append(_f(6, "Cumulative drop -1.5% to -18%", 2, "PASS",
+                      f"{cumulative:.1f}% (1W)", "-1.5% to -18%"))
 
     # F7 — Still above 200-day MA (long-term uptrend intact)
     if ma200 > 0 and price > 0:
@@ -386,14 +386,17 @@ def evaluate_dip_candidate(
                           "Earnings date not available", "> 7 days"))
 
     # F19 — Not an ex-dividend artifact
-    # Heuristic: if today's drop is < 1.5%, it may just be the dividend amount
-    if abs(chg_pct) < 1.5:
+    # Heuristic: if today's drop is < 1.2%, it may just be the dividend amount.
+    # 1.2% chosen: quarterly dividends on large-caps avg 0.3-0.4% per payment,
+    # so 1.2% gives 3× headroom above typical ex-div noise while passing NEM-type
+    # borderline dips that the 1.5% threshold was spuriously excluding.
+    if abs(chg_pct) < 1.2:
         filters.append(_f(19, "Drop not an ex-dividend artifact", 4, "FAIL",
                           f"Drop {chg_pct:+.1f}% — too small, may be dividend",
-                          "> -1.5% drop", "Could be ex-div noise"))
+                          "> -1.2% drop", "Could be ex-div noise"))
         return None
     filters.append(_f(19, "Drop not an ex-dividend artifact", 4, "PASS",
-                      f"Drop {chg_pct:+.1f}% — meaningful decline", "> -1.5%"))
+                      f"Drop {chg_pct:+.1f}% — meaningful decline", "> -1.2%"))
 
     # F20 — VIX < 30 (market-wide panic suppresses individual signals)
     if vix > 0:
@@ -709,15 +712,28 @@ def run_dip_scan(
         trust = pick.get("trust", {})
         ts    = int(trust.get("total_score") or 0)
         auto_d = bool(trust.get("auto_disqualified", False))
-        chg   = float(pick.get("change_pct") or 0)
 
-        # Quick pre-filter before expensive fetches
-        if ts < 70 or auto_d or chg >= 0:
+        # Quick pre-filter on trust/disq — no API call needed
+        if ts < 70 or auto_d:
             continue
         if trust.get("data_quality") == "unavailable":
             continue
 
         try:
+            # Fetch live price — picks cache stores change_pct from scan time
+            # (potentially hours or days old). Using stale data here causes all
+            # stocks that happened to be green at scan time to be skipped, even
+            # if they are down today. Always use the live price API (cache hit
+            # after first portfolio load, 15-min TTL).
+            live = get_stock_price(ticker)
+            chg  = float(live.get("change_pct") if live.get("change_pct") is not None
+                         else pick.get("change_pct") or 0)
+            live_price = float(live.get("price") or pick.get("price") or 0)
+
+            # Apply dip pre-filter with live change_pct
+            if chg >= 0:
+                continue
+
             # All of these are cache-hits in normal operation
             fundamentals  = get_fundamentals(ticker)
             analyst_data  = get_analyst_data(ticker)
@@ -725,9 +741,8 @@ def run_dip_scan(
             hist          = get_stock_history(ticker)
             sector        = pick.get("sector") or "Diversified"
 
-            # Use live price from pick (already refreshed by picks endpoint)
             price_data = {
-                "price":      pick.get("price", 0),
+                "price":      live_price if live_price > 0 else pick.get("price", 0),
                 "change_pct": chg,
             }
 
