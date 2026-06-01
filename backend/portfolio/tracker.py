@@ -6,6 +6,7 @@ from database.db import get_portfolio, get_watchlist
 from data.fetcher import get_stock_price, get_exchange_rates, get_historical_sek_rate, get_analyst_data, get_fundamentals, get_fmp_profile
 from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.verification import verify_watchlist_signal
+from portfolio.entry_zone import compute_entry_zone
 
 
 def _detect_currency(ticker: str) -> str:
@@ -373,64 +374,40 @@ def _build_watchlist_item(item: dict) -> dict:
         upside_pct = None
         upside_str = "—"
 
-    # Entry zone: tight, meaningful range anchored to analyst target or 52W low
-    entry_str = "—"
-    w52_low = fundamentals.get("w52_low")
-    if price > 0:
-        if target_price and target_price > 0 and 0.5 < target_price / price < 1.5:
-            # Anchor to analyst consensus target ±5%
-            entry_low = target_price * 0.93
-            entry_high = min(target_price * 1.03, price * 0.995)
-            if entry_low > 0 and entry_low < entry_high:
-                entry_str = f"{entry_low:.0f}–{entry_high:.0f}"
-            else:
-                entry_str = f"{price*0.93:.0f}–{price*0.99:.0f}"
-        elif w52_low and w52_low > 0:
-            # Tight range near 52W support — max width 8%
-            entry_low = min(w52_low * 1.20, price * 0.88)
-            entry_high = min(w52_low * 1.30, price * 0.96)
-            if entry_low < entry_high:
-                entry_str = f"{entry_low:.0f}–{entry_high:.0f}"
-            else:
-                entry_str = f"{price*0.93:.0f}–{price*0.99:.0f}"
-        else:
-            entry_str = f"{price*0.93:.0f}–{price*0.99:.0f}"
+    # ── Entry zone: narrow, evidence-backed band from multiple signals ─────────
+    # Uses MA50/MA200, Fibonacci from 52W range, analyst target_low/high.
+    # Max width 12% of current price. Returns status label for signal badge.
+    zone = compute_entry_zone(ticker, price, fundamentals, analyst)
+    entry_str      = zone["zone_str"]
+    zone_status    = zone["zone_status"]
+    zone_status_lbl = zone["zone_status_label"]
+    pct_to_zone    = zone["pct_to_zone"]
+    zone_bot_sigs  = zone["zone_bottom_signals"]
+    zone_top_sigs  = zone["zone_top_signals"]
+    zone_reason    = zone["zone_reason"]
 
-    # Signal group — also considers analyst consensus now
-    total_analysts = (trust.get("analyst_buy", 0) + trust.get("analyst_hold", 0)
-                      + trust.get("analyst_sell", 0))
-    buy_pct = (trust.get("analyst_buy", 0) / total_analysts) if total_analysts > 0 else 0
-
+    # ── Signal and wl_group ──────────────────────────────────────────────────
+    # signal is the zone status label (tells user EXACTLY where price stands vs zone)
+    # wl_group drives Ready / Waiting / Avoid categories:
+    #   ready   — price IS in the entry zone + trust ≥ 60 + not blocked
+    #   avoid   — auto-disqualified OR trust < 30 (distressed)
+    #   watching — everything else (above zone, near zone, no zone, low trust)
     score = trust["total_score"]
-    if score is not None and score >= 75 and not trust["auto_disqualified"]:
-        wl_group = "ready"
-        # Label reflects whether price is at, above, or well above entry zone
-        if target_price and price > 0:
-            if price > target_price * 1.15:
-                signal = "Above target — wait for dip"
-            elif price > target_price * 1.05:
-                signal = "Near target zone"
-            else:
-                signal = "Entry zone now"
-        else:
-            signal = "Entry zone now"
-    elif trust["auto_disqualified"] or (score is not None and score < 30):
-        # score < 30 = genuinely distressed or blocked — "Avoid"
-        # score 30–59 falls through to "watching" below — weak but not a red flag.
-        # INTC at 34 (cyclical down-cycle), SOFI at 33 (data gap) belong in
-        # "watching", not alongside stocks with SEC investigations or cash crises.
+    signal = zone_status_lbl
+
+    if trust["auto_disqualified"] or (score is not None and score < 30):
         wl_group = "avoid"
-        signal = "Not yet"
-    else:
-        # score is None (Data Unavailable) or moderate score → watching
-        wl_group = "watching"
-        # More descriptive signal based on analyst consensus
-        if buy_pct >= 0.75:
-            signal = "High analyst conviction"
-        elif upside_pct is not None and upside_pct > 30:
-            signal = f"Analysts see +{upside_pct:.0f}% upside"
+        # Override signal to make urgency clear
+        if trust["auto_disqualified"]:
+            signal = "Not suitable — " + (trust.get("disqualify_reason") or "disqualified")[:40]
         else:
-            signal = "Still watching"
+            signal = "Weak fundamentals — not yet"
+    elif zone_status == "in_zone" and score is not None and score >= 60:
+        wl_group = "ready"
+        # Signal already set to "✓ In entry zone now" from zone calculation
+    else:
+        wl_group = "watching"
+        # Signal already set from zone calculation (e.g. "Above zone — wait for X%")
 
     # ── REAL MONEY TEST — watchlist signal verification ────────────────────
     # Catches cases where signal and wl_group are internally inconsistent
@@ -463,6 +440,12 @@ def _build_watchlist_item(item: dict) -> dict:
         "analyst_upside_pct": upside_pct,
         "analyst_upside_str": upside_str,
         "analyst_entry": entry_str,
+        # Zone diagnostic — enables evidence display in expanded watchlist row
+        "zone_status": zone_status,
+        "zone_pct_to_entry": pct_to_zone,
+        "zone_bottom_signals": zone_bot_sigs,
+        "zone_top_signals": zone_top_sigs,
+        "zone_reason": zone_reason,
         "analyst_buy": trust.get("analyst_buy", 0),
         "analyst_hold": trust.get("analyst_hold", 0),
         "analyst_sell": trust.get("analyst_sell", 0),

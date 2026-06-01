@@ -351,9 +351,13 @@ const mapWatchlistItem = item => {
     fmpProfile: item.fmp_profile || null,
     isSpeculative: item.is_speculative || false,
     signal: item.signal || "Still watching",
-    reason: item.signal || "Still watching",
+    reason: item.zone_reason || item.signal || "Still watching",
     potential: item.analyst_upside_str || "—",
     entry: item.analyst_entry || "—",
+    zoneStatus: item.zone_status || "no_zone",
+    zonePctToEntry: item.zone_pct_to_entry ?? null,
+    zoneBottomSignals: item.zone_bottom_signals || [],
+    zoneTopSignals: item.zone_top_signals || [],
     analystBuy: item.analyst_buy || 0,
     analystHold: item.analyst_hold || 0,
     analystSell: item.analyst_sell || 0,
@@ -1492,8 +1496,13 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
 function CompactWatchRow({s, dot, onRemove, onSetAlert}) {
   const [open, setOpen] = useState(false);
   const c = tc(s.trust, s.grade);
-  const cc = dot;
-  const cbg = dot==="var(--emerald)"?"var(--emerald2)":dot==="var(--amber)"?"var(--amber2)":"var(--rose2)";
+  // Signal badge color driven by zone_status — not slice color
+  const cc = s.zoneStatus==="in_zone"   ? "var(--emerald)"
+           : s.zoneStatus==="near_zone"  ? "var(--amber)"
+           : s.zoneStatus==="above_zone" ? "var(--amber)"
+           : s.zoneStatus==="below_zone" ? "var(--rose)"
+           : "var(--t2)";  // no_zone
+  const cbg = cc==="var(--emerald)"?"var(--emerald2)":cc==="var(--amber)"?"var(--amber2)":cc==="var(--rose)"?"var(--rose2)":"rgba(15,23,42,.05)";
   // Third column: show analyst upside % if available, else trust score
   const hasRealUpside = s.potential && s.potential !== "—";
   const thirdVal = hasRealUpside ? s.potential : (s.trust ?? "?");
@@ -1554,16 +1563,47 @@ function CompactWatchRow({s, dot, onRemove, onSetAlert}) {
             </div>
           );})()}
           <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:9}}>{s.reason}</div>
+          {/* Zone + Upside row */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <div style={{background:"var(--card2)",borderRadius:8,padding:"7px 10px"}}>
               <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>Entry Zone</div>
-              <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--sky)"}}>{s.entry}</div>
+              <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:
+                s.zoneStatus==="in_zone"?"var(--emerald)":
+                s.zoneStatus==="near_zone"?"var(--amber)":
+                s.zoneStatus==="below_zone"?"var(--rose)":"var(--sky)"}}>{s.entry}</div>
             </div>
             <div style={{background:"var(--card2)",borderRadius:8,padding:"7px 10px"}}>
               <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>{hasRealUpside?"Analyst Upside":"AI Score"}</div>
               <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:thirdColor}}>{thirdVal}</div>
             </div>
           </div>
+          {/* Zone evidence diagnostic — shown when zone data is available */}
+          {(s.zoneTopSignals?.length > 0 || s.zoneBottomSignals?.length > 0) && s.entry !== "—" && (
+            <div style={{background:"rgba(15,23,42,.02)",borderRadius:8,border:"1px solid rgba(15,23,42,.06)",padding:"7px 10px",marginBottom:6}}>
+              <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Zone Derivation</div>
+              {s.zoneTopSignals?.length > 0 && (<>
+                <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:3}}>Zone ceiling ({s.entry.split("–")[1]}) — where to start buying:</div>
+                {s.zoneTopSignals.map((sig,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:8,color:"var(--t2)",marginBottom:2}}>
+                    <span>· {sig.name}</span>
+                    <span style={{fontFamily:"var(--mono)",fontWeight:700,color:"var(--sky)"}}>{cu(s.ticker)}{typeof sig.value==="number"?sig.value.toFixed(sig.value>=100?0:sig.value>=10?1:2):sig.value}</span>
+                  </div>
+                ))}
+              </>)}
+              {s.zoneBottomSignals?.length > 0 && (<>
+                <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:4,marginBottom:3}}>Zone floor ({s.entry.split("–")[0]}) — deeper support:</div>
+                {s.zoneBottomSignals.map((sig,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:8,color:"var(--t2)",marginBottom:2}}>
+                    <span>· {sig.name}</span>
+                    <span style={{fontFamily:"var(--mono)",fontWeight:700,color:"var(--sky)"}}>{cu(s.ticker)}{typeof sig.value==="number"?sig.value.toFixed(sig.value>=100?0:sig.value>=10?1:2):sig.value}</span>
+                  </div>
+                ))}
+              </>)}
+              <div style={{fontFamily:"var(--mono)",fontSize:7,color:cc,marginTop:4,paddingTop:4,borderTop:"1px solid rgba(15,23,42,.06)"}}>
+                {s.price>0&&`Current: ${cu(s.ticker)}${s.price>=100?s.price.toFixed(0):s.price.toFixed(2)} — `}{s.signal}
+              </div>
+            </div>
+          )}
           {(s.analystBuy+s.analystHold+s.analystSell) > 0 && (
             <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>
               Analysts: <span style={{color:"var(--emerald)",fontWeight:700}}>{s.analystBuy} Buy</span>
@@ -1588,14 +1628,6 @@ function CompactWatchRow({s, dot, onRemove, onSetAlert}) {
           {s.dataSource && s.grade !== "Data Unavailable" && (
             <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:4}}>
               Data: {s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}
-            </div>
-          )}
-          {s.price > 0 && s.entry && s.entry !== "—" && (
-            <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",marginTop:6}}>
-              Current <span style={{color:"var(--t1)",fontWeight:700}}>{cu(s.ticker)}{s.price.toFixed(2)}</span>
-              <span style={{color:s.change>=0?"var(--emerald)":"var(--rose)",marginLeft:4}}>{s.change>=0?"+":""}{(s.change||0).toFixed(1)}%</span>
-              <span style={{color:"var(--t4)",margin:"0 6px"}}>→</span>
-              Entry Zone <span style={{color:"var(--sky)",fontWeight:600}}>{s.entry}</span>
             </div>
           )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:9}}>
@@ -2246,22 +2278,31 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
             : <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:c}}>{s.trust}</span>
           }
         </div>
-        {/* TCH column */}
+        {/* TECH column */}
         <div style={{textAlign:"center"}}>
           {hasCv
-            ? <span title="Technical lens" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.techScore>=70?"var(--emerald)":s.techScore>=50?"var(--amber)":"var(--rose)"}}>{s.techScore}</span>
+            ? <span title="Technical strength (MA, RSI, momentum)" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.techScore>=70?"var(--emerald)":s.techScore>=50?"var(--amber)":"var(--rose)"}}>{s.techScore}</span>
             : <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>—</span>
           }
         </div>
-        {/* ANL column */}
+        {/* ANAL column */}
         <div style={{textAlign:"center"}}>
           {hasCv
-            ? <span title="Analyst lens" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.anaScore>=70?"var(--emerald)":s.anaScore>=50?"var(--amber)":"var(--rose)"}}>{s.anaScore}</span>
+            ? <span title="Analyst conviction (coverage, targets, sentiment)" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.anaScore>=70?"var(--emerald)":s.anaScore>=50?"var(--amber)":"var(--rose)"}}>{s.anaScore}</span>
             : <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>—</span>
           }
         </div>
-        {/* Upside column */}
-        <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,color:"var(--emerald)"}}>{s.potential}</span></div>
+        {/* Upside column — with directional triangle */}
+        <div style={{textAlign:"center"}}>
+          {(()=>{
+            const isPos = s.potential && s.potential.startsWith("+");
+            const isNeg = s.potential && s.potential.startsWith("-");
+            return <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:600,
+              color:isNeg?"var(--rose)":"var(--emerald)"}}>
+              {isNeg?"↓":isPos?"↑":""}{s.potential}
+            </span>;
+          })()}
+        </div>
         <div style={{textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
           <span style={{fontSize:8,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
           <button onClick={e=>{e.stopPropagation();onRemove(s.ticker,e);}} style={{fontSize:8,color:"var(--t3)",background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
@@ -2561,9 +2602,9 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
           )}
           {/* Column headers */}
           <div style={{display:"grid",gridTemplateColumns:"1.4fr .95fr .48fr .48fr .48fr .65fr .4fr",padding:"4px 12px",background:"rgba(15,23,42,.015)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
-            {["Stock","Rec","CV","TCH","ANL","Upside",""].map((h,i)=>(
+            {["Stock","Rec","CV","TECH","ANAL","Upside",""].map((h,i)=>(
               <span key={i}
-                title={h==="CV"?"Conviction Score — 35-filter composite":h==="TCH"?"Technical lens score (30% weight)":h==="ANL"?"Analyst lens score (30% weight)":undefined}
+                title={h==="CV"?"Conviction Score — 35-filter composite":h==="TECH"?"Technical strength score (MA, RSI, momentum)":h==="ANAL"?"Analyst conviction score (coverage, targets, sentiment)":undefined}
                 style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.6,textAlign:i>=2?"center":"left"}}>{h}</span>
             ))}
           </div>
