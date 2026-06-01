@@ -860,6 +860,12 @@ BLOCKED_OVERRIDES = {
         "disqualify_reason": "CEO + CFO resigned. SEC fraud. Chapter 11.",
         "data_source": "manual_block",
     },
+    "KULR": {
+        "total_score": 12, "business_score": 2, "smart_money_score": 3,
+        "momentum_score": 7, "grade": "Blocked", "auto_disqualified": True,
+        "disqualify_reason": "1-for-8 reverse split executed June 2025. Pre-split price was below $1.",
+        "data_source": "manual_block",
+    },
 }
 
 
