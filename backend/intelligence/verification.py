@@ -704,12 +704,12 @@ def verify_watchlist_signal(
     if auto_disq:
         return "Auto-disqualified — do not buy", "avoid", None
 
-    if wl_group == "ready" and score < 70:
-        note = f"W3_ready_corrected: score={score} (<70) — moved to watching"
+    if wl_group == "ready" and score < 75:
+        note = f"W3_ready_corrected: score={score} (<75) — moved to watching"
         _write_log({"ts": time.time(), "ticker": ticker, "output_type": "watchlist_signal",
                     "confidence": "MEDIUM", "score": score,
                     "suppression_reason": None, "warnings": [note]})
-        return "Entry conditions not fully met", "watching", note
+        return "Not yet at ≥75 entry threshold", "watching", note
 
     if wl_group == "avoid" and score >= 70 and not auto_disq:
         note = f"W4_avoid_corrected: score={score} (≥70, no disq) — moved to watching"

@@ -379,9 +379,11 @@ def _build_watchlist_item(item: dict) -> dict:
     # ── Signal and wl_group ──────────────────────────────────────────────────
     # signal is the zone status label (tells user EXACTLY where price stands vs zone)
     # wl_group drives Ready / Waiting / Avoid categories:
-    #   ready   — price IS in the entry zone + trust ≥ 60 + not blocked
+    #   ready   — price IS in the entry zone + trust ≥ 75 (Strong grade) + not blocked
     #   avoid   — auto-disqualified OR trust < 30 (distressed)
-    #   watching — everything else (above zone, near zone, no zone, low trust)
+    #   watching — everything else (above zone, near zone, no zone, trust 30-74)
+    # Threshold ≥ 75 matches _detect_wl_situation UI text and verify_watchlist_signal
+    # backstop — all three must agree to prevent contradictory labels.
     score = trust["total_score"]
     signal = zone_status_lbl
 
@@ -392,7 +394,7 @@ def _build_watchlist_item(item: dict) -> dict:
             signal = "Not suitable — " + (trust.get("disqualify_reason") or "disqualified")[:40]
         else:
             signal = "Weak fundamentals — not yet"
-    elif zone_status == "in_zone" and score is not None and score >= 60:
+    elif zone_status == "in_zone" and score is not None and score >= 75:
         wl_group = "ready"
         # Signal already set to "✓ In entry zone now" from zone calculation
     else:

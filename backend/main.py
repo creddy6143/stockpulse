@@ -1407,26 +1407,75 @@ def strategy(user_id: str = Depends(get_current_user)):
             pick["price"]      = _lv["price"]
             pick["change_pct"] = _lv["change_pct"]
 
+    # ── Smart Picks strategy — single-source-of-truth thresholds ──────────
+    # Entry threshold: trust ≥ 75 (Strong grade).  Stocks 70-74 are worth
+    # watching but NOT "Ready to Buy".  A daily drop > 8% is a safety
+    # override regardless of score — wait for stabilisation.
+    # This matches the same ≥75 threshold used by _detect_wl_situation and
+    # verify_watchlist_signal so all three UI surfaces stay consistent.
     smart_picks_strat = []
     for pick in cached_picks:
         t = pick.get("trust", {})
         score = t.get("total_score") or 0
+        grade = t.get("grade", "")
+        auto_disq = t.get("auto_disqualified", False)
+        change_pct = float(pick.get("change_pct") or 0)
+
+        # Auto-disqualified stocks are never entry candidates
+        if auto_disq:
+            continue
+
+        # Stocks below trust 70 are not in the smart picks universe
+        if score < 70:
+            continue
+
+        # Safety override: catastrophic drop today (>8%) — not an entry
+        if change_pct <= -8.0:
+            situation_type = "watching"
+            label = "Watch — Major Drop"
+            icon = "⚠️"
+            action = "WAIT"
+            color = "var(--amber)"
+            summary = (f"{grade} · {score}/100 — Down {abs(change_pct):.1f}% today. "
+                       "Wait for price to stabilise before entering.")
+            priority = 3
+
+        elif score >= 75:
+            # Meets entry threshold → truly ready
+            situation_type = "ready_to_buy"
+            label = "Ready to Buy"
+            icon = "🟢"
+            action = "BUY" if score >= 80 else "WATCH"
+            color = "var(--emerald)"
+            summary = f"{grade} · {score}/100 — fundamentals meet the ≥75 entry threshold."
+            priority = 2
+
+        else:
+            # trust 70-74: good stock, not yet at entry threshold
+            situation_type = "watching"
+            label = "Still Watching"
+            icon = "👁"
+            action = "WAIT"
+            color = "var(--indigo)"
+            summary = f"{grade} · {score}/100 — not yet at ≥75 entry threshold. Continue monitoring."
+            priority = 3
+
         smart_picks_strat.append({
             "ticker": pick["ticker"],
             "flag": _get_flag(_detect_market(pick["ticker"])),
-            "situation_type": "ready_to_buy",
-            "label": "Ready to Buy",
-            "icon": "🟢",
-            "action": "BUY" if score >= 80 else "WATCH",
-            "color": "var(--emerald)",
-            "summary": f"{t.get('grade','')!s} · {score}/100 — verified entry conditions met",
-            "priority": 3,
+            "situation_type": situation_type,
+            "label": label,
+            "icon": icon,
+            "action": action,
+            "color": color,
+            "summary": summary,
+            "priority": priority,
             "playbook": None,
             "name": pick.get("name", pick["ticker"]),
             "current_price": pick.get("price", 0),
-            "change_pct": pick.get("change_pct", 0),
+            "change_pct": change_pct,
             "trust_score": score,
-            "grade": t.get("grade", ""),
+            "grade": grade,
             "business_score": t.get("business_score", 0),
             "smart_money_score": t.get("smart_money_score", 0),
             "momentum_score": t.get("momentum_score", 0),
