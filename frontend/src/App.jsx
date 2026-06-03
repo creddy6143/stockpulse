@@ -2759,7 +2759,6 @@ export default function App() {
   // ── Real data state ──
   const [portfolio, setPortfolio] = useState({positions:[], summary:{}});
   const [watchlistRaw, setWatchlistRaw] = useState([]);
-  const [market, setMarket] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [picksData, setPicksData] = useState({picks:[], sector_picks:{}, updated_at:null, scan_status:"idle", tickers_scanned:0, tickers_ok:0, progress_current:0, progress_total:0});
   const [picksLoading, setPicksLoading] = useState(false);
@@ -2783,7 +2782,6 @@ export default function App() {
     const ping = setInterval(() => fetch(`${BASE}/api/ping`).catch(()=>{}), 10*60*1000);
 
     // PRIORITY 1 — critical for Home screen (load first, update state immediately)
-    getMarket().then(v => { if(v) setMarket(v); }).catch(()=>{});
     getAlerts().then(v => { setAlerts(v||[]); }).catch(()=>{});
     getPortfolio().then(v => { setPortfolio(v||{positions:[],summary:{}}); }).catch(()=>{});
 
