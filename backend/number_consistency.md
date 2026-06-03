@@ -22,6 +22,7 @@ any other class of bug.
 | Picks daily % contradicting live % | Stale scan-cache `change_pct` vs live price in header | dip_filter.py |
 | Portfolio categories flipping within a session | `pnl_pct` and `momentum_score` used in classification | classification.py |
 | AI commentary % contradicting header % | Verdict cached 2hr with stale `change_pct` baked in; live header fetches fresh | claude_ai.py |
+| Smart Picks row % contradicting expanded verdict text % | Row gets live price overlay every 90s; verdict prose was baked at scan time (hours ago) | main.py `_apply_live` |
 
 ---
 

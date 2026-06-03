@@ -1038,8 +1038,29 @@ def picks():
         for p in pick_list:
             live = _picks_live_prices.get(p["ticker"])
             if live and live.get("price"):
+                live_chg = float(live.get("change_pct") or 0)
                 p["price"]      = live["price"]
-                p["change_pct"] = live["change_pct"]
+                p["change_pct"] = live_chg
+
+                # ── Verdict prose drift check ──────────────────────────────
+                # The compact row now shows live_chg (current market price).
+                # The verdict text was written by Claude at scan time and may
+                # mention a different daily % figure. If the daily move has
+                # shifted more than 0.5pp since generation, null out only the
+                # prose text fields so the two numbers cannot contradict.
+                # Recommendation, confidence_pct, and time_horizon are
+                # structural fields — they stay because they don't embed a
+                # specific daily % figure.
+                v = p.get("verdict") or {}
+                at_gen = v.get("_change_pct_at_generation")
+                if at_gen is not None and abs(live_chg - float(at_gen)) > 0.5:
+                    p["verdict"] = {
+                        **v,
+                        "verdict":               None,
+                        "key_risk":              None,
+                        "stop_loss_explanation": None,
+                        "_drift_suppressed":     True,
+                    }
 
     _apply_live(top_picks)
     for sector_list in sector_picks.values():

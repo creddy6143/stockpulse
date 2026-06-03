@@ -405,7 +405,13 @@ const mapPick = pick => {
   const col = total >= 90 ? "#059669" : "#5b72f8";
   const price = pick.price || 0;
   const curr = cu(pick.ticker);
-  const sigs = [verdict.verdict, verdict.key_risk ? `Risk: ${verdict.key_risk}` : null, verdict.stop_loss_explanation].filter(Boolean);
+  // Drift-suppressed: backend nulled prose text because price moved >0.5pp
+  // since the verdict was generated. Show an honest placeholder so the user
+  // never sees a % figure in the text that contradicts the live row number.
+  const driftSuppressed = verdict._drift_suppressed || false;
+  const sigs = driftSuppressed
+    ? []
+    : [verdict.verdict, verdict.key_risk ? `Risk: ${verdict.key_risk}` : null, verdict.stop_loss_explanation].filter(Boolean);
 
   return {
     ticker: pick.ticker, name: pick.name||pick.ticker, trust: total,
@@ -423,7 +429,9 @@ const mapPick = pick => {
     filtersPassed: cl.filters_passed || 0,
     filtersFailed: cl.filters_failed || 0,
     filtersUnknown: cl.filters_unknown || 0,
-    sigs: sigs.length ? sigs : ["Strong fundamentals across all three pillars."],
+    sigs: sigs.length ? sigs : driftSuppressed
+      ? ["Price moved since last scan — analysis text withheld to avoid contradictions. Scores and recommendation are current."]
+      : ["Strong fundamentals across all three pillars."],
     potential: pick.is_dip
       ? `${(pick.change_pct||0).toFixed(1)}% dip`
       : cvScore >= 80 ? "+50-80%" : cvScore >= 70 ? "+30-50%" : `+${Math.round((total-60)*1.2+15)}%`,
