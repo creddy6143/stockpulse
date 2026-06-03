@@ -76,6 +76,9 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm);overscroll-behav
 @keyframes exIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.mkt-card{background:var(--white);border-radius:var(--rm);padding:12px;box-shadow:var(--shadowsm);border:1px solid transparent}
+.mkt-card.b{border-color:rgba(91,114,248,.1);background:linear-gradient(135deg,#f0f5ff,#fff)}
+.mk-label{font-family:var(--mono);font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}
 .search-wrap{background:var(--white);border:1.5px solid var(--t4);border-radius:var(--rm);padding:10px 13px;display:flex;align-items:center;gap:8px;margin-bottom:12px;box-shadow:var(--shadowsm)}
 .search-wrap:focus-within{border-color:var(--sky)}
 .si-inp{background:none;border:none;outline:none;color:var(--t1);font-family:var(--dm);font-size:13px;flex:1}
@@ -1114,9 +1117,16 @@ function PortfolioArc({positions, summary}) {
 }
 
 // ── HOME SCREEN ──────────────────────────────────────
-function HomeScreen({positions, summary, earnings, onEarnings}) {
+function HomeScreen({positions, summary, earnings, market, onEarnings}) {
   const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
   const upcomingEarnings = (earnings||[]).filter(e=>e.date!=="Today"&&e.date!=="—");
+  const sessions = market?.market_sessions || {};
+  const indices = [
+    {flag:"🇺🇸", name:"S&P 500",    d:market?.sp500,  sessKey:"us"},
+    {flag:"🇺🇸", name:"Nasdaq",     d:market?.nasdaq, sessKey:"us"},
+    {flag:"🇪🇺", name:"DAX",        d:market?.dax,    sessKey:"eu"},
+    {flag:"🇮🇳", name:"India (NSE)",d:market?.nifty,  sessKey:"in"},
+  ];
   return (
     <div className="pad" style={{paddingTop:12}}>
       <PortfolioArc positions={positions} summary={summary}/>
@@ -1168,6 +1178,27 @@ function HomeScreen({positions, summary, earnings, onEarnings}) {
             No earnings this week for your tracked stocks
           </div>
         )}
+      </div>
+
+      {/* Markets Today — session-aware index table */}
+      <div className="mkt-card b" style={{marginBottom:14}}>
+        <div className="mk-label">Markets Today</div>
+        {indices.map((m,i)=>{
+          const chg = m.d?.change_pct;
+          const up  = chg != null ? chg >= 0 : true;
+          const val = chg != null ? `${up?"+":""}${chg.toFixed(1)}%` : "—";
+          const sess   = sessions[m.sessKey];
+          const isOpen = sess?.state === "open";
+          return (
+            <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4}}>
+              <span style={{fontSize:10,color:"var(--t2)"}}>{m.flag} {m.name}</span>
+              {isOpen || !sess
+                ? <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:up?"var(--emerald)":"var(--rose)"}}>{val}</span>
+                : <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{sess?.label||"Closed"}</span>
+              }
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2767,6 +2798,7 @@ export default function App() {
   // ── Real data state ──
   const [portfolio, setPortfolio] = useState({positions:[], summary:{}});
   const [watchlistRaw, setWatchlistRaw] = useState([]);
+  const [market, setMarket] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [picksData, setPicksData] = useState({picks:[], sector_picks:{}, updated_at:null, scan_status:"idle", tickers_scanned:0, tickers_ok:0, progress_current:0, progress_total:0});
   const [picksLoading, setPicksLoading] = useState(false);
@@ -2790,6 +2822,7 @@ export default function App() {
     const ping = setInterval(() => fetch(`${BASE}/api/ping`).catch(()=>{}), 10*60*1000);
 
     // PRIORITY 1 — critical for Home screen (load first, update state immediately)
+    getMarket().then(v => { if(v) setMarket(v); }).catch(()=>{});
     getAlerts().then(v => { setAlerts(v||[]); }).catch(()=>{});
     getPortfolio().then(v => { setPortfolio(v||{positions:[],summary:{}}); }).catch(()=>{});
 
@@ -2875,7 +2908,7 @@ export default function App() {
   const urgentCount = urgent.length;
 
   const screens = [
-    <HomeScreen positions={allPositions} summary={portfolio.summary} earnings={earnings} onEarnings={()=>setShowEarnings(true)}/>,
+    <HomeScreen positions={allPositions} summary={portfolio.summary} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
     <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} onSetAlert={handleSetAlert}/>,
     <SmartPicksScreen picksData={picksData} disq={disq} accuracy={accuracy} loading={picksLoading} onSetAlert={handleSetAlert} onRefreshPicks={()=>{
       setPicksLoading(true);
