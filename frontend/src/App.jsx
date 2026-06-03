@@ -76,13 +76,6 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm);overscroll-behav
 @keyframes exIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-.mkt-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
-.mkt-card{background:var(--white);border-radius:var(--rm);padding:12px;box-shadow:var(--shadowsm);border:1px solid transparent}
-.mkt-card.g{border-color:rgba(5,150,105,.12);background:linear-gradient(135deg,#f0fdf9,#fff)}
-.mkt-card.b{border-color:rgba(91,114,248,.1);background:linear-gradient(135deg,#f0f5ff,#fff)}
-.mk-label{font-family:var(--mono);font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}
-.mk-val{font-family:var(--mono);font-size:15px;font-weight:700;margin-bottom:2px}
-.mk-sub{font-size:9px;color:var(--t3)}
 .search-wrap{background:var(--white);border:1.5px solid var(--t4);border-radius:var(--rm);padding:10px 13px;display:flex;align-items:center;gap:8px;margin-bottom:12px;box-shadow:var(--shadowsm)}
 .search-wrap:focus-within{border-color:var(--sky)}
 .si-inp{background:none;border:none;outline:none;color:var(--t1);font-family:var(--dm);font-size:13px;flex:1}
@@ -198,9 +191,6 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm);overscroll-behav
 .score-pillar-bar{flex:2;height:6px;background:rgba(15,23,42,.06);border-radius:3px;overflow:hidden}
 .score-pillar-fill{height:100%;border-radius:3px;transition:width .4s ease}
 .score-pillar-val{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1);width:36px;text-align:right}
-.vix-scroll{display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
-.vix-scroll::-webkit-scrollbar{display:none}
-.vix-card{flex:0 0 calc(33.3% - 4px);background:var(--white);border-radius:var(--rm);padding:10px 10px;box-shadow:var(--shadowsm);border:1px solid rgba(15,23,42,.06);min-width:90px}
 .alert-panel-overlay{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:300;display:flex;flex-direction:column;justify-content:flex-end;backdrop-filter:blur(4px);max-width:400px;margin:0 auto}
 .alert-panel-box{background:var(--bg);border-radius:22px 22px 0 0;padding:18px 16px 36px;max-height:80vh;overflow-y:auto;scrollbar-width:none;animation:slideUp .3s cubic-bezier(.32,.72,0,1)}
 .alert-panel-box::-webkit-scrollbar{display:none}
@@ -1116,61 +1106,9 @@ function PortfolioArc({positions, summary}) {
 }
 
 // ── HOME SCREEN ──────────────────────────────────────
-function HomeScreen({positions, summary, earnings, market, onEarnings}) {
+function HomeScreen({positions, summary, earnings, onEarnings}) {
   const todayEarnings = (earnings||[]).filter(e=>e.date==="Today");
   const upcomingEarnings = (earnings||[]).filter(e=>e.date!=="Today"&&e.date!=="—");
-  const vix = market?.vix?.price || 0;
-  // US VIX: 13-20 = normal, 20-27 = choppy, 27-35 = stressed, 35+ = panic
-  const vixLabel = !vix      ? "—"
-                 : vix >= 35 ? "🔴 Panic"
-                 : vix >= 27 ? "🔴 Stressed"
-                 : vix >= 20 ? "🟡 Choppy"
-                 : vix >= 13 ? "🟢 Normal"
-                 : "🟢 Calm";
-  const vixColor = !vix      ? "var(--t3)"
-                 : vix >= 27 ? "var(--rose)"
-                 : vix >= 20 ? "var(--amber)"
-                 : "var(--emerald)";
-  const vixSub = !vix      ? "Data unavailable"
-               : vix >= 35 ? "Extreme fear — avoid new positions"
-               : vix >= 27 ? "High fear — reduce risk"
-               : vix >= 20 ? "Elevated volatility — be selective"
-               : vix >= 13 ? "Normal range — healthy market"
-               : "Very low fear — ideal conditions";
-
-  const vstoxx = market?.vstoxx?.price || 0;
-  const indiaVix = market?.india_vix?.price || 0;
-
-  // EU VSTOXX: structurally higher than VIX — 15-22 = normal, 22-30 = choppy, 30+ = stressed
-  const vstoxxLabel = !vstoxx      ? "—"
-                    : vstoxx >= 35 ? "🔴 Stressed"
-                    : vstoxx >= 22 ? "🟡 Choppy"
-                    : vstoxx >= 15 ? "🟢 Normal"
-                    : "🟢 Calm";
-  const vstoxxColor = !vstoxx      ? "var(--t3)"
-                    : vstoxx >= 35 ? "var(--rose)"
-                    : vstoxx >= 22 ? "var(--amber)"
-                    : "var(--emerald)";
-
-  // India VIX: similar range to US VIX — 14-20 = normal, 20-28 = choppy, 28+ = stressed
-  const indiaVixLabel = !indiaVix       ? "—"
-                      : indiaVix >= 35  ? "🔴 Panic"
-                      : indiaVix >= 28  ? "🔴 Stressed"
-                      : indiaVix >= 20  ? "🟡 Choppy"
-                      : indiaVix >= 14  ? "🟢 Normal"
-                      : "🟢 Calm";
-  const indiaVixColor = !indiaVix      ? "var(--t3)"
-                      : indiaVix >= 28 ? "var(--rose)"
-                      : indiaVix >= 20 ? "var(--amber)"
-                      : "var(--emerald)";
-  const sessions = market?.market_sessions || {};
-  const openCount = [sessions.us, sessions.eu, sessions.in].filter(s=>s?.state==="open").length;
-  const indices = [
-    {flag:"🇺🇸", name:"S&P 500",    d:market?.sp500, sessKey:"us"},
-    {flag:"🇺🇸", name:"Nasdaq",     d:market?.nasdaq, sessKey:"us"},
-    {flag:"🇪🇺", name:"DAX",        d:market?.dax, sessKey:"eu"},
-    {flag:"🇮🇳", name:"India (NSE)",d:market?.nifty, sessKey:"in"},
-  ];
   return (
     <div className="pad" style={{paddingTop:12}}>
       <PortfolioArc positions={positions} summary={summary}/>
@@ -1222,56 +1160,6 @@ function HomeScreen({positions, summary, earnings, market, onEarnings}) {
             No earnings this week for your tracked stocks
           </div>
         )}
-      </div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>Market Conditions</span>
-        <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>
-          {openCount > 0 ? `${openCount}/3 open` : "All closed"} · yfinance
-        </span>
-      </div>
-      {/* 3 VIX cards — scrollable row */}
-      <div className="vix-scroll">
-        {[
-          {label:"US VIX", sub:vixSub, val:vix, color:vixColor, badge:vixLabel, sess:sessions.us},
-          {label:"EU VSTOXX", sub:"EURO STOXX Volatility", val:vstoxx, color:vstoxxColor, badge:vstoxxLabel, sess:sessions.eu},
-          {label:"India VIX", sub:"NSE Nifty Volatility", val:indiaVix, color:indiaVixColor, badge:indiaVixLabel, sess:sessions.in},
-        ].map((v,i)=>(
-          <div key={i} className="vix-card">
-            <div className="mk-label">{v.label}</div>
-            <div style={{display:"flex",alignItems:"baseline",gap:4}}>
-              <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:v.val>0?v.color:"var(--t3)",lineHeight:1.1}}>
-                {v.val > 0 ? v.val.toFixed(1) : "—"}
-              </div>
-              {v.val > 0 && <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:v.color}}>{v.badge}</span>}
-            </div>
-            <div style={{fontSize:8,color:"var(--t3)",marginTop:2,lineHeight:1.3}}>{v.sub}</div>
-            {v.sess && (
-              <div style={{fontFamily:"var(--mono)",fontSize:7,color:v.sess.state==="open"?"var(--emerald)":"var(--t3)",marginTop:3}}>
-                {v.sess.label}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-      {/* Markets Today — session-aware */}
-      <div className="mkt-card b" style={{marginBottom:14}}>
-        <div className="mk-label">Markets Today</div>
-        {indices.map((m,i)=>{
-          const chg = m.d?.change_pct;
-          const up = chg != null ? chg >= 0 : true;
-          const val = chg != null ? `${up?"+":""}${chg.toFixed(1)}%` : "—";
-          const sess = sessions[m.sessKey];
-          const isOpen = sess?.state === "open";
-          return (
-            <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4}}>
-              <span style={{fontSize:10,color:"var(--t2)"}}>{m.flag} {m.name}</span>
-              {isOpen || !sess
-                ? <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:up?"var(--emerald)":"var(--rose)"}}>{val}</span>
-                : <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{sess?.label||"Closed"}</span>
-              }
-            </div>
-          );
-        })}
       </div>
     </div>
   );
@@ -2974,24 +2862,6 @@ export default function App() {
   const wlWatch = watchlistRaw.filter(w=>w.wl_group==="watching").map(mapWatchlistItem);
   const wlAvoid = watchlistRaw.filter(w=>w.wl_group==="avoid").map(mapWatchlistItem);
 
-  // ── Market status ──
-  // Header label is computed from VIX + index breadth — never hardcoded.
-  const vix = market?.vix?.price || 0;
-  const _sp  = market?.sp500?.change_pct  || 0;
-  const _nq  = market?.nasdaq?.change_pct || 0;
-  const _dax = market?.dax?.change_pct    || 0;
-  const _nft = market?.nifty?.change_pct  || 0;
-  const _idxGreen = [_sp, _nq, _dax, _nft].filter(c => c > 0).length;
-  const _majorityUp = _idxGreen >= 2;
-
-  const mktLabel = vix >= 35 ? "Market Panic"
-                 : vix >= 27 ? "Market Stressed"
-                 : vix >= 20 ? "Market Choppy"
-                 : vix >= 13 ? "Market Stable"
-                 : vix > 0   ? "Market Calm"
-                 : (_majorityUp ? "Markets Up" : "Market Stable");
-  const mktDotColor = vix >= 27 ? "#ef4444" : vix >= 20 ? "#f59e0b" : "#4ade80";
-
   const unreadCount = (alerts||[]).filter(a=>!a.is_read).length;
 
   // ── Badges ──
@@ -2999,7 +2869,7 @@ export default function App() {
   const urgentCount = urgent.length;
 
   const screens = [
-    <HomeScreen positions={allPositions} summary={portfolio.summary} earnings={earnings} market={market} onEarnings={()=>setShowEarnings(true)}/>,
+    <HomeScreen positions={allPositions} summary={portfolio.summary} earnings={earnings} onEarnings={()=>setShowEarnings(true)}/>,
     <StocksScreen urgent={urgent} watch={watch} good={good} wlReady={wlReady} wlWatch={wlWatch} wlAvoid={wlAvoid} onDetail={setSel} onAdd={refreshData} onSetAlert={handleSetAlert}/>,
     <SmartPicksScreen picksData={picksData} disq={disq} accuracy={accuracy} loading={picksLoading} onSetAlert={handleSetAlert} onRefreshPicks={()=>{
       setPicksLoading(true);

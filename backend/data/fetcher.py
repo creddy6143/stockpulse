@@ -835,16 +835,23 @@ def get_market_data() -> dict:
     _green = sum(1 for c in _valid if c > 0)
     _majority_up = (_green >= len(_valid) / 2) if _valid else True
 
-    # Correct financial VIX thresholds — 16-17 is normal/stable, NOT choppy.
+    # VIX thresholds — 13-20 is the "normal" range but direction still matters.
+    # A broad selloff with VIX still in the 13-20 band deserves "Choppy" (amber),
+    # not "Calm" (green). Threshold: majority of indices down >0.8% on the day.
     # <13 = very calm, 13-20 = normal range, 20-27 = elevated, 27-35 = stressed, 35+ = panic
+    _significant_down = sum(1 for c in _valid if c < -0.8) if _valid else 0
+    _broad_selloff = _valid and _significant_down >= max(1, len(_valid) // 2)
+
     if vix_level <= 0:
         # VIX data unavailable — infer from index direction only
         if not _valid:
             status = {"label": "Market Data Unavailable", "dot": "calm", "color": "green"}
         elif _majority_up:
             status = {"label": "Markets Up",    "dot": "calm",   "color": "green"}
+        elif _broad_selloff:
+            status = {"label": "Market Choppy", "dot": "choppy", "color": "amber"}
         else:
-            status = {"label": "Markets Mixed", "dot": "choppy", "color": "amber"}
+            status = {"label": "Markets Mixed", "dot": "calm",   "color": "green"}
     elif vix_level >= 35:
         status = {"label": "Market Alert",   "dot": "alert",  "color": "rose"}
     elif vix_level >= 27:
@@ -852,11 +859,14 @@ def get_market_data() -> dict:
     elif vix_level >= 20:
         status = {"label": "Market Choppy",  "dot": "choppy", "color": "amber"}
     elif vix_level >= 13:
-        # Normal VIX range — refine label by whether indices are up or down
+        # Normal VIX range — incorporate index direction so a broad selloff
+        # (e.g. Dow -600pts, S&P -1.5%+) correctly reads "Choppy" not "Calm".
         if _majority_up:
             status = {"label": "Market Calm",   "dot": "calm",   "color": "green"}
+        elif _broad_selloff:
+            status = {"label": "Market Choppy", "dot": "choppy", "color": "amber"}
         else:
-            status = {"label": "Market Stable", "dot": "calm",   "color": "green"}
+            status = {"label": "Market Mixed",  "dot": "calm",   "color": "green"}
     else:
         # VIX below 13 — very low fear regardless of direction
         status = {"label": "Market Calm",    "dot": "calm",   "color": "green"}
