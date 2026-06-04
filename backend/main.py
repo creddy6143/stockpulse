@@ -769,6 +769,8 @@ def _score_one_ticker(ticker: str) -> dict | None:
             "is_dip": is_dip,
             "consec_dip_days": consec_dip_days,
             "week_change": week_change,
+            "h6m_change": float(hist.get("6M") or 0),
+            "h1y_change": float(hist.get("1Y") or 0),
             "sector": _get_sector(ticker, fundamentals),
             "verification": trust.get("verification"),
             "conviction_lens": conviction_lens,
@@ -1552,6 +1554,12 @@ def strategy(user_id: str = Depends(get_current_user)):
             "situation_label": t.get("situation_label"),
             "situation_note": t.get("situation_note"),
             "sector": pick.get("sector", ""),
+            # Price trend context — shows 6M/1Y return so the user can see
+            # whether the stock is in a long-term uptrend or correction.
+            # The trust score measures business quality, not price trend.
+            # These fields let the UI surface that distinction honestly.
+            "h6m_change": float(pick.get("h6m_change") or 0),
+            "h1y_change": float(pick.get("h1y_change") or 0),
         })
 
     # ── DIP BUYS — serve from background cache (refreshed every 90s)

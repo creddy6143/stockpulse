@@ -447,6 +447,8 @@ const mapPick = pick => {
     sector: pick.sector || "Other",
     situationLabel: trust.situation_label || null,
     situationNote: trust.situation_note || null,
+    h6m: pick.h6m_change || 0,
+    h1y: pick.h1y_change || 0,
   };
 };
 
@@ -2253,6 +2255,22 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
               {s.situationNote&&<span style={{fontSize:10,color:"var(--t2)",lineHeight:1.5}}>{s.situationNote}</span>}
             </div>
           );})()}
+          {/* Price trend strip — shows 6M / 1Y price performance so the user
+              can see whether the business quality (trust score) matches the
+              stock's recent price trend. Good business + falling price =
+              extended correction, not disqualifying but worth knowing. */}
+          {(s.h6m !== 0 || s.h1y !== 0) && (
+            <div style={{display:"flex",gap:6,marginBottom:9}}>
+              <div style={{flex:1,background:"rgba(15,23,42,.03)",borderRadius:7,padding:"5px 8px",textAlign:"center",border:"1px solid rgba(15,23,42,.05)"}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:2,textTransform:"uppercase",letterSpacing:.8}}>6M Return</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.h6m>=0?"var(--emerald)":"var(--rose)"}}>{s.h6m>=0?"+":""}{s.h6m.toFixed(0)}%</div>
+              </div>
+              <div style={{flex:1,background:"rgba(15,23,42,.03)",borderRadius:7,padding:"5px 8px",textAlign:"center",border:"1px solid rgba(15,23,42,.05)"}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:2,textTransform:"uppercase",letterSpacing:.8}}>1Y Return</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.h1y>=0?"var(--emerald)":"var(--rose)"}}>{s.h1y>=0?"+":""}{s.h1y.toFixed(0)}%</div>
+              </div>
+            </div>
+          )}
           {/* Conviction score section (when available) */}
           {hasCv&&(
             <div style={{marginBottom:9}}>
@@ -2756,6 +2774,22 @@ function StrategyScreen({strategyData, onDetail}) {
                   ):(
                     <div style={{fontSize:12,color:"var(--t1)",lineHeight:1.7,marginBottom:13,borderLeft:"3px solid "+(s.col||"var(--indigo)"),paddingLeft:10}}>
                       {playbook||s.summary}
+                    </div>
+                  )}
+                  {/* Price trend strip — only shown for smart picks rows that
+                      carry h6m_change / h1y_change from the backend. Shows the
+                      6M and 1Y price return alongside the trust score so the
+                      user can distinguish "good business" from "good entry". */}
+                  {(s.h6m_change !== undefined && (s.h6m_change !== 0 || s.h1y_change !== 0)) && (
+                    <div style={{display:"flex",gap:6,marginBottom:10}}>
+                      <div style={{flex:1,background:"rgba(15,23,42,.03)",borderRadius:7,padding:"5px 8px",textAlign:"center",border:"1px solid rgba(15,23,42,.05)"}}>
+                        <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:2,textTransform:"uppercase",letterSpacing:.8}}>6M Return</div>
+                        <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.h6m_change>=0?"var(--emerald)":"var(--rose)"}}>{s.h6m_change>=0?"+":""}{(s.h6m_change||0).toFixed(0)}%</div>
+                      </div>
+                      <div style={{flex:1,background:"rgba(15,23,42,.03)",borderRadius:7,padding:"5px 8px",textAlign:"center",border:"1px solid rgba(15,23,42,.05)"}}>
+                        <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:2,textTransform:"uppercase",letterSpacing:.8}}>1Y Return</div>
+                        <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:s.h1y_change>=0?"var(--emerald)":"var(--rose)"}}>{s.h1y_change>=0?"+":""}{(s.h1y_change||0).toFixed(0)}%</div>
+                      </div>
                     </div>
                   )}
                   <button
