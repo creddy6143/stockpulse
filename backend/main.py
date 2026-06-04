@@ -98,6 +98,8 @@ def startup():
     _maybe_auto_scan()
     # Pre-warm price + fundamentals cache so the first /api/portfolio request is fast.
     threading.Thread(target=_prewarm_portfolio_cache, daemon=True).start()
+    # Pre-warm dip scan cache so first /api/strategy request returns instantly.
+    threading.Thread(target=_refresh_dip_scan, daemon=True).start()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
@@ -788,6 +790,49 @@ _scan_running = False
 _picks_live_prices: dict = {}   # {ticker: {price, change_pct}}
 _picks_live_ts: float = 0.0
 _PICKS_PRICE_TTL = 90           # seconds — refresh live prices at most every 90s
+
+# Dip scan in-memory cache — run_dip_scan() is expensive (18+ sequential
+# fetches). Cache the result and refresh in background every 90s so
+# /api/strategy and /api/dips return instantly from the cache.
+_dip_scan_result: list = []
+_dip_scan_ts: float    = 0.0
+_DIP_SCAN_TTL          = 90    # seconds
+
+
+def _refresh_dip_scan() -> None:
+    """Run the 28-filter dip scan in a background thread and update cache."""
+    global _dip_scan_result, _dip_scan_ts
+    try:
+        _picks_cache = db.get_picks_cache()
+        _all = _json.loads(_picks_cache["all_picks_json"]) if _picks_cache and _picks_cache.get("all_picks_json") else []
+        _dips_only  = [p for p in _all if p.get("is_dip")]
+        _mains_only = [p for p in _all if not p.get("is_dip")]
+        universe    = _mains_only[:100] + _dips_only[:10]
+
+        # Overlay live prices so the change_pct pre-filter uses today's move
+        for pick in universe:
+            lv = _picks_live_prices.get(pick["ticker"])
+            if lv and lv.get("price"):
+                pick["price"]      = lv["price"]
+                pick["change_pct"] = lv["change_pct"]
+
+        market_data = get_market_data()
+        portfolio   = db.get_portfolio()   # raw DB rows — for sector diversity check
+        watchlist   = db.get_watchlist()   # raw DB rows — for on_watchlist priority boost
+
+        candidates = run_dip_scan(
+            picks_universe=universe,
+            market_data=market_data,
+            user_portfolio=[{"ticker": p["ticker"], "sector": ""} for p in portfolio],
+            user_watchlist=[{"ticker": w["ticker"]} for w in watchlist],
+            current_picks_tickers={p["ticker"] for p in _mains_only},
+            top_n=15,
+        )
+        _dip_scan_result = candidates
+        _dip_scan_ts = _time.monotonic()
+        print(f"[DIP] Cache refreshed: {len(candidates)} candidates", flush=True)
+    except Exception as exc:
+        print(f"[DIP] Refresh failed: {exc}", flush=True)
 
 
 def _run_picks_scan_background():
@@ -1509,17 +1554,12 @@ def strategy(user_id: str = Depends(get_current_user)):
             "sector": pick.get("sector", ""),
         })
 
-    # ── DIP BUYS — Quality Pullback / Healthy Dip Filter ────────────────────
-    # Runs the 28-filter stack from intelligence/dip_filter.py.
-    # All 28 filters must pass (UNKNOWN tolerated). Hard FAILs disqualify.
-    dip_candidates = run_dip_scan(
-        picks_universe=cached_picks,
-        market_data=market_data,
-        user_portfolio=portfolio_data.get("positions", []),
-        user_watchlist=watchlist_data if isinstance(watchlist_data, list) else [],
-        current_picks_tickers={p["ticker"] for p in _mains},
-        top_n=15,
-    )
+    # ── DIP BUYS — serve from background cache (refreshed every 90s)
+    # run_dip_scan() is slow (18+ sequential fetches); never run it on the
+    # hot path. _refresh_dip_scan() runs in background and updates the cache.
+    if _time.monotonic() - _dip_scan_ts > _DIP_SCAN_TTL:
+        threading.Thread(target=_refresh_dip_scan, daemon=True).start()
+    dip_candidates = list(_dip_scan_result)  # snapshot
 
     dip_buys = []
     for d in dip_candidates:
@@ -1660,14 +1700,10 @@ def get_dips(user_id: str = Depends(get_current_user)):
             pick["price"]      = _lv["price"]
             pick["change_pct"] = _lv["change_pct"]
 
-    dip_candidates = run_dip_scan(
-        picks_universe=cached,
-        market_data=market_data,
-        user_portfolio=portfolio_data.get("positions", []),
-        user_watchlist=watchlist_data if isinstance(watchlist_data, list) else [],
-        current_picks_tickers={p["ticker"] for p in _mains_only},
-        top_n=15,
-    )
+    # Serve from background cache — same as /api/strategy
+    if _time.monotonic() - _dip_scan_ts > _DIP_SCAN_TTL:
+        threading.Thread(target=_refresh_dip_scan, daemon=True).start()
+    dip_candidates = list(_dip_scan_result)
 
     _PRIVATE = {"_watchlist_boost", "_pick_boost", "sector_concentrated"}
     clean_dips = [{k: v for k, v in d.items() if k not in _PRIVATE} for d in dip_candidates]
