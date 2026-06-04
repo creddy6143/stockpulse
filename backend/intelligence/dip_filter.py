@@ -266,33 +266,39 @@ def evaluate_dip_candidate(
         filters.append(_f(8, "Within 15% of 50-day MA (at support)", 2, "UNKNOWN",
                           "MA50 data unavailable", "≤ 15% away"))
 
-    # F9 — RSI 28–58 (cooling off sweet spot)
+    # F9 — RSI 25–65 (cooling off sweet spot)
+    # Upper bound raised from 58 to 65: RSI 58-65 is "mild cooling" not overbought
+    # (overbought is typically > 70). The old 58 ceiling caused quality stocks like
+    # AMZN to flicker in/out of qualification on minor intraday RSI fluctuations.
     if rsi is not None:
-        if not (28.0 <= rsi <= 58.0):
-            filters.append(_f(9, "RSI between 28 and 58 (cooling off sweet spot)", 2, "FAIL",
+        if not (25.0 <= rsi <= 65.0):
+            filters.append(_f(9, "RSI between 25 and 65 (cooling off sweet spot)", 2, "FAIL",
                               f"RSI {rsi:.1f}",
-                              "28–58",
-                              "Overbought" if rsi > 58 else "Extremely oversold"))
+                              "25–65",
+                              "Overbought" if rsi > 65 else "Extremely oversold"))
             return None
-        filters.append(_f(9, "RSI between 28 and 58 (cooling off sweet spot)", 2, "PASS",
-                          f"RSI {rsi:.1f}", "28–58"))
+        filters.append(_f(9, "RSI between 25 and 65 (cooling off sweet spot)", 2, "PASS",
+                          f"RSI {rsi:.1f}", "25–65"))
     else:
-        filters.append(_f(9, "RSI between 28 and 58 (cooling off sweet spot)", 2, "UNKNOWN",
-                          "Insufficient price history for RSI", "28–58"))
+        filters.append(_f(9, "RSI between 25 and 65 (cooling off sweet spot)", 2, "UNKNOWN",
+                          "Insufficient price history for RSI", "25–65"))
 
-    # F10 — Not down >25% from 52-week high (healthy dip, not a crash)
+    # F10 — Not down >35% from 52-week high (healthy dip, not a crash)
+    # Threshold widened from 25% to 35%: in the 2024-2025 market correction,
+    # many quality large-caps pulled back 25-35% from their highs even while
+    # maintaining positive 6M/1Y trends. The -25% floor was too strict.
     if w52h > 0 and price > 0:
         pct_from_high = (price - w52h) / w52h * 100
-        if pct_from_high < -25.0:
-            filters.append(_f(10, "Not down >25% from 52-week high", 2, "FAIL",
+        if pct_from_high < -35.0:
+            filters.append(_f(10, "Not down >35% from 52-week high", 2, "FAIL",
                               f"{pct_from_high:.1f}% from high ${w52h:.2f}",
-                              "≤ -25% from high", "Too far from highs — falling knife"))
+                              "≤ -35% from high", "Too far from highs — falling knife"))
             return None
-        filters.append(_f(10, "Not down >25% from 52-week high", 2, "PASS",
-                          f"{pct_from_high:.1f}% from high ${w52h:.2f}", "≤ -25%"))
+        filters.append(_f(10, "Not down >35% from 52-week high", 2, "PASS",
+                          f"{pct_from_high:.1f}% from high ${w52h:.2f}", "≤ -35%"))
     else:
-        filters.append(_f(10, "Not down >25% from 52-week high", 2, "UNKNOWN",
-                          "52-week high unavailable", "≤ -25%"))
+        filters.append(_f(10, "Not down >35% from 52-week high", 2, "UNKNOWN",
+                          "52-week high unavailable", "≤ -35%"))
 
     # ── TIER 3 — CONVICTION ───────────────────────────────────────────────────
 
@@ -462,23 +468,31 @@ def evaluate_dip_candidate(
 
     # ── TIER 6 — SANITY CHECKS ────────────────────────────────────────────────
 
-    # F24 — Not down more than 2% over trailing 6 months (no sustained decline)
-    if h6m < -2.0:
-        filters.append(_f(24, "Not down more than 2% over trailing 6 months", 6, "FAIL",
-                          f"{h6m:+.1f}%", "≥ -2%",
-                          "Mid-term trend is declining"))
+    # F24 — Not down more than 15% over trailing 6 months (no severe sustained decline)
+    # Threshold relaxed from -2% to -15%: a -2% floor was hair-trigger and rejected
+    # quality stocks that pulled back modestly over 6 months while still being in a
+    # healthy long-term uptrend (positive 1Y). The -15% floor still blocks stocks in
+    # genuine multi-month bear markets while allowing normal 6-month corrections.
+    if h6m < -15.0:
+        filters.append(_f(24, "Not down more than 15% over trailing 6 months", 6, "FAIL",
+                          f"{h6m:+.1f}%", "≥ -15%",
+                          "Mid-term trend declining — not a healthy dip"))
         return None
-    filters.append(_f(24, "Not down more than 2% over trailing 6 months", 6, "PASS",
-                      f"{h6m:+.1f}%", "≥ -2%"))
+    filters.append(_f(24, "Not down more than 15% over trailing 6 months", 6, "PASS",
+                      f"{h6m:+.1f}%", "≥ -15%"))
 
     # F25 — At least flat over trailing 12 months (long-term trend intact)
-    if h1y < -5.0:   # slight tolerance: allow -5% (some year-ago peaks were ATHs)
-        filters.append(_f(25, "Flat or up over trailing 12 months", 6, "FAIL",
-                          f"{h1y:+.1f}%", "≥ -5% (1Y)",
-                          "Long-term trend broken"))
+    # Tolerance widened from -5% to -20%: corrects for market-wide drawdowns in
+    # 2024-2025 where quality stocks with strong fundamentals underperformed the
+    # index temporarily. The -20% floor still blocks persistent long-term losers
+    # while allowing stocks in sector-wide corrections.
+    if h1y < -20.0:
+        filters.append(_f(25, "Not down more than 20% over trailing 12 months", 6, "FAIL",
+                          f"{h1y:+.1f}%", "≥ -20% (1Y)",
+                          "Long-term trend broken — avoid"))
         return None
-    filters.append(_f(25, "Flat or up over trailing 12 months", 6, "PASS",
-                      f"{h1y:+.1f}%", "≥ -5%"))
+    filters.append(_f(25, "Not down more than 20% over trailing 12 months", 6, "PASS",
+                      f"{h1y:+.1f}%", "≥ -20%"))
 
     # F26 — P/E ≤ 1.5× sector median
     sp_pe = SECTOR_PE_MEDIANS.get(sector, 22.0)
@@ -594,7 +608,7 @@ def evaluate_dip_candidate(
     # ── BUILD EVIDENCE SUMMARY ────────────────────────────────────────────────
     evidence_parts = []
     evidence_parts.append(
-        f"Trust {ts} · Down {abs(h1w):.1f}% this week · Today {chg_pct:+.1f}%"
+        f"Trust {ts} · Down {abs(cumulative):.1f}% ({label_period}) · Today {chg_pct:+.1f}%"
     )
     if ma200 > 0:
         pct_a = (price - ma200) / ma200 * 100
@@ -622,7 +636,9 @@ def evaluate_dip_candidate(
     unknown = sum(1 for f2 in filters if f2["status"] == "UNKNOWN")
 
     # ── LABEL + ICON (based on severity) ─────────────────────────────────────
-    dip_abs = abs(h1w)
+    # Use `cumulative` (the qualifying period's return) — not always h1w
+    # because post-peak stocks qualify via h3d (h1w is still positive).
+    dip_abs = abs(cumulative)
     if dip_abs >= 12:
         label = "Deep Pullback"
         icon  = "🟢"
