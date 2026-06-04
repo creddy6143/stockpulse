@@ -143,6 +143,7 @@ def evaluate_dip_candidate(
 
     prices_list = hist.get("prices", [])
     closes      = [float(p["price"]) for p in prices_list if p.get("price")]
+    h3d  = float(hist.get("3D") or 0)   # 3-trading-day return
     h1w  = float(hist.get("1W") or 0)
     h6m  = float(hist.get("6M") or 0)
     h1y  = float(hist.get("1Y") or 0)
@@ -193,37 +194,47 @@ def evaluate_dip_candidate(
 
     # ── TIER 2 — DIP QUALITY ──────────────────────────────────────────────────
 
-    # F5 — Multi-day pullback (down today + weekly decline)
-    # Proxy: today is negative AND past week is also down ≥ 1%
-    is_down_today    = chg_pct < -0.3
-    is_down_this_week = h1w < -1.0
+    # F5 — Multi-day pullback: today must be down, AND the move must be sustained.
+    # Two valid patterns:
+    #   (a) Weekly slide  — h1w < -1%  (stock grinding down for days)
+    #   (b) Post-peak selloff — h3d < -5% (surged on event, now unwinding 2+ days)
+    # Pattern (b) catches cases like HUBS: surged +19% on earnings Mon, fell -8%
+    # Tue and -7% Wed — h1w is still +12% but the 3-day return is -15%.
+    is_down_today = chg_pct < -0.3
     if not is_down_today:
-        return None   # positive or flat day — not a dip
-    if not is_down_this_week:
-        # Single-day spike down — not a multi-day pullback
-        filters.append(_f(5, "Multi-day pullback (≥ 2 consecutive down days)", 2, "FAIL",
-                          f"Today {chg_pct:+.1f}%, week {h1w:+.1f}%",
-                          "Down today AND week < -1%",
+        return None   # flat or positive — not a dip
+
+    weekly_slide    = h1w < -1.0
+    post_peak_slide = h3d < -5.0   # meaningful 3-day selloff from a recent peak
+    is_sustained    = weekly_slide or post_peak_slide
+
+    if not is_sustained:
+        filters.append(_f(5, "Multi-day pullback (sustained decline)", 2, "FAIL",
+                          f"Today {chg_pct:+.1f}%, 3d {h3d:+.1f}%, week {h1w:+.1f}%",
+                          "Week < -1% OR 3-day < -5%",
                           "Single-day move — not a sustained pullback"))
         return None
-    filters.append(_f(5, "Multi-day pullback (≥ 2 consecutive down days)", 2, "PASS",
-                      f"Today {chg_pct:+.1f}%, week {h1w:+.1f}%",
-                      "Down today + week < -1%"))
+    mode = "weekly slide" if weekly_slide else "post-peak selloff"
+    filters.append(_f(5, "Multi-day pullback (sustained decline)", 2, "PASS",
+                      f"Today {chg_pct:+.1f}%, 3d {h3d:+.1f}%, week {h1w:+.1f}% ({mode})",
+                      "Week < -1% OR 3-day < -5%"))
 
     # F6 — Cumulative drop between -1.5% and -18%
-    cumulative = h1w   # 1-week return as proxy for cumulative pullback
+    # Use 3-day return when the qualifying pattern was post-peak (h1w still positive).
+    cumulative = h1w if weekly_slide else h3d
+    label_period = "1W" if weekly_slide else "3D"
     if cumulative < -18.0:
         filters.append(_f(6, "Cumulative drop -1.5% to -18%", 2, "FAIL",
-                          f"{cumulative:.1f}% (1W)",
+                          f"{cumulative:.1f}% ({label_period})",
                           "-1.5% to -18%", "Drop too severe — falling knife risk"))
         return None
     if cumulative > -1.5:
         filters.append(_f(6, "Cumulative drop -1.5% to -18%", 2, "FAIL",
-                          f"{cumulative:.1f}% (1W)",
+                          f"{cumulative:.1f}% ({label_period})",
                           "-1.5% to -18%", "Drop too small — not a meaningful pullback"))
         return None
     filters.append(_f(6, "Cumulative drop -1.5% to -18%", 2, "PASS",
-                      f"{cumulative:.1f}% (1W)", "-1.5% to -18%"))
+                      f"{cumulative:.1f}% ({label_period})", "-1.5% to -18%"))
 
     # F7 — Still above 200-day MA (long-term uptrend intact)
     if ma200 > 0 and price > 0:

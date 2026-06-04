@@ -2370,6 +2370,7 @@ def get_stock_history(ticker: str) -> dict:
             prices[-1]["price"] = round(closes[-1], 2)
 
         result = {
+            "3D": pct(3),   # 3-trading-day return — detects post-peak selloffs
             "1W": pct(5), "1M": pct(22), "3M": pct(65),
             "6M": pct(130), "1Y": pct(min(252, len(closes) - 1)),
             "prices": prices,
