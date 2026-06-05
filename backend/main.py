@@ -109,6 +109,48 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
+@app.get("/api/dip-status")
+def dip_status():
+    """No-auth diagnostic endpoint — shows dip scan state for debugging prod."""
+    cache = db.get_picks_cache()
+    picks_count = 0
+    dip_picks_count = 0
+    picks_updated = None
+    top_week_changes = []
+    if cache and cache.get("all_picks_json"):
+        try:
+            all_picks = _json.loads(cache["all_picks_json"])
+            picks_count = len(all_picks)
+            dip_picks_count = sum(1 for p in all_picks if p.get("is_dip"))
+            picks_updated = cache.get("updated_at")
+            # Show top stocks by week_change (most negative = most likely dip candidates)
+            sorted_by_week = sorted(all_picks, key=lambda p: float(p.get("week_change") or 0))
+            top_week_changes = [
+                {
+                    "ticker": p["ticker"],
+                    "week_change": float(p.get("week_change") or 0),
+                    "change_pct": float(p.get("change_pct") or 0),
+                    "trust": int((p.get("trust") or {}).get("total_score") or 0),
+                    "is_dip": bool(p.get("is_dip")),
+                }
+                for p in sorted_by_week[:15]
+            ]
+        except Exception:
+            pass
+
+    candidates = list(_dip_scan_result)
+    age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
+    return {
+        "dip_candidates_in_cache": len(candidates),
+        "scan_age_seconds": age_s,
+        "picks_in_db": picks_count,
+        "dip_picks_in_db": dip_picks_count,
+        "picks_updated_at": picks_updated,
+        "candidates": [{"ticker": c["ticker"], "dip_tier": c.get("dip_tier"), "quality_score": c.get("quality_score")} for c in candidates],
+        "top_15_by_week_change": top_week_changes,
+    }
+
+
 @app.get("/api/auth/me")
 def auth_me(user_id: str = Depends(get_current_user)):
     """Called once on login. Triggers owner-data migration. Returns user UID."""
@@ -841,6 +883,17 @@ def _refresh_dip_scan() -> None:
         market_data = get_market_data()
         portfolio   = db.get_portfolio()   # raw DB rows — for sector diversity check
         watchlist   = db.get_watchlist()   # raw DB rows — for on_watchlist priority boost
+
+        print(f"[DIP] Scanning {len(universe)} picks ({len(_mains_only)} mains, {len(_dips_only)} dips)", flush=True)
+
+        # Log top-5 by week_change so Railway logs show which stocks are pulling back
+        neg_week = [(p["ticker"], float(p.get("week_change") or 0), float(p.get("change_pct") or 0))
+                    for p in universe if float(p.get("week_change") or 0) < -1.0]
+        neg_week.sort(key=lambda x: x[1])
+        if neg_week:
+            print(f"[DIP] Weekly pullbacks in universe: {neg_week[:10]}", flush=True)
+        else:
+            print("[DIP] No weekly pullbacks >1% in universe — likely green market week", flush=True)
 
         candidates = run_dip_scan(
             picks_universe=universe,

@@ -216,26 +216,31 @@ def evaluate_dip_candidate(
 
     # ── TIER 2 — DIP QUALITY ──────────────────────────────────────────────────
 
-    # F5 — Multi-day pullback: today must be down, AND the move must be sustained.
-    # Two valid patterns:
-    #   (a) Weekly slide  — h1w < -1%  (stock grinding down for days)
-    #   (b) Post-peak selloff — h3d < -5% (surged on event, now unwinding 2+ days)
-    # Pattern (b) catches cases like HUBS: surged +19% on earnings Mon, fell -8%
-    # Tue and -7% Wed — h1w is still +12% but the 3-day return is -15%.
-    is_down_today = chg_pct < -0.3
-    if not is_down_today:
-        return None   # flat or positive — not a dip
-
+    # F5 — Multi-day pullback: stock must be in a sustained decline.
+    # Three valid patterns:
+    #   (a) Down today + weekly slide  — h1w < -1%  (grinding down for days)
+    #   (b) Down today + post-peak     — h3d < -5%  (surged on event, now unwinding)
+    #   (c) Weekly slide, flat today   — h1w < -1%  (pullback trend, consolidating)
+    # Pattern (c) is KEY: on green/flat market days, genuine pullbacks still qualify.
+    # Pattern (b) catches cases like HUBS: surged +19% Mon, fell -8% Tue and -7% Wed —
+    # h1w is still +12% but the 3-day return is -15%.
+    is_down_today   = chg_pct < -0.3
     weekly_slide    = h1w < -1.0
     post_peak_slide = h3d < -5.0   # meaningful 3-day selloff from a recent peak
     is_sustained    = weekly_slide or post_peak_slide
 
-    if not is_sustained:
+    # Must show SOME pullback signal — reject stocks that are flat/up with no context
+    if not is_down_today and not weekly_slide:
+        return None   # flat/up with no weekly decline — not a dip
+
+    # Down today but move is purely intraday with no sustained context — reject
+    if is_down_today and not is_sustained:
         filters.append(_f(5, "Multi-day pullback (sustained decline)", 2, "FAIL",
                           f"Today {chg_pct:+.1f}%, 3d {h3d:+.1f}%, week {h1w:+.1f}%",
                           "Week < -1% OR 3-day < -5%",
                           "Single-day move — not a sustained pullback"))
         return None
+
     mode = "weekly slide" if weekly_slide else "post-peak selloff"
     filters.append(_f(5, "Multi-day pullback (sustained decline)", 2, "PASS",
                       f"Today {chg_pct:+.1f}%, 3d {h3d:+.1f}%, week {h1w:+.1f}% ({mode})",
@@ -872,8 +877,14 @@ def run_dip_scan(
                 raw_chg = live.get("change_pct")
                 chg = float(raw_chg if raw_chg is not None else pick.get("change_pct") or 0)
 
-            # Apply dip pre-filter with live change_pct
-            if chg >= 0:
+            # Apply dip pre-filter: must be in some form of pullback.
+            # Primary: down today.  Secondary: weekly pullback from picks cache.
+            # Stocks in a genuine multi-day decline may be flat on any single day
+            # (especially on green market days or during pre-market hours when
+            # yfinance returns yesterday's close change). Using cached week_change
+            # lets weekly pullbacks through for full evaluation without extra API calls.
+            week_chg_cached = float(pick.get("week_change") or 0)
+            if chg >= 0 and week_chg_cached >= -1.0:
                 continue
 
             # All of these are cache-hits in normal operation
