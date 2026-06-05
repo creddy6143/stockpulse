@@ -2627,6 +2627,23 @@ function StrategyScreen({strategyData, onDetail}) {
   const items = lists[tab];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
 
+  // For Dip Buys tab: always show all 3 grade sections even when empty.
+  // Build a displayItems array that injects grade-header and empty-grade
+  // sentinel objects so all three sections are always visible.
+  const displayItems = tab !== 3 ? items : (()=>{
+    const gradeA = items.filter(x=>x.dip_tier==="A");
+    const gradeB = items.filter(x=>x.dip_tier==="B");
+    const gradeC = items.filter(x=>x.dip_tier==="C");
+    return [
+      {_isGradeHeader:true, tier:"A", count:gradeA.length},
+      ...(gradeA.length>0 ? gradeA : [{_isEmptyGrade:true, tier:"A"}]),
+      {_isGradeHeader:true, tier:"B", count:gradeB.length},
+      ...(gradeB.length>0 ? gradeB : [{_isEmptyGrade:true, tier:"B"}]),
+      {_isGradeHeader:true, tier:"C", count:gradeC.length},
+      ...(gradeC.length>0 ? gradeC : [{_isEmptyGrade:true, tier:"C"}]),
+    ];
+  })();
+
   const handleExpand = (s, i) => {
     const expKey = s.situation_type === "dip_buy" ? s.ticker : i;
     const wasOpen = exp === expKey;
@@ -2676,39 +2693,44 @@ function StrategyScreen({strategyData, onDetail}) {
             </button>
           ))}
         </div>
-        {tab===3&&items.length===0&&(
-          <div style={{padding:"24px 20px",textAlign:"center"}}>
-            <div style={{fontSize:13,color:"var(--t2)",marginBottom:6}}>No quality pullbacks right now</div>
-            <div style={{fontSize:11,color:"var(--t3)",lineHeight:1.6}}>All 28 filters must pass. The universe needs a quality stock with a genuine multi-day pullback, RSI cooling, analysts still bullish, and no bad news.</div>
-          </div>
-        )}
-        {(tab!==3||items.length>0)&&items.length===0&&(
+        {tab!==3&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
-        {items.map((s,i)=>{
+        {displayItems.map((s,i)=>{
+          // ── Grade header sentinel ──────────────────────────────────────────
+          if(s._isGradeHeader){
+            const tier=s.tier;
+            const tierColor=tier==="A"?"var(--emerald)":tier==="B"?"var(--amber)":"var(--sky)";
+            const tierBg=tier==="A"?"rgba(5,150,105,.07)":tier==="B"?"rgba(217,119,6,.07)":"rgba(14,165,233,.07)";
+            const tierBorder=tier==="A"?"#6ee7b7":tier==="B"?"#fcd34d":"#7dd3fc";
+            const tierDesc=tier==="A"?"All 28 filters pass · Trust ≥ 78":tier==="B"?"Quality business in correction":"Trust 70–77 · Solid setup";
+            return(
+              <div key={`gh-${tier}`} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 14px 7px",background:tierBg,borderTop:`1.5px solid ${tierBorder}`,borderBottom:`1px solid ${tierBorder}66`,marginTop:i>0?6:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:800,color:tierColor,letterSpacing:1.5}}>GRADE {tier}</span>
+                  <span style={{fontFamily:"var(--dm)",fontSize:9,color:"var(--t3)"}}>{tierDesc}</span>
+                </div>
+                <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:tierColor}}>{s.count} stock{s.count!==1?"s":""}</span>
+              </div>
+            );
+          }
+          // ── Empty grade sentinel ───────────────────────────────────────────
+          if(s._isEmptyGrade){
+            return(
+              <div key={`ge-${s.tier}`} style={{padding:"12px 16px",textAlign:"center",color:"var(--t3)",fontSize:10,fontStyle:"italic",borderBottom:"1px solid rgba(15,23,42,.04)"}}>
+                No stocks qualify for Grade {s.tier} today
+              </div>
+            );
+          }
+          // ── Regular stock row ──────────────────────────────────────────────
           const isDip = s.situation_type==="dip_buy";
           const open = isDip ? exp===s.ticker : exp===i;
           const key=`${s.ticker}:${s.situation_type}`;
           const playbook=playbookCache[key];
           const loading=loadingKey===key;
           const qs = s.quality_score||0;
-          const isNewTier = isDip && (i===0 || items[i-1]?.dip_tier !== s.dip_tier);
-          const tierColor = s.dip_tier==="A"?"var(--emerald)":s.dip_tier==="B"?"var(--amber)":"var(--sky)";
-          const tierBg = s.dip_tier==="A"?"rgba(5,150,105,.07)":s.dip_tier==="B"?"rgba(217,119,6,.07)":"rgba(14,165,233,.07)";
-          const tierBorder = s.dip_tier==="A"?"#6ee7b7":s.dip_tier==="B"?"#fcd34d":"#7dd3fc";
-          const tierDesc = s.dip_tier==="A"?"All 28 filters pass · Trust ≥ 78":s.dip_tier==="B"?"Quality business in correction":"Trust 70–77 · Solid setup";
-          const tierCount = isDip ? items.filter(x=>x.dip_tier===s.dip_tier).length : 0;
           return (
             <div key={s.ticker+s.situation_type}>
-              {isNewTier&&(
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 14px 7px",background:tierBg,borderTop:`1.5px solid ${tierBorder}`,borderBottom:`1px solid ${tierBorder}66`,marginTop:i>0?6:0}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:800,color:tierColor,letterSpacing:1.5}}>GRADE {s.dip_tier}</span>
-                    <span style={{fontFamily:"var(--dm)",fontSize:9,color:"var(--t3)"}}>{tierDesc}</span>
-                  </div>
-                  <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:tierColor}}>{tierCount} stock{tierCount!==1?"s":""}</span>
-                </div>
-              )}
               <div onClick={()=>handleExpand(s,i)} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?(isDip?"rgba(217,119,6,.04)":"rgba(91,114,248,.025)"):"transparent",transition:"background .15s"}}>
                 <span style={{fontSize:18,flexShrink:0}}>{s.icon}</span>
                 <div style={{flex:1,minWidth:0}}>
