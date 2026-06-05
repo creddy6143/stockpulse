@@ -315,8 +315,10 @@ def stock_full(ticker: str):
     trust = get_trust_score_with_fallback(ticker, price_data)
     trust_score_val = trust["total_score"] or 0  # None → 0 for downstream callers
     patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
-    verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
     analyst = get_analyst_data(ticker)
+    hist = get_stock_history(ticker)
+    verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals,
+                          hist=hist, analyst_data=analyst)
 
     india_signals = {}
     if is_indian_stock(ticker):
@@ -381,7 +383,10 @@ def stock_verdict(ticker: str, user_id: str = Depends(get_current_user)):
     trust = get_trust_score_with_fallback(ticker, price_data)
     trust_score_val = trust["total_score"] or 0
     patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
-    return get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
+    analyst = get_analyst_data(ticker)
+    hist = get_stock_history(ticker)
+    return get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals,
+                       hist=hist, analyst_data=analyst)
 
 
 # ── ALERTS ───────────────────────────────────────────────────────────────────
@@ -719,10 +724,7 @@ def _score_one_ticker(ticker: str) -> dict | None:
         if not qualifies:
             return None
 
-        patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
-        verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals)
-
-        # ── CONSECUTIVE DIP DAYS ─────────────────────────────────────────────
+        # ── PRICE HISTORY (fetched first — used by verdict + dip days + conviction) ──
         consec_dip_days = 0
         week_change = 0.0
         hist = {}
@@ -741,6 +743,9 @@ def _score_one_ticker(ticker: str) -> dict | None:
                 consec_dip_days = streak
         except Exception:
             pass
+
+        patterns = detect_all_patterns(ticker, trust_score_val, price_data, fundamentals)
+        verdict = get_verdict(ticker, trust_score_val, patterns, price_data, fundamentals, hist=hist)
 
         # ── MULTI-LENS CONVICTION SCORE ───────────────────────────────────────
         # Computed here using already-fetched data — no extra API calls.
@@ -811,12 +816,27 @@ def _refresh_dip_scan() -> None:
         _mains_only = [p for p in _all if not p.get("is_dip")]
         universe    = _mains_only[:100] + _dips_only[:10]
 
-        # Overlay live prices so the change_pct pre-filter uses today's move
+        # Overlay live prices so the change_pct pre-filter uses today's move.
+        # Primary: use the in-memory dict populated by /api/picks calls.
+        # Fallback: if that dict is empty (e.g. fresh server start), fetch
+        # live prices directly so the startup scan uses today's actual data.
+        needs_direct_fetch = not any(
+            _picks_live_prices.get(p["ticker"], {}).get("price") for p in universe
+        )
         for pick in universe:
             lv = _picks_live_prices.get(pick["ticker"])
             if lv and lv.get("price"):
                 pick["price"]      = lv["price"]
                 pick["change_pct"] = lv["change_pct"]
+            elif needs_direct_fetch:
+                try:
+                    fetched = get_stock_price(pick["ticker"])
+                    fp = float(fetched.get("price") or 0)
+                    if fp > 0:
+                        pick["price"]      = fp
+                        pick["change_pct"] = float(fetched.get("change_pct") or pick.get("change_pct") or 0)
+                except Exception:
+                    pass  # keep cached values on fetch error
 
         market_data = get_market_data()
         portfolio   = db.get_portfolio()   # raw DB rows — for sector diversity check
@@ -953,6 +973,9 @@ def _run_picks_scan_background():
             tickers_ok=len(result),
         )
         print(f"[PICKS BG] Done — {len(all_picks)} picks saved to DB", flush=True)
+        # Immediately refresh dip scan with fresh picks data so the Strategy
+        # screen shows candidates as soon as the picks scan completes.
+        threading.Thread(target=_refresh_dip_scan, daemon=True).start()
 
     except Exception as e:
         print(f"[PICKS BG] Error: {e}", flush=True)
@@ -1587,6 +1610,7 @@ def strategy(user_id: str = Depends(get_current_user)):
             "change_pct": d.get("change_pct", 0),
             "trust_score": d.get("trust_score", 0),
             "grade": d.get("grade", ""),
+            "dip_tier": d.get("dip_tier", ""),
             "quality_score": d.get("quality_score", 0),
             "filter_results": d.get("filter_results", {}),
             "filters_passed": d.get("filters_passed", 0),

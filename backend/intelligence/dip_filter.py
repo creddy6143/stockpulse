@@ -102,17 +102,39 @@ def evaluate_dip_candidate(
     current_picks_tickers: set | None = None,
 ) -> dict | None:
     """
-    Run all 28 dip filters. Returns a result dict when a stock qualifies,
-    None when any hard filter fails.
+    Run all 28 dip filters. Returns a result dict when a stock qualifies.
 
-    Hard FAILs: immediately return None (no evidence entry needed).
-    Soft UNKNOWN: proceed; score component uses neutral 50 pts.
+    Grade system:
+      A — trust ≥ 78, all 28 filters pass (ideal setup)
+      B — trust ≥ 78, only trend/valuation filters soft-fail (quality in downtrend)
+      C — trust 70-77, all 28 pass (solid setup, lower conviction)
+
+    Hard FAILs: return None regardless of grade.
+    Soft FAILs (F7, F8, F10, F22, F24, F25, F26): allowed for Grade B when trust ≥ 78.
+    UNKNOWN: proceed; quality-score component uses neutral 50 pts.
+
+    SOFT-FAIL FILTERS:
+      Trend triggers (F7, F8, F10, F22, F24, F25) — any one of these failing
+        classifies a high-trust stock as Grade B (quality business in downtrend).
+      Minor flag (F26) — P/E slightly stretched; does NOT alone trigger Grade B.
+        Only promotes to Grade B if a trend trigger also fails.
+
+      F7  — below 200d MA (long-term trend broken)
+      F8  — far from MA50
+      F10 — >35% from 52-week high (extended correction)
+      F22 — death cross (MA50 < MA200)
+      F24 — 6M return < -15% (mid-term downtrend)
+      F25 — 1Y return < -20% (long-term downtrend)
+      F26 — P/E stretched (valuation > 1.5× sector median; minor flag only)
     """
     user_watchlist_tickers  = user_watchlist_tickers  or set()
     user_portfolio_sectors  = user_portfolio_sectors  or {}
     current_picks_tickers   = current_picks_tickers   or set()
 
     filters: list[dict] = []
+    # Trend/valuation filters that soft-fail for Grade B (trust ≥ 78).
+    # Populated below; grade is resolved at the end of the filter stack.
+    trend_soft_fails: list[int] = []
 
     def hard_fail(fid, name, tier, value=None, threshold="", note=""):
         filters.append(_f(fid, name, tier, "FAIL", value, threshold, note))
@@ -237,21 +259,26 @@ def evaluate_dip_candidate(
                       f"{cumulative:.1f}% ({label_period})", "-1.5% to -18%"))
 
     # F7 — Still above 200-day MA (long-term uptrend intact)
+    # Soft-fail for Grade B: high-trust stocks can be below MA200 (extended correction).
     if ma200 > 0 and price > 0:
         if price <= ma200:
             filters.append(_f(7, "Price above 200-day MA (uptrend intact)", 2, "FAIL",
                               f"${price:.2f} vs MA ${ma200:.2f}",
                               "Price > MA200", "Broken long-term trend"))
-            return None
-        pct_above_200 = (price - ma200) / ma200 * 100
-        filters.append(_f(7, "Price above 200-day MA (uptrend intact)", 2, "PASS",
-                          f"${price:.2f} (+{pct_above_200:.1f}% above MA ${ma200:.2f})",
-                          "Price > MA200"))
+            trend_soft_fails.append(7)
+            # Do not return None — Grade B may still qualify
+        else:
+            pct_above_200 = (price - ma200) / ma200 * 100
+            filters.append(_f(7, "Price above 200-day MA (uptrend intact)", 2, "PASS",
+                              f"${price:.2f} (+{pct_above_200:.1f}% above MA ${ma200:.2f})",
+                              "Price > MA200"))
     else:
         filters.append(_f(7, "Price above 200-day MA (uptrend intact)", 2, "UNKNOWN",
                           "MA data unavailable", "Price > MA200"))
 
     # F8 — Within 15% of 50-day MA (pulling back toward support)
+    # Soft-fail for Grade B: in extended downtrends the MA50 itself is declining,
+    # so the distance can widen. This alone does not disqualify a high-trust stock.
     if ma50 > 0 and price > 0:
         dist_from_50 = abs(price - ma50) / ma50 * 100
         if dist_from_50 > 15.0:
@@ -259,9 +286,11 @@ def evaluate_dip_candidate(
                               f"{dist_from_50:.1f}% from MA50 ${ma50:.2f}",
                               "≤ 15% away",
                               "Too far from 50d MA — not a controlled pullback"))
-            return None
-        filters.append(_f(8, "Within 15% of 50-day MA (at support)", 2, "PASS",
-                          f"{dist_from_50:.1f}% from MA50 ${ma50:.2f}", "≤ 15% away"))
+            trend_soft_fails.append(8)
+            # Do not return None — Grade B may still qualify
+        else:
+            filters.append(_f(8, "Within 15% of 50-day MA (at support)", 2, "PASS",
+                              f"{dist_from_50:.1f}% from MA50 ${ma50:.2f}", "≤ 15% away"))
     else:
         filters.append(_f(8, "Within 15% of 50-day MA (at support)", 2, "UNKNOWN",
                           "MA50 data unavailable", "≤ 15% away"))
@@ -287,15 +316,20 @@ def evaluate_dip_candidate(
     # Threshold widened from 25% to 35%: in the 2024-2025 market correction,
     # many quality large-caps pulled back 25-35% from their highs even while
     # maintaining positive 6M/1Y trends. The -25% floor was too strict.
+    # F10 — Not down >35% from 52-week high (healthy dip, not a crash)
+    # Soft-fail for Grade B: high-trust stocks may be down 35-70% from their peak
+    # during a sector-wide correction without the business deteriorating.
     if w52h > 0 and price > 0:
         pct_from_high = (price - w52h) / w52h * 100
         if pct_from_high < -35.0:
             filters.append(_f(10, "Not down >35% from 52-week high", 2, "FAIL",
                               f"{pct_from_high:.1f}% from high ${w52h:.2f}",
-                              "≤ -35% from high", "Too far from highs — falling knife"))
-            return None
-        filters.append(_f(10, "Not down >35% from 52-week high", 2, "PASS",
-                          f"{pct_from_high:.1f}% from high ${w52h:.2f}", "≤ -35%"))
+                              "≤ -35% from high", "Extended correction from highs"))
+            trend_soft_fails.append(10)
+            # Do not return None — Grade B may still qualify
+        else:
+            filters.append(_f(10, "Not down >35% from 52-week high", 2, "PASS",
+                              f"{pct_from_high:.1f}% from high ${w52h:.2f}", "≤ -35%"))
     else:
         filters.append(_f(10, "Not down >35% from 52-week high", 2, "UNKNOWN",
                           "52-week high unavailable", "≤ -35%"))
@@ -303,16 +337,23 @@ def evaluate_dip_candidate(
     # ── TIER 3 — CONVICTION ───────────────────────────────────────────────────
 
     # F11 — Analyst conviction ratio ≥ 0.60
+    # Hard fail: if analysts aren't sufficiently bullish and the long-term trend
+    # is intact, something the market sees is not in our data — don't force the entry.
+    # Note: if the stock qualifies as Grade B (long-term trend already broken), F11
+    # is irrelevant for THAT determination — Grade B is triggered by trend filters only.
     if total_an > 0:
         # Weighted: Buy×1.5 relative to total×2 (approximates Strong Buy=2, Buy=1, Hold=0)
+        # Threshold 0.45 corresponds to exactly 60% buy rate:
+        #   (buy_c * 1.5) / (total_an * 2) = 0.45  →  buy_c / total_an = 0.60
+        # Old threshold was 0.60 which incorrectly required 80% buy rate.
         conv_ratio = (buy_c * 1.5) / (total_an * 2)
-        if conv_ratio < 0.60:
-            filters.append(_f(11, "Analyst conviction ratio ≥ 0.60", 3, "FAIL",
-                              f"{conv_ratio:.2f} ({buy_c} buy / {total_an} total)",
-                              "≥ 0.60", "Analysts not sufficiently bullish"))
+        if conv_ratio < 0.45:
+            filters.append(_f(11, "Analyst conviction ratio ≥ 60% bullish", 3, "FAIL",
+                              f"{conv_ratio:.2f} ({buy_c} buy / {total_an} total = {round(buy_c/total_an*100)}%)",
+                              "≥ 60% buy", "Analysts not sufficiently bullish"))
             return None
-        filters.append(_f(11, "Analyst conviction ratio ≥ 0.60", 3, "PASS",
-                          f"{conv_ratio:.2f} ({buy_c} buy / {total_an} total)", "≥ 0.60"))
+        filters.append(_f(11, "Analyst conviction ratio ≥ 60% bullish", 3, "PASS",
+                          f"{conv_ratio:.2f} ({buy_c} buy / {total_an} total = {round(buy_c/total_an*100)}%)", "≥ 60% buy"))
     else:
         # No analyst data — mark UNKNOWN, don't block
         filters.append(_f(11, "Analyst conviction ratio ≥ 0.60", 3, "UNKNOWN",
@@ -340,7 +381,12 @@ def evaluate_dip_candidate(
                           "No coverage data available", "≥ 8"))
 
     # F14 — No heavy insider selling (90d)
-    heavy_selling = (ins_sell_v > 1_000_000 and ins_sell_v > ins_buy_v * 2.5)
+    # Ratio raised from 2.5× to 3.5×: stocks in extended corrections (Grade B)
+    # often see routine executive sells while CEOs/insiders also buy. A 2.5× ratio
+    # was blocking legitimate candidates where net selling was modest (e.g. HUBS:
+    # 8.5M sell / 2.6M buy = 3.27×). 3.5× still blocks genuinely lopsided cases
+    # (e.g. 13M sell / 1M buy = 13×) while allowing normal mixed activity.
+    heavy_selling = (ins_sell_v > 1_000_000 and ins_sell_v > ins_buy_v * 3.5)
     if heavy_selling:
         filters.append(_f(14, "No heavy insider selling (last 90d)", 3, "FAIL",
                           f"Selling ${ins_sell_v/1e6:.1f}M vs buying ${ins_buy_v/1e6:.1f}M",
@@ -437,17 +483,21 @@ def evaluate_dip_candidate(
                       "Verify via broker chart — high volume on dip = danger"))
 
     # F22 — MACD not in strong downtrend (approximate from MA data)
+    # Soft-fail for Grade B: death cross is expected in extended corrections but
+    # does not invalidate the short-term dip signal on a high-trust stock.
     if ma50 > 0 and ma200 > 0:
         macd_ok = ma50 >= ma200 * 0.97   # allow MA50 slightly below MA200 (early dip)
         if not macd_ok:
             filters.append(_f(22, "MACD not in strong downtrend", 5, "FAIL",
                               f"MA50 ${ma50:.2f} vs MA200 ${ma200:.2f} — death cross",
                               "MA50 ≥ MA200×0.97",
-                              "Strong downtrend — momentum broken"))
-            return None
-        filters.append(_f(22, "MACD not in strong downtrend", 5, "PASS",
-                          f"MA50 ${ma50:.2f} ≥ MA200×0.97 (${ma200*0.97:.2f})",
-                          "MA50 ≥ MA200×0.97"))
+                              "Extended downtrend — MA death cross"))
+            trend_soft_fails.append(22)
+            # Do not return None — Grade B may still qualify
+        else:
+            filters.append(_f(22, "MACD not in strong downtrend", 5, "PASS",
+                              f"MA50 ${ma50:.2f} ≥ MA200×0.97 (${ma200*0.97:.2f})",
+                              "MA50 ≥ MA200×0.97"))
     else:
         filters.append(_f(22, "MACD not in strong downtrend", 5, "UNKNOWN",
                           "MA data unavailable", "MA50 ≥ MA200×0.97"))
@@ -468,43 +518,48 @@ def evaluate_dip_candidate(
 
     # ── TIER 6 — SANITY CHECKS ────────────────────────────────────────────────
 
-    # F24 — Not down more than 15% over trailing 6 months (no severe sustained decline)
-    # Threshold relaxed from -2% to -15%: a -2% floor was hair-trigger and rejected
-    # quality stocks that pulled back modestly over 6 months while still being in a
-    # healthy long-term uptrend (positive 1Y). The -15% floor still blocks stocks in
-    # genuine multi-month bear markets while allowing normal 6-month corrections.
+    # F24 — Not down more than 15% over trailing 6 months
+    # Soft-fail for Grade B: high-trust stocks may be down 15-60% over 6 months
+    # during a sector-wide repricing without the underlying business deteriorating.
     if h6m < -15.0:
         filters.append(_f(24, "Not down more than 15% over trailing 6 months", 6, "FAIL",
                           f"{h6m:+.1f}%", "≥ -15%",
-                          "Mid-term trend declining — not a healthy dip"))
-        return None
-    filters.append(_f(24, "Not down more than 15% over trailing 6 months", 6, "PASS",
-                      f"{h6m:+.1f}%", "≥ -15%"))
+                          "Mid-term downtrend — extended correction"))
+        trend_soft_fails.append(24)
+        # Do not return None — Grade B may still qualify
+    else:
+        filters.append(_f(24, "Not down more than 15% over trailing 6 months", 6, "PASS",
+                          f"{h6m:+.1f}%", "≥ -15%"))
 
     # F25 — At least flat over trailing 12 months (long-term trend intact)
-    # Tolerance widened from -5% to -20%: corrects for market-wide drawdowns in
-    # 2024-2025 where quality stocks with strong fundamentals underperformed the
-    # index temporarily. The -20% floor still blocks persistent long-term losers
-    # while allowing stocks in sector-wide corrections.
+    # Soft-fail for Grade B: same reasoning as F24 — extended sector corrections
+    # can push even quality large-caps down 20-70% over 12 months.
     if h1y < -20.0:
         filters.append(_f(25, "Not down more than 20% over trailing 12 months", 6, "FAIL",
                           f"{h1y:+.1f}%", "≥ -20% (1Y)",
-                          "Long-term trend broken — avoid"))
-        return None
-    filters.append(_f(25, "Not down more than 20% over trailing 12 months", 6, "PASS",
-                      f"{h1y:+.1f}%", "≥ -20%"))
+                          "Long-term downtrend — extended correction"))
+        trend_soft_fails.append(25)
+        # Do not return None — Grade B may still qualify
+    else:
+        filters.append(_f(25, "Not down more than 20% over trailing 12 months", 6, "PASS",
+                          f"{h1y:+.1f}%", "≥ -20%"))
 
     # F26 — P/E ≤ 1.5× sector median
+    # Soft-fail for Grade B: SaaS / growth companies transitioning to profitability
+    # have elevated P/Es even after large corrections (valuation still compressing).
+    # High-trust stocks in this category are still valid Grade B dip candidates.
     sp_pe = SECTOR_PE_MEDIANS.get(sector, 22.0)
     if pe is not None and pe > 0:
         max_pe = sp_pe * 1.5
         if pe > max_pe:
             filters.append(_f(26, f"P/E ≤ 1.5× sector median ({sp_pe:.0f}×)", 6, "FAIL",
                               f"{pe:.1f}×", f"< {max_pe:.0f}×",
-                              "Valuation stretched"))
-            return None
-        filters.append(_f(26, f"P/E ≤ 1.5× sector median ({sp_pe:.0f}×)", 6, "PASS",
-                          f"{pe:.1f}× vs sector {sp_pe:.0f}×", f"< {max_pe:.0f}×"))
+                              "Valuation still elevated — compressing"))
+            trend_soft_fails.append(26)
+            # Do not return None — Grade B may still qualify
+        else:
+            filters.append(_f(26, f"P/E ≤ 1.5× sector median ({sp_pe:.0f}×)", 6, "PASS",
+                              f"{pe:.1f}× vs sector {sp_pe:.0f}×", f"< {max_pe:.0f}×"))
     else:
         filters.append(_f(26, f"P/E ≤ 1.5× sector median ({sp_pe:.0f}×)", 6, "UNKNOWN",
                           "P/E data unavailable", f"< {sp_pe*1.5:.0f}×"))
@@ -536,8 +591,36 @@ def evaluate_dip_candidate(
         filters.append(_f(28, "Positive free cash flow (TTM)", 6, "UNKNOWN",
                           "FCF data unavailable", "> 0"))
 
-    # ── TIER 7 — QUALITY SCORE ────────────────────────────────────────────────
-    # All hard filters passed. Compute weighted Quality Score.
+    # ── TIER 7 — GRADE DETERMINATION ─────────────────────────────────────────
+    # Resolve dip_tier based on which soft-fails fired and trust score.
+    #
+    #   Grade A — trust ≥ 78, no trend triggers failed  (all 28 pass or only F26)
+    #   Grade B — trust ≥ 78, at least one trend trigger (F7/F8/F10/F22/F24/F25) failed
+    #   Grade C — trust 70-77, no trend triggers failed
+    #   None    — trust < 78 with trend failures, or any hard filter previously failed
+    #
+    # IMPORTANT: F26 (P/E slightly stretched) is a minor flag. It is recorded in
+    # trend_soft_fails so it doesn't hard-block the stock, but it does NOT alone
+    # promote a stock to Grade B. Grade B requires a real trend indicator to fail.
+    GRADE_B_TRIGGER_IDS = {7, 8, 10, 22, 24, 25}
+    trend_trigger_fails = [f for f in trend_soft_fails if f in GRADE_B_TRIGGER_IDS]
+
+    if len(trend_trigger_fails) == 0:
+        # No actual trend indicators failed (F26 alone doesn't change grade)
+        dip_tier = "A" if ts >= 78 else "C"
+    else:
+        # At least one trend indicator failed — Grade B if trust meets floor.
+        # Grade B does NOT require higher trust than Grade C. The distinction is
+        # the PRESENCE of trend failures: Grade C = clean pullback in uptrend,
+        # Grade B = quality business in an extended correction (trend broken).
+        # Both start at trust ≥ 70; all hard filters still apply.
+        if ts >= 70:
+            dip_tier = "B"
+        else:
+            return None
+
+    # ── QUALITY SCORE ─────────────────────────────────────────────────────────
+    # Compute weighted Quality Score.
 
     # Component 1: Trust score (30%)
     c_trust = min(100, max(0, ts))
@@ -610,13 +693,21 @@ def evaluate_dip_candidate(
     evidence_parts.append(
         f"Trust {ts} · Down {abs(cumulative):.1f}% ({label_period}) · Today {chg_pct:+.1f}%"
     )
+    if dip_tier == "B":
+        # Explicitly surface the downtrend context for Grade B
+        if h6m != 0:
+            evidence_parts.append(f"6M trend: {h6m:+.1f}% · 1Y trend: {h1y:+.1f}%")
+        if w52h > 0 and price > 0:
+            pct_h = (price - w52h) / w52h * 100
+            evidence_parts.append(f"From 52-week high: {pct_h:+.1f}%")
     if ma200 > 0:
         pct_a = (price - ma200) / ma200 * 100
-        evidence_parts.append(
-            f"Price ${price:.2f} · 200d MA ${ma200:.2f} (+{pct_a:.1f}% — trend intact)"
-        )
+        if pct_a >= 0:
+            evidence_parts.append(f"Price ${price:.2f} · MA200 ${ma200:.2f} (+{pct_a:.1f}% — trend intact)")
+        else:
+            evidence_parts.append(f"Price ${price:.2f} · MA200 ${ma200:.2f} ({pct_a:.1f}% — below MA)")
     if rsi is not None:
-        evidence_parts.append(f"RSI {rsi:.0f} (oversold range)")
+        evidence_parts.append(f"RSI {rsi:.0f} (cooling)")
     if total_an > 0 and conv_ratio is not None:
         buy_pct = round(buy_c / total_an * 100)
         evidence_parts.append(
@@ -635,19 +726,34 @@ def evaluate_dip_candidate(
     failed  = sum(1 for f2 in filters if f2["status"] == "FAIL")
     unknown = sum(1 for f2 in filters if f2["status"] == "UNKNOWN")
 
-    # ── LABEL + ICON (based on severity) ─────────────────────────────────────
-    # Use `cumulative` (the qualifying period's return) — not always h1w
-    # because post-peak stocks qualify via h3d (h1w is still positive).
+    # ── LABEL + ICON (based on grade and severity) ───────────────────────────
     dip_abs = abs(cumulative)
-    if dip_abs >= 12:
-        label = "Deep Pullback"
-        icon  = "🟢"
-    elif dip_abs >= 7:
-        label = "Quality Dip"
-        icon  = "📉"
+    if dip_tier == "B":
+        # Grade B: business is strong but price is in an extended correction
+        if dip_abs >= 12:
+            label = "Quality Correction"
+            icon  = "📉"
+        else:
+            label = "Value Entry"
+            icon  = "📉"
+    elif dip_tier == "A":
+        if dip_abs >= 12:
+            label = "Deep Pullback"
+            icon  = "🟢"
+        elif dip_abs >= 7:
+            label = "Quality Dip"
+            icon  = "📉"
+        else:
+            label = "Healthy Dip"
+            icon  = "📉"
     else:
-        label = "Healthy Dip"
-        icon  = "📉"
+        # Grade C
+        if dip_abs >= 12:
+            label = "Solid Pullback"
+            icon  = "📉"
+        else:
+            label = "Clean Dip"
+            icon  = "📉"
 
     return {
         "ticker":             ticker,
@@ -658,6 +764,7 @@ def evaluate_dip_candidate(
         "filters_unknown":    unknown,
         "evidence":           " · ".join(evidence_parts),
         # Display
+        "dip_tier":           dip_tier,          # "A" | "B" | "C"
         "label":              label,
         "icon":               icon,
         "grade":              trust.get("grade", ""),
@@ -753,9 +860,17 @@ def run_dip_scan(
             # if they are down today. Always use the live price API (cache hit
             # after first portfolio load, 15-min TTL).
             live = get_stock_price(ticker)
-            chg  = float(live.get("change_pct") if live.get("change_pct") is not None
-                         else pick.get("change_pct") or 0)
-            live_price = float(live.get("price") or pick.get("price") or 0)
+            live_price = float(live.get("price") or 0)
+
+            # Fallback: yfinance sometimes silently returns price=0 for valid
+            # tickers (rate limit, delisting flag error, market-closed quirk).
+            # When price=0, the live fetch effectively failed — use cached data.
+            if live_price == 0:
+                chg        = float(pick.get("change_pct") or 0)
+                live_price = float(pick.get("price") or 0)
+            else:
+                raw_chg = live.get("change_pct")
+                chg = float(raw_chg if raw_chg is not None else pick.get("change_pct") or 0)
 
             # Apply dip pre-filter with live change_pct
             if chg >= 0:

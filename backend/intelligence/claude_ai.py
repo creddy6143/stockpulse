@@ -165,6 +165,8 @@ def get_verdict(
     patterns_detected: list,
     price_data: dict,
     fundamentals: dict,
+    hist: dict = None,
+    analyst_data: dict = None,
 ) -> dict:
     """Returns AI verdict for a stock. Falls back to blocked-stock text or generic verdict if all AI providers fail."""
     clean = ticker.replace(".NS", "").replace(".BO", "").replace(".ST", "")
@@ -178,17 +180,56 @@ def get_verdict(
     _verdict_cache_key = f"verdict:{ticker}"
     _cached = cache_get(_verdict_cache_key, TTL_STRATEGY)
     if _cached and clean not in _BLOCKED_VERDICTS:
-        cached_chg = _cached.get("_change_pct_at_generation")
-        if cached_chg is None or abs(live_chg - float(cached_chg)) <= 0.5:
-            return _cached
-        # Drift > 0.5pp — fall through to regenerate with current data
+        # Also invalidate if cached verdict predates the full_analysis field
+        if "full_analysis" not in _cached:
+            pass  # fall through to regenerate with richer prompt
+        else:
+            cached_chg = _cached.get("_change_pct_at_generation")
+            if cached_chg is None or abs(live_chg - float(cached_chg)) <= 0.5:
+                return _cached
+            # Drift > 0.5pp — fall through to regenerate with current data
 
-    # Build user prompt
+    # ── Build price trend section ─────────────────────────────────────────────
+    h = hist or {}
+    h6m = float(h.get("6M") or 0)
+    h1y = float(h.get("1Y") or 0)
+    price_val = float(price_data.get("price") or 0)
+    w52_high = float(fundamentals.get("w52_high") or 0)
+
+    trend_lines = []
+    if h6m != 0:
+        trend_lines.append(f"  6M Return: {h6m:+.1f}%")
+    if h1y != 0:
+        trend_lines.append(f"  1Y Return: {h1y:+.1f}%")
+    if w52_high > 0 and price_val > 0:
+        pct_from_52wh = (price_val - w52_high) / w52_high * 100
+        trend_lines.append(f"  From 52-week high: {pct_from_52wh:+.1f}%")
+    trend_section = ("\nPrice Trend (12 months):\n" + "\n".join(trend_lines)) if trend_lines else ""
+
+    # ── Build analyst section ─────────────────────────────────────────────────
+    a = analyst_data or {}
+    target = a.get("target_price")
+    buys = int(a.get("buy_count") or 0)
+    holds = int(a.get("hold_count") or 0)
+    sells = int(a.get("sell_count") or 0)
+    total_analysts = buys + holds + sells
+    analyst_lines = []
+    if target and price_val > 0:
+        upside = (target - price_val) / price_val * 100
+        analyst_lines.append(f"  Price Target: ${target:.0f} ({upside:+.0f}% from current)")
+    if total_analysts > 0:
+        analyst_lines.append(f"  Consensus: {buys} Buy / {holds} Hold / {sells} Sell")
+    analyst_section = ("\nAnalyst Coverage:\n" + "\n".join(analyst_lines)) if analyst_lines else ""
+
+    # ── Build user prompt ─────────────────────────────────────────────────────
     patterns_text = (
         ", ".join(p.get("name", p.get("pattern", "")) for p in patterns_detected)
         if patterns_detected
         else "None"
     )
+    profit_margin = float(fundamentals.get("profit_margins") or 0)
+    profit_str = f"{profit_margin * 100:.0f}%" if profit_margin else "N/A"
+
     user_prompt = f"""Stock: {ticker}
 Trust Score: {trust_score}/100
 Patterns Detected: {patterns_text}
@@ -196,11 +237,12 @@ Current Price: {price_data.get('price', 'N/A')}
 Change Today: {price_data.get('change_pct', 0):.1f}%
 Revenue Growth: {(fundamentals.get('revenue_growth', 0) or 0) * 100:.0f}% YoY
 GAAP Profitable: {fundamentals.get('gaap_profitable', False)}
-Earnings Surprise: {fundamentals.get('earnings_surprise_pct', 0) or 0:.0f}%
+Profit Margin: {profit_str}
+Earnings Surprise: {fundamentals.get('earnings_surprise_pct', 0) or 0:.0f}%{trend_section}{analyst_section}
 
-Give a plain English verdict following the system rules."""
+Write the verdict and full_analysis following the system rules."""
 
-    text = _call_ai(SYSTEM_PROMPT, user_prompt, max_tokens=500)
+    text = _call_ai(SYSTEM_PROMPT, user_prompt, max_tokens=750)
     parsed = _parse_json(text)
     if parsed:
         # Verify the verdict text passes the Real Money Test before caching/returning

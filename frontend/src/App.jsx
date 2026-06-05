@@ -449,6 +449,7 @@ const mapPick = pick => {
     situationNote: trust.situation_note || null,
     h6m: pick.h6m_change || 0,
     h1y: pick.h1y_change || 0,
+    fullAnalysis: verdict.full_analysis || null,
   };
 };
 
@@ -481,6 +482,7 @@ const buildDetailData = resp => {
     aBuy: a.buy_count||0, aHold: a.hold_count||0, aSell: a.sell_count||0,
     metrics: metrics.slice(0,4),
     verdict: v.verdict || t.disqualify_reason || (t.grade==="Data Unavailable" ? "No reliable data source available for this exchange." : `Trust score ${t.total_score}/100 — ${t.grade}.`),
+    fullAnalysis: v.full_analysis || null,
     news: resp.news || [],
   };
 };
@@ -753,7 +755,7 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
             <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.65,padding:"10px 12px",background:"var(--card2)",borderRadius:8,borderLeft:`3px solid ${c}`}}>
               {vLoading
                 ? <span style={{color:"var(--t3)"}}>Analysing with AI… <span style={{animation:"pr 1s infinite",display:"inline-block"}}>●</span></span>
-                : (verdict?.verdict || (d && d.verdict) || "Analysis unavailable — check back shortly.")}
+                : (verdict?.full_analysis || verdict?.verdict || (d && d.fullAnalysis) || (d && d.verdict) || "Analysis unavailable — check back shortly.")}
             </div>
             {!vLoading && verdict?._generated_at && (() => {
               const ms = Date.now() - new Date(verdict._generated_at.endsWith('Z') ? verdict._generated_at : verdict._generated_at + 'Z').getTime();
@@ -2350,11 +2352,14 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
             </div>
           )}
           <div style={{marginBottom:8}}>
-            {s.sigs.slice(0,3).map((sig,j)=>(
-              <div key={j} style={{display:"flex",gap:6,fontSize:10,color:"var(--t2)",marginBottom:3,lineHeight:1.4}}>
-                <span style={{color:c,fontSize:7,flexShrink:0,marginTop:3}}>●</span>{sig}
-              </div>
-            ))}
+            {s.fullAnalysis
+              ? <div style={{fontSize:10.5,color:"var(--t2)",lineHeight:1.75,borderLeft:"2.5px solid",borderLeftColor:c,paddingLeft:9}}>{s.fullAnalysis}</div>
+              : s.sigs.slice(0,3).map((sig,j)=>(
+                  <div key={j} style={{display:"flex",gap:6,fontSize:10,color:"var(--t2)",marginBottom:3,lineHeight:1.4}}>
+                    <span style={{color:c,fontSize:7,flexShrink:0,marginTop:3}}>●</span>{sig}
+                  </div>
+                ))
+            }
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
             {[{l:"Upside",v:s.potential,c:"var(--emerald)"},{l:"Entry",v:s.entry,c:"var(--sky)"},{l:"Risk",v:s.risk,c:"var(--amber)"},{l:"When",v:s.horizon,c:"var(--t2)"}].map((st,j)=>(
@@ -2616,13 +2621,16 @@ function StrategyScreen({strategyData, onDetail}) {
   const [loadingKey,setLoadingKey] = useState(null);
   const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[]};
   const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys"];
-  const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy), (SD.dipBuys||[]).map(mapStrategy)];
+  const _tierOrder = {"A":0,"B":1,"C":2};
+  const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
+    (SD.dipBuys||[]).map(mapStrategy).sort((a,b)=>(_tierOrder[a.dip_tier]||1)-(_tierOrder[b.dip_tier]||1)||(b.quality_score||0)-(a.quality_score||0))];
   const items = lists[tab];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
 
   const handleExpand = (s, i) => {
-    const wasOpen = exp === i;
-    setExp(wasOpen ? null : i);
+    const expKey = s.situation_type === "dip_buy" ? s.ticker : i;
+    const wasOpen = exp === expKey;
+    setExp(wasOpen ? null : expKey);
     // Dip Buys show inline evidence — no AI playbook call needed
     if (!wasOpen && s.situation_type !== "dip_buy") {
       const key = `${s.ticker}:${s.situation_type}`;
@@ -2678,14 +2686,29 @@ function StrategyScreen({strategyData, onDetail}) {
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
         {items.map((s,i)=>{
-          const open=exp===i;
+          const isDip = s.situation_type==="dip_buy";
+          const open = isDip ? exp===s.ticker : exp===i;
           const key=`${s.ticker}:${s.situation_type}`;
           const playbook=playbookCache[key];
           const loading=loadingKey===key;
-          const isDip = s.situation_type==="dip_buy";
           const qs = s.quality_score||0;
+          const isNewTier = isDip && (i===0 || items[i-1]?.dip_tier !== s.dip_tier);
+          const tierColor = s.dip_tier==="A"?"var(--emerald)":s.dip_tier==="B"?"var(--amber)":"var(--sky)";
+          const tierBg = s.dip_tier==="A"?"rgba(5,150,105,.07)":s.dip_tier==="B"?"rgba(217,119,6,.07)":"rgba(14,165,233,.07)";
+          const tierBorder = s.dip_tier==="A"?"#6ee7b7":s.dip_tier==="B"?"#fcd34d":"#7dd3fc";
+          const tierDesc = s.dip_tier==="A"?"All 28 filters pass · Trust ≥ 78":s.dip_tier==="B"?"Quality business in correction":"Trust 70–77 · Solid setup";
+          const tierCount = isDip ? items.filter(x=>x.dip_tier===s.dip_tier).length : 0;
           return (
             <div key={s.ticker+s.situation_type}>
+              {isNewTier&&(
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 14px 7px",background:tierBg,borderTop:`1.5px solid ${tierBorder}`,borderBottom:`1px solid ${tierBorder}66`,marginTop:i>0?6:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:800,color:tierColor,letterSpacing:1.5}}>GRADE {s.dip_tier}</span>
+                    <span style={{fontFamily:"var(--dm)",fontSize:9,color:"var(--t3)"}}>{tierDesc}</span>
+                  </div>
+                  <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:tierColor}}>{tierCount} stock{tierCount!==1?"s":""}</span>
+                </div>
+              )}
               <div onClick={()=>handleExpand(s,i)} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid rgba(15,23,42,.04)",cursor:"pointer",background:open?(isDip?"rgba(217,119,6,.04)":"rgba(91,114,248,.025)"):"transparent",transition:"background .15s"}}>
                 <span style={{fontSize:18,flexShrink:0}}>{s.icon}</span>
                 <div style={{flex:1,minWidth:0}}>
@@ -2695,6 +2718,15 @@ function StrategyScreen({strategyData, onDetail}) {
                     <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:s.col,background:s.col==="var(--rose)"?"var(--rose2)":s.col==="var(--amber)"?"var(--amber2)":s.col==="var(--emerald)"?"var(--emerald2)":"#eef2ff",padding:"2px 8px",borderRadius:4}}>{s.label}</span>
                     {isDip&&qs>0&&(
                       <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"#92400e",background:"#fef3c7",border:"1px solid #fcd34d",padding:"2px 7px",borderRadius:4}}>{qs}/100</span>
+                    )}
+                    {isDip&&s.dip_tier&&(
+                      <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,
+                        color:s.dip_tier==="A"?"var(--emerald)":s.dip_tier==="B"?"var(--amber)":"var(--sky)",
+                        background:s.dip_tier==="A"?"var(--emerald2)":s.dip_tier==="B"?"var(--amber2)":"rgba(14,165,233,.1)",
+                        border:`1px solid ${s.dip_tier==="A"?"#6ee7b7":s.dip_tier==="B"?"#fcd34d":"#7dd3fc"}`,
+                        padding:"2px 7px",borderRadius:4}}>
+                        GRADE {s.dip_tier}
+                      </span>
                     )}
                     {isDip&&s.on_watchlist&&(
                       <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--indigo)",background:"#eef2ff",border:"1px solid #c7d2fe",padding:"2px 7px",borderRadius:4}}>ON WATCHLIST</span>
@@ -2729,13 +2761,27 @@ function StrategyScreen({strategyData, onDetail}) {
                   <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
                     {s.trust_score>0&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>TRUST</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--amber)"}}>{s.trust_score}</div></div>}
                     {s.rsi!=null&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>RSI</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:s.rsi<40?"var(--emerald)":s.rsi<55?"var(--amber)":"var(--t2)"}}>{(s.rsi).toFixed(0)}</div></div>}
-                    {s.pct_above_ma200!=null&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>vs MA200</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--emerald)"}}>+{(s.pct_above_ma200||0).toFixed(1)}%</div></div>}
+                    {s.pct_above_ma200!=null&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>vs MA200</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:(s.pct_above_ma200||0)>=0?"var(--emerald)":"var(--rose)"}}>{(s.pct_above_ma200||0)>=0?"+":""}{(s.pct_above_ma200||0).toFixed(1)}%</div></div>}
                     {s.analyst_count>0&&<div style={{flex:1,minWidth:60,background:"rgba(217,119,6,.06)",borderRadius:8,padding:"6px 8px",textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginBottom:2}}>ANALYSTS</div><div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--t1)"}}>{(s.analyst_buy_pct||0).toFixed(0)}% buy</div></div>}
                   </div>
                   {/* Evidence text */}
-                  <div style={{fontSize:12,color:"var(--t1)",lineHeight:1.7,marginBottom:12,borderLeft:"3px solid var(--amber)",paddingLeft:10}}>
+                  <div style={{fontSize:12,color:"var(--t1)",lineHeight:1.7,marginBottom:12,borderLeft:`3px solid ${s.dip_tier==="A"?"var(--emerald)":s.dip_tier==="C"?"var(--sky)":"var(--amber)"}`,paddingLeft:10}}>
                     {s.evidence||s.summary}
                   </div>
+                  {/* Grade B context note */}
+                  {s.dip_tier==="B"&&(
+                    <div style={{marginBottom:12,padding:"9px 11px",background:"rgba(217,119,6,.07)",borderRadius:8,border:"1px solid rgba(217,119,6,.2)"}}>
+                      <div style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:"var(--amber)",marginBottom:4,textTransform:"uppercase",letterSpacing:.8}}>Grade B — Quality business in correction</div>
+                      <div style={{fontSize:10.5,color:"var(--t2)",lineHeight:1.55}}>The short-term pullback signal is valid, but the long-term trend is still broken. This is higher risk than Grade A. If you enter, use a smaller position and a tighter stop loss.</div>
+                    </div>
+                  )}
+                  {/* Grade C context note */}
+                  {s.dip_tier==="C"&&(
+                    <div style={{marginBottom:12,padding:"7px 10px",background:"rgba(14,165,233,.06)",borderRadius:8,border:"1px solid rgba(14,165,233,.2)"}}>
+                      <div style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:"var(--sky)",marginBottom:3,textTransform:"uppercase",letterSpacing:.8}}>Grade C — Solid setup, moderate conviction</div>
+                      <div style={{fontSize:10.5,color:"var(--t2)",lineHeight:1.55}}>All signals aligned but trust score is moderate (70-77). Treat as a decent opportunity rather than a high-conviction entry.</div>
+                    </div>
+                  )}
                   {/* Overlap badges */}
                   {(s.on_watchlist||s.is_smart_pick)&&(
                     <div style={{marginBottom:12,padding:"8px 10px",background:"rgba(91,114,248,.05)",borderRadius:8,border:"1px solid rgba(91,114,248,.15)"}}>
