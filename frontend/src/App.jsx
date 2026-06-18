@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs } from "./api/client";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import AuthScreen from "./screens/AuthScreen";
@@ -242,13 +242,12 @@ const actionLabel = a => a==="EXIT"?"⚠️ Risk":a==="WAIT"?"Wait":a==="TRIM"?"
 // Swedish number format: 27 681 kr (space thousands separator)
 const fmtSEK = (n) => {
   const abs = Math.round(Math.abs(n));
-  // Use sv-SE locale for correct space thousands separator
-  return abs.toLocaleString("sv-SE") + "\u00a0kr";
+  return abs.toLocaleString("en-US") + "\u00a0kr";
 };
 const fmtSEKCompact = (n) => {
   const abs = Math.abs(n);
-  if (abs >= 1000000) return (abs/1000000).toFixed(1).replace(".",",") + "\u00a0Mkr";
-  return Math.round(abs).toLocaleString("sv-SE") + "\u00a0kr";
+  if (abs >= 1000000) return (abs/1000000).toFixed(1) + "\u00a0Mkr";
+  return Math.round(abs).toLocaleString("en-US") + "\u00a0kr";
 };
 
 // Exchange code → human-readable label (for Yahoo Finance search results)
@@ -507,7 +506,7 @@ const Tip = ({active,payload}) => {
   if(!active||!payload?.length) return null;
   return (
     <div style={{background:"#0f172a",borderRadius:8,padding:"7px 11px"}}>
-      <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"#fff"}}>{payload[0].value?.toLocaleString()}</div>
+      <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"#fff"}}>{payload[0].value?.toLocaleString("en-US")}</div>
       <div style={{fontFamily:"var(--mono)",fontSize:9,color:"rgba(255,255,255,.6)",marginTop:2}}>{payload[0].payload?.date}</div>
     </div>
   );
@@ -656,7 +655,7 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
               </div>
             </div>
             <div style={{textAlign:"right"}}>
-              <div style={{fontFamily:"var(--mono)",fontSize:28,fontWeight:700,color:"#fff",letterSpacing:-1,lineHeight:1}}>{curr}{price.toLocaleString()}</div>
+              <div style={{fontFamily:"var(--mono)",fontSize:28,fontWeight:700,color:"#fff",letterSpacing:-1,lineHeight:1}}>{curr}{price.toLocaleString("en-US")}</div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:5,marginTop:4}}>
                 <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:600,padding:"2px 8px",borderRadius:4,background:perfPos?"rgba(5,150,105,.2)":"rgba(225,29,72,.2)",color:perfPos?"#4ade80":"#fca5a5"}}>
                   {perfPos?"▲":"▼"}{Math.abs(perf).toFixed(1)}%
@@ -721,15 +720,15 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
             <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
               <div>
                 <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>52W Low</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--rose)",marginTop:2}}>{curr}{(d.w52Lo||0).toLocaleString()}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--rose)",marginTop:2}}>{curr}{(d.w52Lo||0).toLocaleString("en-US")}</div>
               </div>
               <div style={{textAlign:"center"}}>
                 <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>Current</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,marginTop:2}}>{curr}{price.toLocaleString()}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,marginTop:2}}>{curr}{price.toLocaleString("en-US")}</div>
               </div>
               <div style={{textAlign:"right"}}>
                 <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>52W High</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--emerald)",marginTop:2}}>{curr}{(d.w52Hi||0).toLocaleString()}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--emerald)",marginTop:2}}>{curr}{(d.w52Hi||0).toLocaleString("en-US")}</div>
               </div>
             </div>
           </div>}
@@ -795,7 +794,7 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
             <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:12}}>🎯 12-Month Analyst Forecast</div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
               <div>
-                <div style={{fontFamily:"var(--mono)",fontSize:24,fontWeight:700,color:"var(--indigo)",letterSpacing:-1,lineHeight:1}}>{curr}{d.aTarget.toLocaleString()}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:24,fontWeight:700,color:"var(--indigo)",letterSpacing:-1,lineHeight:1}}>{curr}{d.aTarget.toLocaleString("en-US")}</div>
                 <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>Consensus price target</div>
               </div>
               {upside && <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"5px 12px",borderRadius:20,border:"1px solid #a7f3d0"}}>{upside >= 0 ? "+" : ""}{upside}% upside</div>}
@@ -807,9 +806,9 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
                 <div style={{position:"absolute",top:"50%",left:`${aTPos}%`,transform:"translate(-50%,-50%)",width:16,height:16,background:"var(--indigo)",border:"2.5px solid #fff",borderRadius:"50%",boxShadow:"0 2px 8px rgba(91,114,248,.4)"}}/>
               </div>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
-                <div><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Low</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aLow.toLocaleString()}</div></div>
-                <div style={{textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",fontWeight:600}}>Now</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--indigo)"}}>{curr}{price.toLocaleString()}</div></div>
-                <div style={{textAlign:"right"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>High</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aHigh.toLocaleString()}</div></div>
+                <div><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Low</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aLow.toLocaleString("en-US")}</div></div>
+                <div style={{textAlign:"center"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--indigo)",fontWeight:600}}>Now</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--indigo)"}}>{curr}{price.toLocaleString("en-US")}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>High</div><div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600}}>{curr}{d.aHigh.toLocaleString("en-US")}</div></div>
               </div>
             </>}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
@@ -1232,7 +1231,7 @@ function FmpProfileCard({p}) {
       <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:p.description ? 4 : 0}}>
         {p.market_cap > 0 && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>Cap {fmtCap(p.market_cap)}</span>}
         {p.w52_high && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>52W {p.w52_low?.toFixed(2)}–{p.w52_high?.toFixed(2)}</span>}
-        {p.employees && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>{Number(p.employees).toLocaleString()} emp</span>}
+        {p.employees && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>{Number(p.employees).toLocaleString("en-US")} emp</span>}
         {p.beta && <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)"}}>β {p.beta?.toFixed(2)}</span>}
       </div>
       {p.description && (
@@ -1283,7 +1282,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
   const col3a = `${pnlPos ? "+" : ""}${pnlPct.toFixed(2)}%`;
   const col3b = `${pnlPos ? "+" : "−"}${fmtSEK(Math.abs(pnlSEK))}`;
   const col4a = valueSEK > 0 ? fmtSEK(valueSEK) : s.price && s.shares ? `${cu(s.ticker)}${(s.price * s.shares).toFixed(0)}` : "—";
-  const col4b = `${s.shares} st`;
+  const col4b = `${s.shares} sh`;
 
   // Urgency from dot CSS var
   const isUrgent  = dot === "var(--rose)";
@@ -1328,27 +1327,27 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
 
         {/* ── 4-column data grid (Avanza layout) ── */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",padding:"0 16px 10px",gap:4}}>
-          {/* Col 1: Idag */}
+          {/* Col 1: Today */}
           <div>
-            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Idag</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Today</div>
             <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:dailyPos?DK_POS:DK_NEG}}>{col1a}</div>
             <div style={{fontFamily:"var(--mono)",fontSize:12,color:dailyPos?DK_POS:DK_NEG,opacity:.72,marginTop:3}}>{col1b}</div>
           </div>
-          {/* Col 2: Kurs/Inköp */}
+          {/* Col 2: Price / Buy */}
           <div>
-            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Kurs/Inköp</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Price / Buy</div>
             <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:DK_T1}}>{col2a}</div>
             <div style={{fontFamily:"var(--mono)",fontSize:12,color:DK_T2,marginTop:3}}>{col2b}</div>
           </div>
-          {/* Col 3: Sedan köp */}
+          {/* Col 3: Since Buy */}
           <div>
-            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Sedan köp</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Since Buy</div>
             <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:pnlPos?DK_POS:DK_NEG}}>{col3a}</div>
             <div style={{fontFamily:"var(--mono)",fontSize:12,color:pnlPos?DK_POS:DK_NEG,opacity:.72,marginTop:3}}>{col3b}</div>
           </div>
-          {/* Col 4: Innehav */}
+          {/* Col 4: Holding */}
           <div>
-            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Innehav</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Holding</div>
             <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:DK_T1}}>{col4a}</div>
             <div style={{fontFamily:"var(--mono)",fontSize:12,color:DK_T2,marginTop:3}}>{col4b}</div>
           </div>
@@ -1395,7 +1394,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap",marginTop:isDataUnavailable&&s.fmpProfile?8:0}}>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Earnings <span style={{color:DK_T1,fontWeight:600}}>{s.earn}</span></span>
             <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Grade <span style={{color:trustColor,fontWeight:700}}>{tg(s.trust,s.grade)}</span></span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Köpt <span style={{color:DK_T2,fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Bought <span style={{color:DK_T2,fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
             {s.sek_rate>0&&s.currency!=="SEK"&&(
               s.buy_rate_sek&&Math.abs(s.buy_rate_sek-s.sek_rate)>0.05
                 ?<span style={{fontFamily:"var(--mono)",fontSize:8,color:DK_T3}}>
@@ -2648,6 +2647,284 @@ function SmartPicksScreen({picksData, disq, accuracy, loading, onRefreshPicks, o
   );
 }
 
+// ── ANALOGS TAB ──────────────────────────────────────
+function AnalogsTab({onDetail, portfolioTickers, watchlistTickers}) {
+  const [data, setData]             = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState(null);
+  const [activeFilter, setFilter]   = useState("All Themes");
+  const [expandedKey, setExpandedKey] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    getAnalogs()
+      .then(d => { setData(d); setError(null); })
+      .catch(() => setError("Could not load analogs. Please try again later."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const FILTERS = ["All Themes","Tech","Healthcare","Defense","Energy","Finance","Materials","Consumer","Indian Markets","European Markets"];
+  const ptSet = portfolioTickers || new Set();
+  const wlSet = watchlistTickers || new Set();
+
+  const resilLabel = lbl => {
+    if (lbl === "RESILIENT")   return {c:"var(--emerald)", bg:"var(--emerald2)"};
+    if (lbl === "NORMAL")      return {c:"var(--indigo)",  bg:"#eef2ff"};
+    if (lbl === "VULNERABLE")  return {c:"var(--amber)",   bg:"var(--amber2)"};
+    if (lbl === "FRAGILE")     return {c:"var(--rose)",    bg:"var(--rose2)"};
+    return {c:"var(--t3)", bg:"var(--card2)"};
+  };
+
+  const riskColor = r => r === "speculative" ? "var(--violet)" : "var(--t2)";
+
+  // ── Loading skeleton ──
+  if (loading) return (
+    <div className="pad" style={{paddingTop:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div>
+          <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15}}>Analogs</div>
+          <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Stocks sharing the setup of current winners</div>
+        </div>
+        <span style={{display:"inline-block",width:18,height:18,border:"2.5px solid var(--indigo)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+      </div>
+      {[1,2,3].map(i=>(
+        <div key={i} style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",marginBottom:12,padding:14,opacity:0.5+i*0.15}}>
+          <div style={{height:12,width:"55%",background:"var(--t4)",borderRadius:6,marginBottom:8}}/>
+          <div style={{height:9,width:"75%",background:"var(--t4)",borderRadius:4,marginBottom:12}}/>
+          {[1,2].map(j=>(
+            <div key={j} style={{height:44,background:"var(--card2)",borderRadius:8,marginBottom:6}}/>
+          ))}
+        </div>
+      ))}
+      <div style={{textAlign:"center",fontFamily:"var(--mono)",fontSize:10,color:"var(--t3)",marginTop:8}}>
+        Fetching structural data across 33 themes…
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div className="pad" style={{paddingTop:40,textAlign:"center"}}>
+      <div style={{fontSize:24,marginBottom:12}}>⚠️</div>
+      <div style={{fontFamily:"var(--dm)",fontSize:13,color:"var(--t2)",lineHeight:1.5}}>{error}</div>
+    </div>
+  );
+
+  if (!data) return null;
+
+  const themes = (data.themes || []).filter(t =>
+    activeFilter === "All Themes" || t.filter_pill === activeFilter
+  );
+
+  return (
+    <div className="pad" style={{paddingTop:14}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div>
+          <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15}}>Analogs</div>
+          <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Stocks sharing the setup of current theme winners</div>
+        </div>
+        <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#eef2ff",color:"var(--indigo)",border:"1px solid #c7d2fe",padding:"3px 10px",borderRadius:10,fontWeight:700}}>
+          {themes.reduce((s,t)=>s+t.analogs.length,0)} matches
+        </span>
+      </div>
+
+      {/* Filter pills */}
+      <div className="pills" style={{marginBottom:14}}>
+        {FILTERS.map(f=>(
+          <button key={f} className={`pill${activeFilter===f?" on":""}`} onClick={()=>setFilter(f)}>{f}</button>
+        ))}
+      </div>
+
+      {/* Theme sections */}
+      {themes.map(theme => (
+        <div key={theme.key} style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",marginBottom:14,overflow:"hidden",border:"1px solid rgba(91,114,248,.06)"}}>
+          {/* Theme header */}
+          <div style={{padding:"12px 14px 10px",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <span style={{fontSize:16}}>{theme.icon}</span>
+              <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,color:"var(--t1)"}}>{theme.name}</span>
+              {theme.risk_level==="speculative"&&(
+                <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--violet)",background:"rgba(124,58,237,.08)",border:"1px solid rgba(124,58,237,.2)",padding:"2px 7px",borderRadius:4}}>SPECULATIVE</span>
+              )}
+              {theme.early_winner_return_6m>10&&(
+                <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",border:"1px solid #a7f3d0",padding:"2px 7px",borderRadius:4}}>
+                  {theme.early_winner} +{theme.early_winner_return_6m}% 6M
+                </span>
+              )}
+            </div>
+            <div style={{fontSize:10,color:"var(--t2)",lineHeight:1.4}}>{theme.force}</div>
+          </div>
+
+          {/* Empty state */}
+          {theme.analogs.length===0&&(
+            <div style={{padding:"14px 16px",fontSize:11,color:"var(--t3)",fontStyle:"italic"}}>
+              {theme.empty_reason||"No qualifying analogs found."}
+            </div>
+          )}
+
+          {/* Analog rows */}
+          {theme.analogs.map(a => {
+            const rowKey = `${theme.key}:${a.ticker}`;
+            const open = expandedKey === rowKey;
+            const owned = ptSet.has(a.ticker);
+            const onWl  = wlSet.has(a.ticker);
+            const rl    = resilLabel(a.resilience?.label);
+            const scoreColor = a.analog_score>=80?"var(--emerald)":a.analog_score>=65?"var(--indigo)":a.analog_score>=50?"var(--amber)":"var(--t3)";
+
+            return (
+              <div key={a.ticker} style={{borderBottom:"1px solid rgba(15,23,42,.04)"}}>
+                {/* Compact row */}
+                <div
+                  onClick={()=>setExpandedKey(open?null:rowKey)}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",cursor:"pointer",background:open?"rgba(91,114,248,.025)":"transparent",transition:"background .15s"}}
+                >
+                  {/* Left: flag + ticker + name */}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:2,flexWrap:"wrap"}}>
+                      <span style={{fontSize:11}}>{a.flag}</span>
+                      <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12,color:"var(--t1)"}}>{a.ticker}</span>
+                      {a.analog_score>=80&&!a.already_moved&&(
+                        <span style={{fontFamily:"var(--mono)",fontSize:6,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",border:"1px solid #a7f3d0",padding:"2px 6px",borderRadius:3}}>⭐ STRONG MATCH</span>
+                      )}
+                      {a.already_moved&&(
+                        <span style={{fontFamily:"var(--mono)",fontSize:6,fontWeight:700,color:"var(--amber)",background:"var(--amber2)",border:"1px solid #fcd34d",padding:"2px 6px",borderRadius:3}}>⚠️ ALREADY MOVED</span>
+                      )}
+                      {(a.trust_score||100)<65&&(
+                        <span style={{fontFamily:"var(--mono)",fontSize:6,fontWeight:700,color:"var(--violet)",background:"rgba(124,58,237,.08)",border:"1px solid rgba(124,58,237,.2)",padding:"2px 6px",borderRadius:3}}>⚠️ SPECULATIVE</span>
+                      )}
+                      {owned&&(
+                        <span style={{fontFamily:"var(--mono)",fontSize:6,fontWeight:700,color:"var(--indigo)",background:"#eef2ff",border:"1px solid #c7d2fe",padding:"2px 6px",borderRadius:3}}>⭐ YOU OWN</span>
+                      )}
+                      {!owned&&onWl&&(
+                        <span style={{fontFamily:"var(--mono)",fontSize:6,fontWeight:700,color:"var(--sky)",background:"#e0f2fe",border:"1px solid #7dd3fc",padding:"2px 6px",borderRadius:3}}>⭐ WATCHLIST</span>
+                      )}
+                    </div>
+                    <div style={{fontSize:9,color:"var(--t3)"}}>{a.name}</div>
+                  </div>
+
+                  {/* Right: price + analog score */}
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0}}>
+                    {a.price>0&&(
+                      <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--t1)"}}>{cu(a.ticker)}{a.price<1000?a.price.toFixed(2):a.price.toFixed(0)}</div>
+                    )}
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:scoreColor}}>{a.analog_score}/100</span>
+                      <span style={{fontSize:9,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Expanded panel */}
+                {open&&(
+                  <div style={{padding:"13px 14px 15px",background:"linear-gradient(180deg,rgba(91,114,248,.03),transparent)",animation:"exIn .2s ease"}}>
+
+                    {/* Why it matches */}
+                    <div style={{fontSize:11,color:"var(--t1)",lineHeight:1.6,marginBottom:12,paddingLeft:10,borderLeft:"3px solid var(--indigo)"}}>
+                      {a.why_matches}
+                      {a.prerevenue_ref&&(
+                        <span style={{display:"block",fontSize:9,color:"var(--t3)",marginTop:3}}>Pre-revenue reference — fundamental match skipped, other dimensions weighted up.</span>
+                      )}
+                    </div>
+
+                    {/* 5-dimension score bar */}
+                    <div style={{marginBottom:12}}>
+                      <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Analog Score Breakdown</div>
+                      {[
+                        {label:"Theme Match",  val:a.dim_theme,          max:100, note:"Sector alignment"},
+                        {label:"Size Match",   val:a.dim_size,           max:100, note:"Company scale"},
+                        {label:"Fundamentals", val:a.dim_fundamentals,   max:100, note:"Business profile", skip:a.dim_fundamentals==null},
+                        {label:"Sentiment",    val:a.dim_sentiment,      max:100, note:"Coverage & inst."},
+                        {label:"Technical",    val:a.dim_technical,      max:100, note:"Price setup"},
+                      ].map(d => d.skip ? null : (
+                        <div key={d.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                          <div style={{width:70,fontFamily:"var(--mono)",fontSize:8,color:"var(--t2)",flexShrink:0}}>{d.label}</div>
+                          <div style={{flex:1,height:5,background:"rgba(15,23,42,.07)",borderRadius:3,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${d.val||0}%`,background:"linear-gradient(90deg,var(--indigo),var(--sky))",borderRadius:3,transition:"width .4s ease"}}/>
+                          </div>
+                          <div style={{width:28,fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:"var(--t1)",textAlign:"right"}}>{d.val!=null?d.val:"—"}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Move comparison */}
+                    <div style={{display:"flex",gap:6,marginBottom:12}}>
+                      <div style={{flex:1,background:"rgba(5,150,105,.06)",borderRadius:8,padding:"7px 9px",textAlign:"center",border:"1px solid rgba(5,150,105,.15)"}}>
+                        <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:3}}>WINNER 6M</div>
+                        <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--emerald)"}}>{a.move_ref_6m>=0?"+":""}{a.move_ref_6m}%</div>
+                        <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:1}}>{theme.early_winner}</div>
+                      </div>
+                      <div style={{flex:1,background:"rgba(91,114,248,.06)",borderRadius:8,padding:"7px 9px",textAlign:"center",border:"1px solid rgba(91,114,248,.15)"}}>
+                        <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:3}}>THIS STOCK 6M</div>
+                        <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:a.move_cand_6m>=0?"var(--emerald)":"var(--rose)"}}>{a.move_cand_6m>=0?"+":""}{a.move_cand_6m}%</div>
+                        <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginTop:1}}>{a.ticker}</div>
+                      </div>
+                      {a.resilience?.score!=null&&(
+                        <div style={{flex:1,background:rl.bg,borderRadius:8,padding:"7px 9px",textAlign:"center",border:`1px solid ${rl.c}22`}}>
+                          <div style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",marginBottom:3}}>RESILIENCE</div>
+                          <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:rl.c}}>{a.resilience.score}</div>
+                          <div style={{fontFamily:"var(--mono)",fontSize:7,color:rl.c,marginTop:1}}>{a.resilience.label}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Resilience translation */}
+                    {a.resilience?.translation&&(
+                      <div style={{fontSize:10,color:"var(--t2)",lineHeight:1.5,marginBottom:12,padding:"7px 10px",background:"rgba(15,23,42,.03)",borderRadius:7}}>
+                        {a.resilience.translation}
+                      </div>
+                    )}
+
+                    {/* Already moved note */}
+                    {a.already_moved&&(
+                      <div style={{fontSize:10,color:"var(--amber)",background:"var(--amber2)",borderRadius:6,padding:"7px 10px",marginBottom:12,border:"1px solid rgba(217,119,6,.2)",fontWeight:600}}>
+                        ⚠️ This stock has already started moving toward the reference winner's gain. Consider waiting for a pullback.
+                      </div>
+                    )}
+
+                    {/* Trust score */}
+                    {a.trust_score!=null&&(
+                      <div style={{fontSize:10,color:"var(--t2)",marginBottom:12}}>
+                        AI trust score: <span style={{fontFamily:"var(--mono)",fontWeight:700,color:tc(a.trust_score,a.grade)}}>{a.trust_score}/100</span>
+                        {a.grade&&<span style={{marginLeft:5,color:"var(--t3)"}}>({a.grade})</span>}
+                      </div>
+                    )}
+
+                    {/* Action buttons — no BUY button */}
+                    <div style={{display:"flex",gap:7}}>
+                      <button
+                        onClick={()=>{ if(onDetail) onDetail({ticker:a.ticker,name:a.name,flag:a.flag,price:a.price,trust:a.trust_score||50,rec:"HOLD"}); }}
+                        style={{flex:1,padding:"9px 6px",borderRadius:9,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                        Full Analysis →
+                      </button>
+                      <button
+                        onClick={()=>addToWatchlist(a.ticker).catch(()=>{})}
+                        style={{flex:1,padding:"9px 6px",borderRadius:9,border:"1.5px solid var(--t4)",background:"var(--white)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                        + Watchlist
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+
+      {themes.length===0&&(
+        <div style={{textAlign:"center",padding:"40px 20px",color:"var(--t3)",fontSize:12}}>
+          No themes match the selected filter.
+        </div>
+      )}
+
+      {/* Footer note */}
+      <div style={{textAlign:"center",padding:"4px 20px 8px",fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",lineHeight:1.5}}>
+        Analog scores measure structural similarity — not buy recommendations.<br/>
+        Refreshed hourly · Data from yfinance &amp; Finnhub
+      </div>
+    </div>
+  );
+}
+
 // ── STRATEGY SCREEN ──────────────────────────────────
 function StrategyScreen({strategyData, onDetail}) {
   const [tab,setTab] = useState(0);
@@ -2655,12 +2932,17 @@ function StrategyScreen({strategyData, onDetail}) {
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
   const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[]};
-  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys"];
+  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs"];
   const _tierOrder = {"A":0,"B":1,"C":2};
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
-    (SD.dipBuys||[]).map(mapStrategy).sort((a,b)=>(_tierOrder[a.dip_tier]||1)-(_tierOrder[b.dip_tier]||1)||(b.quality_score||0)-(a.quality_score||0))];
-  const items = lists[tab];
+    (SD.dipBuys||[]).map(mapStrategy).sort((a,b)=>(_tierOrder[a.dip_tier]||1)-(_tierOrder[b.dip_tier]||1)||(b.quality_score||0)-(a.quality_score||0)),
+    []   // Analogs tab — data managed internally by AnalogsTab component
+  ];
+  const items = tab===4 ? [] : lists[tab];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
+  // Portfolio/watchlist ticker sets for AnalogsTab badge detection
+  const portfolioTickers = new Set((SD.myStocks||[]).map(s=>s.ticker));
+  const watchlistTickers = new Set((SD.watchlist||[]).map(s=>s.ticker));
 
   // For Dip Buys tab: always show all 3 grade sections even when empty.
   // Build a displayItems array that injects grade-header and empty-grade
@@ -2720,18 +3002,21 @@ function StrategyScreen({strategyData, onDetail}) {
         <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#eef2ff",color:"var(--indigo)",border:"1px solid #c7d2fe",padding:"3px 10px",borderRadius:10,fontWeight:700}}>{total} active</span>
       </div>
       <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",overflow:"hidden"}}>
-        <div style={{display:"flex",borderBottom:"1px solid var(--t4)"}}>
+        <div style={{display:"flex",borderBottom:"1px solid var(--t4)",overflowX:"auto",scrollbarWidth:"none"}}>
           {tabs.map((t,i)=>(
-            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:1,padding:"10px 2px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:"0 0 auto",minWidth:i===4?"60px":"0",padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:i===4?9:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
               {t}
-              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{lists[i].length}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":lists[i].length}</span>
             </button>
           ))}
         </div>
-        {tab!==3&&items.length===0&&(
+        {tab===4&&(
+          <AnalogsTab onDetail={onDetail} portfolioTickers={portfolioTickers} watchlistTickers={watchlistTickers}/>
+        )}
+        {tab!==4&&tab!==3&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
-        {displayItems.map((s,i)=>{
+        {tab!==4&&displayItems.map((s,i)=>{
           // ── Grade header sentinel ──────────────────────────────────────────
           if(s._isGradeHeader){
             const tier=s.tier;

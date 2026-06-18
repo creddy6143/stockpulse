@@ -1801,6 +1801,48 @@ def get_dips(user_id: str = Depends(get_current_user)):
     }
 
 
+# ── ANALOGS ──────────────────────────────────────────────────────────────────
+
+_analogs_cache: dict = {}
+_analogs_ts: float = 0.0
+_ANALOGS_TTL = 3600   # refresh every hour
+
+
+def _refresh_analogs() -> None:
+    """Run the analog scoring engine in a background thread and update cache."""
+    global _analogs_cache, _analogs_ts
+    try:
+        from intelligence.analogs import build_analogs_response
+        result = build_analogs_response()
+        _analogs_cache.clear()
+        _analogs_cache.update(result)
+        _analogs_ts = _time.monotonic()
+        print(f"[ANALOGS] Cache refreshed: {result.get('total_candidates',0)} candidates across {len(result.get('themes',[]))} themes", flush=True)
+    except Exception as exc:
+        print(f"[ANALOGS] Refresh failed: {exc}", flush=True)
+
+
+@app.get("/api/analogs")
+def get_analogs(user_id: str = Depends(get_current_user)):
+    """Structural analogs: stocks sharing the setup of current theme winners.
+
+    Heavy endpoint (fetches 100-200 tickers). Cached for 1 hour.
+    First call after startup runs synchronously; subsequent calls use cache
+    and trigger a background refresh when TTL expires.
+    """
+    global _analogs_cache, _analogs_ts
+    stale = _time.monotonic() - _analogs_ts > _ANALOGS_TTL
+
+    if not _analogs_cache:
+        # First call — run synchronously so the frontend gets real data
+        _refresh_analogs()
+    elif stale:
+        # Cache exists but is stale — serve stale, refresh in background
+        threading.Thread(target=_refresh_analogs, daemon=True).start()
+
+    return _analogs_cache
+
+
 # ── EARNINGS ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/earnings")

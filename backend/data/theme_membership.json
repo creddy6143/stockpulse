@@ -1,0 +1,299 @@
+{
+  "ai_infrastructure": {
+    "name": "AI Infrastructure",
+    "icon": "🤖",
+    "force": "AI capex buildout driving compute, networking and cooling demand",
+    "early_winner": "NVDA",
+    "candidates": ["AMD", "MRVL", "ANET", "SMCI", "CSCO", "DELL", "HPE", "ALAB", "CIEN"],
+    "filter_pill": "Tech",
+    "risk_level": "moderate"
+  },
+  "ai_software": {
+    "name": "AI Software & Agents",
+    "icon": "💡",
+    "force": "Enterprise AI adoption wave — software layer monetisation",
+    "early_winner": "PLTR",
+    "candidates": ["AI", "BBAI", "SOUN", "ASAN", "MDB", "SNOW", "GTLB", "ZS", "DDOG"],
+    "filter_pill": "Tech",
+    "risk_level": "moderate"
+  },
+  "semiconductors": {
+    "name": "Semiconductors",
+    "icon": "⚡",
+    "force": "AI chip supercycle + defence/auto diversification",
+    "early_winner": "NVDA",
+    "candidates": ["AVGO", "QCOM", "TXN", "LRCX", "AMAT", "KLAC", "ON", "WOLF", "MPWR"],
+    "filter_pill": "Tech",
+    "risk_level": "moderate"
+  },
+  "storage_memory": {
+    "name": "Storage / Memory",
+    "icon": "🥇",
+    "force": "AI storage demand + memory cycle bottom",
+    "early_winner": "SNDK",
+    "candidates": ["WDC", "MU", "STX", "PSTG", "NTAP", "NTNX"],
+    "filter_pill": "Tech",
+    "risk_level": "moderate"
+  },
+  "quantum": {
+    "name": "Quantum Computing",
+    "icon": "🔬",
+    "force": "Government and corporate R&D spending on quantum advantage",
+    "early_winner": "IONQ",
+    "candidates": ["QBTS", "RGTI", "QUBT", "QTUM", "IBM"],
+    "filter_pill": "Tech",
+    "risk_level": "speculative"
+  },
+  "nuclear_smr": {
+    "name": "Nuclear / SMR",
+    "icon": "⚛️",
+    "force": "AI power demand reviving nuclear buildout",
+    "early_winner": "OKLO",
+    "candidates": ["SMR", "NNE", "CCJ", "UEC", "LEU", "CEG", "VST", "BWXT"],
+    "filter_pill": "Energy",
+    "risk_level": "speculative"
+  },
+  "space_satellites": {
+    "name": "Space & Satellites",
+    "icon": "🛰️",
+    "force": "Low-earth orbit broadband + commercial space economy",
+    "early_winner": "RKLB",
+    "candidates": ["ASTS", "LUNR", "PL", "BKSY", "SPCE", "RDW", "ACHR"],
+    "filter_pill": "Defense",
+    "risk_level": "speculative"
+  },
+  "defense_rearmament": {
+    "name": "Defence / Rearmament",
+    "icon": "🛡️",
+    "force": "NATO spending surge + Ukraine + Middle East geopolitics",
+    "early_winner": "RHM.DE",
+    "candidates": ["LMT", "RTX", "NOC", "GD", "BAESY", "SAAB.ST", "LDOS", "HII", "DRS"],
+    "filter_pill": "Defense",
+    "risk_level": "moderate"
+  },
+  "defense_tech_drones": {
+    "name": "Defence Tech & Drones",
+    "icon": "🚁",
+    "force": "Autonomous warfare + counter-drone + AI-guided systems",
+    "early_winner": "AXON",
+    "candidates": ["AVAV", "KTOS", "RCAT", "JOBY", "ACHR", "BRTX", "ESLT"],
+    "filter_pill": "Defense",
+    "risk_level": "speculative"
+  },
+  "cybersecurity": {
+    "name": "Cybersecurity",
+    "icon": "🔐",
+    "force": "AI-driven threat landscape expanding cyber budgets",
+    "early_winner": "CRWD",
+    "candidates": ["ZS", "PANW", "FTNT", "S", "TENB", "VRNS", "QLYS", "CYBR"],
+    "filter_pill": "Tech",
+    "risk_level": "moderate"
+  },
+  "cloud_hyperscalers": {
+    "name": "Cloud / Hyperscalers",
+    "icon": "☁️",
+    "force": "Enterprise cloud migration + AI workload shift to cloud",
+    "early_winner": "MSFT",
+    "candidates": ["AMZN", "GOOGL", "META", "CRM", "NOW", "WDAY", "HUBS"],
+    "filter_pill": "Tech",
+    "risk_level": "moderate"
+  },
+  "glp1_obesity": {
+    "name": "GLP-1 / Obesity",
+    "icon": "💊",
+    "force": "Multi-billion dollar obesity drug market expanding globally",
+    "early_winner": "LLY",
+    "candidates": ["NVO", "VKTX", "AMGN", "ROIV", "ZFOX", "ALNYL", "RYTM", "ACAD"],
+    "filter_pill": "Healthcare",
+    "risk_level": "moderate"
+  },
+  "gene_editing_crispr": {
+    "name": "Gene Editing / CRISPR",
+    "icon": "🧬",
+    "force": "First curative gene therapies reaching commercial stage",
+    "early_winner": "CRSP",
+    "candidates": ["EDIT", "BEAM", "NTLA", "VERV", "BLUE", "ARWR", "MDGL"],
+    "filter_pill": "Healthcare",
+    "risk_level": "speculative"
+  },
+  "robotics_automation": {
+    "name": "Robotics & Automation",
+    "icon": "🦾",
+    "force": "Labour cost pressure driving industrial and humanoid robot adoption",
+    "early_winner": "ISRG",
+    "candidates": ["ABB", "FANUY", "IRBT", "BRZE", "PATH", "RXO", "NVTS", "NNDM"],
+    "filter_pill": "Tech",
+    "risk_level": "moderate"
+  },
+  "ev_battery": {
+    "name": "EV & Battery",
+    "icon": "🔋",
+    "force": "EV penetration curve + grid storage demand",
+    "early_winner": "TSLA",
+    "candidates": ["RIVN", "LCID", "NIO", "LI", "XPEV", "FSR", "GOEV", "NKLA"],
+    "filter_pill": "Materials",
+    "risk_level": "speculative"
+  },
+  "lithium_rare_earths": {
+    "name": "Lithium & Rare Earths",
+    "icon": "⛏️",
+    "force": "EV + grid battery demand creating critical mineral shortages",
+    "early_winner": "ALB",
+    "candidates": ["SQM", "LTHM", "MP", "NOVN", "EREGL", "PCRFY", "SGML", "LAC"],
+    "filter_pill": "Materials",
+    "risk_level": "speculative"
+  },
+  "solar_renewables": {
+    "name": "Solar & Renewables",
+    "icon": "☀️",
+    "force": "IRA incentives + corporate net-zero commitments + AI power demand",
+    "early_winner": "ENPH",
+    "candidates": ["FSLR", "SEDG", "RUN", "ARRY", "NOVA", "MAXN", "SHLS", "NEE"],
+    "filter_pill": "Energy",
+    "risk_level": "moderate"
+  },
+  "hydrogen": {
+    "name": "Hydrogen (Speculative)",
+    "icon": "💨",
+    "force": "Hard-to-abate sector decarbonisation driving early hydrogen investment",
+    "early_winner": "PLUG",
+    "candidates": ["BE", "BLDP", "HYLN", "HTOO", "HGEN"],
+    "filter_pill": "Energy",
+    "risk_level": "speculative"
+  },
+  "grid_electrification": {
+    "name": "Grid & Electrification",
+    "icon": "⚡",
+    "force": "AI data center power demand straining grid capacity",
+    "early_winner": "ETN",
+    "candidates": ["PWR", "HUBB", "ACLS", "GEV", "AEI", "ARHS", "ENS"],
+    "filter_pill": "Energy",
+    "risk_level": "moderate"
+  },
+  "data_center_reits": {
+    "name": "Data Centre REITs",
+    "icon": "🏢",
+    "force": "AI infrastructure demand driving data centre lease pricing power",
+    "early_winner": "EQIX",
+    "candidates": ["DLR", "IRM", "CONE", "QTS", "VNET", "GDS"],
+    "filter_pill": "Finance",
+    "risk_level": "moderate"
+  },
+  "crypto_infrastructure": {
+    "name": "Crypto Infrastructure",
+    "icon": "₿",
+    "force": "Bitcoin institutional adoption + spot ETF inflows",
+    "early_winner": "COIN",
+    "candidates": ["MSTR", "MARA", "RIOT", "CLSK", "BTBT", "HUT", "HIVE"],
+    "filter_pill": "Finance",
+    "risk_level": "speculative"
+  },
+  "fintech_payments": {
+    "name": "Fintech & Payments",
+    "icon": "💳",
+    "force": "Digital payments penetration + AI-driven financial services",
+    "early_winner": "V",
+    "candidates": ["MA", "PYPL", "SQ", "AFRM", "SOFI", "UPST", "LC", "STNE"],
+    "filter_pill": "Finance",
+    "risk_level": "moderate"
+  },
+  "streaming_media": {
+    "name": "Streaming & Media",
+    "icon": "📺",
+    "force": "Ad-supported streaming transition + live sports rights consolidation",
+    "early_winner": "NFLX",
+    "candidates": ["DIS", "PARA", "WBD", "FOXA", "ROKU", "FUBO", "LGF.A"],
+    "filter_pill": "Consumer",
+    "risk_level": "moderate"
+  },
+  "gaming": {
+    "name": "Gaming",
+    "icon": "🎮",
+    "force": "AI-generated content + mobile gaming growth + cloud gaming",
+    "early_winner": "RBLX",
+    "candidates": ["EA", "TTWO", "ATVI", "PLTK", "NGMS", "SKLZ", "GENIE"],
+    "filter_pill": "Consumer",
+    "risk_level": "moderate"
+  },
+  "luxury_goods": {
+    "name": "Luxury Goods",
+    "icon": "💎",
+    "force": "Aspirational class expansion in Asia + resilient luxury pricing power",
+    "early_winner": "MC.PA",
+    "candidates": ["RMS.PA", "CDI.PA", "CFR.SW", "BRBY.L", "RL", "TPR", "CPRI"],
+    "filter_pill": "European Markets",
+    "risk_level": "moderate"
+  },
+  "sports_betting": {
+    "name": "Sports Betting",
+    "icon": "🎲",
+    "force": "US legalisation wave + mobile-first betting adoption",
+    "early_winner": "DKNG",
+    "candidates": ["PENN", "MGM", "BYD", "EVRI", "GAN", "RSI", "GENI"],
+    "filter_pill": "Consumer",
+    "risk_level": "moderate"
+  },
+  "indian_growth": {
+    "name": "Indian Growth",
+    "icon": "🇮🇳",
+    "force": "Fastest growing major economy + rising middle class consumption",
+    "early_winner": "RELIANCE.NS",
+    "candidates": ["HDFCBANK.NS", "INFY.NS", "TCS.NS", "WIPRO.NS", "BAJFINANCE.NS", "TITAN.NS", "MARUTI.NS"],
+    "filter_pill": "Indian Markets",
+    "risk_level": "moderate"
+  },
+  "indian_it": {
+    "name": "Indian IT Services",
+    "icon": "💻",
+    "force": "Global enterprise AI transformation driving Indian IT services demand",
+    "early_winner": "INFY.NS",
+    "candidates": ["TCS.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS", "LTIM.NS", "MPHASIS.NS", "PERSISTENT.NS"],
+    "filter_pill": "Indian Markets",
+    "risk_level": "moderate"
+  },
+  "indian_banks": {
+    "name": "Indian Banks",
+    "icon": "🏦",
+    "force": "Credit cycle expansion + formalisation of economy",
+    "early_winner": "HDFCBANK.NS",
+    "candidates": ["ICICIBANK.NS", "KOTAKBANK.NS", "AXISBANK.NS", "SBIN.NS", "BANDHANBNK.NS", "FEDERALBNK.NS"],
+    "filter_pill": "Indian Markets",
+    "risk_level": "moderate"
+  },
+  "indian_defence": {
+    "name": "Indian Defence",
+    "icon": "🎖️",
+    "force": "India defence indigenisation push + rising capex",
+    "early_winner": "HAL.NS",
+    "candidates": ["BEL.NS", "BHEL.NS", "DRAFTCORP.NS", "COCHINSHIP.NS", "MAZAGSHIP.NS"],
+    "filter_pill": "Indian Markets",
+    "risk_level": "moderate"
+  },
+  "swedish_defence": {
+    "name": "Swedish Defence",
+    "icon": "🇸🇪",
+    "force": "Sweden NATO membership + Nordic defence budget surge",
+    "early_winner": "SAAB.ST",
+    "candidates": ["FOI.ST", "MEKO.ST"],
+    "filter_pill": "European Markets",
+    "risk_level": "moderate"
+  },
+  "european_defence": {
+    "name": "European Defence",
+    "icon": "🇪🇺",
+    "force": "2% NATO target compliance wave + Ukraine rebuild contracts",
+    "early_winner": "RHM.DE",
+    "candidates": ["BAESY", "BAEB.DE", "AM.PA", "SAAB.ST", "DASSAV.PA", "LDO.MI"],
+    "filter_pill": "European Markets",
+    "risk_level": "moderate"
+  },
+  "european_luxury": {
+    "name": "European Luxury",
+    "icon": "👜",
+    "force": "Post-China reopening luxury rebound + generational wealth transfer",
+    "early_winner": "MC.PA",
+    "candidates": ["RMS.PA", "CDI.PA", "CFR.SW", "BRBY.L", "KER.PA", "CSGP"],
+    "filter_pill": "European Markets",
+    "risk_level": "moderate"
+  }
+}

@@ -124,6 +124,7 @@ export const clearAllPortfolio = () => request('/api/portfolio/all', { method: '
 // ── DIPS ─────────────────────────────────────────────────────────────────────
 
 export const getDips = () => request('/api/dips');
+export const getAnalogs = () => request('/api/analogs');
 
 // ── PRICE ALERTS ─────────────────────────────────────────────────────────────
 
