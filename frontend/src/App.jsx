@@ -1251,180 +1251,207 @@ function FmpProfileCard({p}) {
 function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, onEditLot, onDeleteLot}) {
   const [open, setOpen] = useState(false);
   const [showScore, setShowScore] = useState(false);
-  const c = tc(s.trust, s.grade);
   const pnlPct = s.pnl_pct || ((s.price - s.buy) / s.buy * 100);
   const pnlPos = pnlPct >= 0;
   const isDataUnavailable = s.grade === "Data Unavailable";
   const isReview = s.rec==="Review" || s.verifSuppressed;
-  const recColor = s.rec==="SELL"?"var(--rose)":s.rec==="BUY"?"var(--emerald)":"var(--amber)";
-  const recBg = s.rec==="SELL"?"var(--rose2)":s.rec==="BUY"?"var(--emerald2)":"var(--amber2)";
-  const recLabel = isDataUnavailable||isReview ? "—" : (s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec);
-  // Use backend-provided SEK values — no frontend conversion needed
+  const recLabel = isDataUnavailable||isReview ? "Review" : (s.rec==="SELL"&&s.trust<30?"S.SELL":s.rec==="BUY"&&s.trust>=75?"S.BUY":s.rec);
   const valueSEK = s.value_sek || 0;
-  const priceSEK = s.shares > 0 ? valueSEK / s.shares : 0;
   const pnlSEK = s.pnl_sek || 0;
   const investedSEK = s.invested_sek || 0;
+
+  // ── Avanza dark-theme palette ──────────────────────
+  const DK_BG    = "#141821";
+  const DK_HOVER = "#1a2030";
+  const DK_EXP   = "#0f1520";
+  const DK_T1    = "#f5f7fa";
+  const DK_T2    = "#a8b2c0";
+  const DK_T3    = "#7a8290";
+  const DK_DIV   = "rgba(255,255,255,.07)";
+  const DK_POS   = "#4da3ff";   // positive — Avanza blue
+  const DK_NEG   = "#ff5c5c";   // negative — warm red
+
+  // Daily change absolutes
+  const dailyAbs = s.price * Math.abs(s.change || 0) / 100;
+  const dailyPos = (s.change || 0) >= 0;
+
+  // Column values
+  const col1a = `${dailyPos ? "+" : ""}${(s.change || 0).toFixed(2)}%`;
+  const col1b = `${dailyPos ? "+" : "−"}${cu(s.ticker)}${dailyAbs.toFixed(2)}`;
+  const col2a = `${cu(s.ticker)}${typeof s.price === "number" ? s.price.toFixed(2) : s.price}`;
+  const col2b = s.buy ? `${cu(s.ticker)}${(+s.buy).toFixed(2)}` : "—";
+  const col3a = `${pnlPos ? "+" : ""}${pnlPct.toFixed(2)}%`;
+  const col3b = `${pnlPos ? "+" : "−"}${fmtSEK(Math.abs(pnlSEK))}`;
+  const col4a = valueSEK > 0 ? fmtSEK(valueSEK) : s.price && s.shares ? `${cu(s.ticker)}${(s.price * s.shares).toFixed(0)}` : "—";
+  const col4b = `${s.shares} st`;
+
+  // Urgency from dot CSS var
+  const isUrgent  = dot === "var(--rose)";
+  const isMonitor = dot === "var(--amber)";
+  const urgencyLabel = isUrgent ? "Urgent" : isMonitor ? "Monitor" : "Stable";
+  const urgencyColor = isUrgent ? DK_NEG : isMonitor ? "#f5a623" : "#4ade80";
+
+  // Trust colour adapted for dark bg
+  const trustColor = s.verifConfidence === "SUPPRESSED" ? DK_T3
+    : s.trust >= 75 ? "#6b8cff"
+    : s.trust >= 60 ? "#f5a623"
+    : s.trust >= 40 ? "#f59e0b"
+    : DK_NEG;
+
+  // REC colour adapted for dark bg
+  const recColor = isDataUnavailable || isReview ? DK_T3
+    : s.rec === "SELL" ? DK_NEG
+    : s.rec === "BUY"  ? "#4ade80"
+    : "#f5a623";
+
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+
   return (
     <>
       {showScore && <ScoreDetail ticker={s.ticker} trust={s.trust} grade={tg(s.trust)} onClose={()=>setShowScore(false)}/>}
-      <div onClick={()=>setOpen(o=>!o)}
-        style={{display:"grid",gridTemplateColumns:"1.9fr 1.5fr .7fr .9fr",
-          alignItems:"center",padding:"7px 12px",borderBottom:"1px solid rgba(15,23,42,.04)",
-          cursor:"pointer",background:open?"rgba(91,114,248,.02)":"transparent",
-          transition:"background .15s",gap:4}}>
-        <div style={{minWidth:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
-            <span style={{fontSize:10}}>{s.flag}</span>
-            <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12,color:s.premarket?"var(--rose)":"var(--t1)"}}>{s.ticker}</span>
-            <span style={{fontFamily:"var(--mono)",fontSize:8,color:s.change>=0?"var(--emerald)":"var(--rose)"}}>
-              {s.change>=0?"▲":"▼"}{Math.abs(s.change).toFixed(1)}%
+      <div style={{background:open?DK_HOVER:DK_BG, borderBottom:`1px solid ${DK_DIV}`, cursor:"pointer"}}
+           onClick={()=>setOpen(o=>!o)}>
+
+        {/* ── Row header: Flag · Company name · Ticker · time · chevron ── */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px 8px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0,flex:1}}>
+            <span style={{fontSize:16,flexShrink:0}}>{s.flag}</span>
+            <span style={{fontFamily:"var(--dm)",fontWeight:600,fontSize:15,color:DK_T1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:11,color:DK_T3,flexShrink:0}}>{s.ticker}</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0,marginLeft:8}}>
+            <span style={{fontFamily:"var(--mono)",fontSize:11,color:DK_T3}}>{timeStr}</span>
+            <span style={{color:"#5a6478",fontSize:20,lineHeight:1,fontWeight:300}}>›</span>
+          </div>
+        </div>
+
+        {/* ── 4-column data grid (Avanza layout) ── */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",padding:"0 16px 10px",gap:4}}>
+          {/* Col 1: Idag */}
+          <div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Idag</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:dailyPos?DK_POS:DK_NEG}}>{col1a}</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:12,color:dailyPos?DK_POS:DK_NEG,opacity:.72,marginTop:3}}>{col1b}</div>
+          </div>
+          {/* Col 2: Kurs/Inköp */}
+          <div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Kurs/Inköp</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:DK_T1}}>{col2a}</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:12,color:DK_T2,marginTop:3}}>{col2b}</div>
+          </div>
+          {/* Col 3: Sedan köp */}
+          <div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Sedan köp</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:pnlPos?DK_POS:DK_NEG}}>{col3a}</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:12,color:pnlPos?DK_POS:DK_NEG,opacity:.72,marginTop:3}}>{col3b}</div>
+          </div>
+          {/* Col 4: Innehav */}
+          <div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:DK_T3,letterSpacing:".5px",marginBottom:5}}>Innehav</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:15,fontWeight:400,color:DK_T1}}>{col4a}</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:12,color:DK_T2,marginTop:3}}>{col4b}</div>
+          </div>
+        </div>
+
+        {/* ── Intelligence line: Trust · REC · Category · urgency dot ── */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 16px 13px",borderTop:`1px solid ${DK_DIV}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+            <span
+              onClick={e=>{e.stopPropagation();setShowScore(true);}}
+              title={s.verifConfidence==="SUPPRESSED"?"Score suppressed — data insufficient":s.verifConfidence==="MEDIUM"?`Medium confidence${s.verifCaveat?` — ${s.verifCaveat}`:""}`:undefined}
+              style={{fontFamily:"var(--mono)",fontSize:12,color:trustColor,cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>
+              {s.verifConfidence==="SUPPRESSED" ? "Score: Review" : `Trust\u00a0${s.trust ?? "?"}`}
             </span>
+            <span style={{color:DK_DIV,fontSize:14}}>·</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:recColor}}>{recLabel}</span>
+            <span style={{color:DK_DIV,fontSize:14}}>·</span>
+            <span style={{fontFamily:"var(--dm)",fontSize:12,color:urgencyColor}}>{urgencyLabel}</span>
+            {s.verifConfidence==="MEDIUM"&&<span style={{fontFamily:"var(--mono)",fontSize:10,color:"#f5a623"}}>~verify</span>}
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:1}}>
-            <span style={{fontSize:9,color:"var(--t3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:90}}>{s.name}</span>
-            <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{s.shares} st</span>
-          </div>
-        </div>
-        <div>
-          {priceSEK > 0 ? (
-            <>
-              <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--t1)"}}>
-                {fmtSEK(priceSEK)}
-                <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnlPos?"var(--emerald)":"var(--rose)",marginLeft:4}}>{pnlPos?"+":""}{pnlPct.toFixed(1)}%</span>
-              </div>
-              <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
-                {cu(s.ticker)}{typeof s.price==="number"?s.price.toFixed(2):s.price}
-                <span style={{color:pnlPos?"var(--emerald)":"var(--rose)",marginLeft:3}}>
-                  · {pnlPos?"+":""}{fmtSEK(pnlSEK)}
-                </span>
-              </div>
-            </>
-          ) : (
-            <div style={{display:"flex",alignItems:"baseline",gap:4}}>
-              <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,color:"var(--t1)"}}>{cu(s.ticker)}{typeof s.price==="number"?s.price.toFixed(2):s.price}</span>
-              <span style={{fontFamily:"var(--mono)",fontSize:9,color:pnlPos?"var(--emerald)":"var(--rose)"}}>{pnlPos?"+":""}{pnlPct.toFixed(1)}%</span>
-            </div>
-          )}
-        </div>
-        <div style={{textAlign:"center"}}>
-          <span onClick={e=>{e.stopPropagation();setShowScore(true);}} title={
-            s.verifConfidence==="SUPPRESSED" ? "Score suppressed — data insufficient for reliable display" :
-            s.verifConfidence==="MEDIUM" ? `Medium confidence${s.verifCaveat?` — ${s.verifCaveat}`:""}` :
-            "Tap for score breakdown"
-          }
-            style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:
-              s.verifConfidence==="SUPPRESSED"?"var(--t3)":
-              s.verifConfidence==="MEDIUM"?"var(--amber)":c,
-              cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>
-            {s.verifConfidence==="SUPPRESSED" ? "—" : (s.trust ?? "?")}
-          </span>
-          {s.verifConfidence==="MEDIUM"&&<div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--amber)",marginTop:1}}>~verify</div>}
-          {s.verifConfidence==="SUPPRESSED"&&<div style={{fontFamily:"var(--mono)",fontSize:6,color:"var(--t3)",marginTop:1}}>review</div>}
-        </div>
-        <div style={{textAlign:"right"}}>
-          <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:isDataUnavailable?"var(--t3)":recColor,background:isDataUnavailable?"transparent":recBg,padding:"3px 5px",borderRadius:4}}>{recLabel}</span>
+          <div style={{width:8,height:8,borderRadius:"50%",background:urgencyColor,boxShadow:`0 0 6px ${urgencyColor}55`,flexShrink:0}}/>
         </div>
       </div>
-      {open&&(
-        <div style={{padding:"9px 12px 11px",background:"rgba(91,114,248,.02)",borderBottom:"1px solid rgba(15,23,42,.05)",animation:"exIn .2s ease"}}>
-          {s.verifConfidence==="SUPPRESSED"&&(
-            <div style={{fontSize:9,color:"var(--t3)",marginBottom:6,fontFamily:"var(--mono)"}}>
+
+      {/* ── Expanded panel (dark) ── */}
+      {open && (
+        <div style={{background:DK_EXP,borderBottom:`1px solid ${DK_DIV}`,padding:"12px 16px 14px",animation:"exIn .2s ease"}}>
+          {s.verifConfidence==="SUPPRESSED" && (
+            <div style={{fontSize:9,color:DK_T3,marginBottom:6,fontFamily:"var(--mono)"}}>
               ~ Score not available — data gap. P&amp;L tracking continues.
             </div>
           )}
-          {s.verifConfidence==="MEDIUM"&&s.verifCaveat&&(
-            <div style={{fontSize:9,color:"var(--amber)",marginBottom:6,fontFamily:"var(--mono)"}}>
-              ~ {s.verifCaveat}
-            </div>
+          {s.verifConfidence==="MEDIUM" && s.verifCaveat && (
+            <div style={{fontSize:9,color:"#f5a623",marginBottom:6,fontFamily:"var(--mono)"}}>~ {s.verifCaveat}</div>
           )}
           {s.situationLabel && (()=>{const sc=situationColor(s.situationLabel);return(
             <div style={{display:"inline-flex",flexDirection:"column",gap:2,marginBottom:8}}>
               <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:sc.c,background:sc.bg,padding:"3px 8px",borderRadius:5,alignSelf:"flex-start"}}>{s.situationLabel}</span>
-              {s.situationNote&&<span style={{fontSize:10,color:"var(--t2)",lineHeight:1.5,paddingLeft:2}}>{s.situationNote}</span>}
+              {s.situationNote&&<span style={{fontSize:10,color:DK_T2,lineHeight:1.5,paddingLeft:2}}>{s.situationNote}</span>}
             </div>
           );})()}
-          <div style={{fontSize:11,color:"var(--t2)",lineHeight:1.55,marginBottom:8,borderLeft:"2.5px solid",borderLeftColor:dot,paddingLeft:9}}>{s.verdict}</div>
-          {isDataUnavailable && s.fmpProfile && <FmpProfileCard p={s.fmpProfile} />}
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap",marginTop: isDataUnavailable && s.fmpProfile ? 8 : 0}}>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Earnings <span style={{color:"var(--t1)",fontWeight:600}}>{s.earn}</span></span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Grade <span style={{color:c,fontWeight:700}}>{tg(s.trust, s.grade)}</span></span>
-            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>Köpt <span style={{color:"var(--t2)",fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
-            {s.sek_rate > 0 && s.currency !== "SEK" && (
-              s.buy_rate_sek && Math.abs(s.buy_rate_sek - s.sek_rate) > 0.05
-                ? <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
-                    Bought <span style={{color:"var(--t2)",fontWeight:600}}>1 {s.currency} = {s.buy_rate_sek.toFixed(2)} kr</span>
-                    {" · "}Today <span style={{color: s.sek_rate < s.buy_rate_sek ? "var(--rose)" : "var(--emerald)",fontWeight:600}}>{s.sek_rate.toFixed(2)} kr</span>
-                    {" "}<span style={{color: s.sek_rate < s.buy_rate_sek ? "var(--rose)" : "var(--emerald)"}}>
-                      {s.sek_rate < s.buy_rate_sek ? "↓" : "↑"}{Math.abs((1 - s.sek_rate/s.buy_rate_sek)*100).toFixed(1)}%
+          <div style={{fontSize:11,color:DK_T2,lineHeight:1.6,marginBottom:8,borderLeft:"2.5px solid",borderLeftColor:dot,paddingLeft:9}}>{s.verdict}</div>
+          {isDataUnavailable && s.fmpProfile && <FmpProfileCard p={s.fmpProfile}/>}
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap",marginTop:isDataUnavailable&&s.fmpProfile?8:0}}>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Earnings <span style={{color:DK_T1,fontWeight:600}}>{s.earn}</span></span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Grade <span style={{color:trustColor,fontWeight:700}}>{tg(s.trust,s.grade)}</span></span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Köpt <span style={{color:DK_T2,fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
+            {s.sek_rate>0&&s.currency!=="SEK"&&(
+              s.buy_rate_sek&&Math.abs(s.buy_rate_sek-s.sek_rate)>0.05
+                ?<span style={{fontFamily:"var(--mono)",fontSize:8,color:DK_T3}}>
+                    Bought <span style={{color:DK_T2,fontWeight:600}}>1 {s.currency} = {s.buy_rate_sek.toFixed(2)} kr</span>
+                    {" · "}Today <span style={{color:s.sek_rate<s.buy_rate_sek?DK_NEG:"#4ade80",fontWeight:600}}>{s.sek_rate.toFixed(2)} kr</span>
+                    {" "}<span style={{color:s.sek_rate<s.buy_rate_sek?DK_NEG:"#4ade80"}}>
+                      {s.sek_rate<s.buy_rate_sek?"↓":"↑"}{Math.abs((1-s.sek_rate/s.buy_rate_sek)*100).toFixed(1)}%
                     </span>
                   </span>
-                : <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>Rate <span style={{color:"var(--t2)",fontWeight:600}}>1 {s.currency} = {s.sek_rate.toFixed(2)} kr</span></span>
+                :<span style={{fontFamily:"var(--mono)",fontSize:8,color:DK_T3}}>Rate <span style={{color:DK_T2,fontWeight:600}}>1 {s.currency} = {s.sek_rate.toFixed(2)} kr</span></span>
             )}
-            {s.dataSource && !isDataUnavailable && <span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)"}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
+            {s.dataSource&&!isDataUnavailable&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:DK_T3}}>{s.dataSource.replace("screener.in","Screener.in").replace(/^finnhub:/,"Finnhub → ")}</span>}
           </div>
-          {/* Lots section */}
-          {s.lots && s.lots.length > 0 && (
+          {/* Lots */}
+          {s.lots&&s.lots.length>0&&(
             <div style={{marginBottom:8,marginTop:4}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".04em"}}>
-                  {s.lots.length === 1 ? "1 Lot" : `${s.lots.length} Lots`}
+                <span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:DK_T3,textTransform:"uppercase",letterSpacing:".04em"}}>
+                  {s.lots.length===1?"1 Lot":`${s.lots.length} Lots`}
                 </span>
                 <button onClick={(e)=>{e.stopPropagation();onAddLot&&onAddLot(s);}}
-                  style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"var(--indigo)",background:"rgba(91,114,248,.08)",
-                    border:"1px solid rgba(91,114,248,.2)",borderRadius:6,padding:"3px 8px",cursor:"pointer"}}>
+                  style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:"#6b8cff",background:"rgba(107,140,255,.12)",border:"1px solid rgba(107,140,255,.25)",borderRadius:6,padding:"3px 8px",cursor:"pointer"}}>
                   + Add Lot
                 </button>
               </div>
               {s.lots.map((lot,i)=>(
-                <div key={lot.id}
-                  style={{display:"flex",alignItems:"center",gap:6,padding:"5px 0",
-                    borderBottom: i < s.lots.length-1 ? "1px solid var(--t4)" : "none"}}>
-                  <span style={{flex:1,fontFamily:"var(--mono)",fontSize:10,color:"var(--t1)"}}>
+                <div key={lot.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 0",borderBottom:i<s.lots.length-1?`1px solid ${DK_DIV}`:"none"}}>
+                  <span style={{flex:1,fontFamily:"var(--mono)",fontSize:10,color:DK_T1}}>
                     {lot.shares} sh @ {cu(s.ticker)}{lot.buy_price}
-                    {lot.buy_date && <span style={{color:"var(--t3)"}}> · {lot.buy_date}</span>}
+                    {lot.buy_date&&<span style={{color:DK_T3}}> · {lot.buy_date}</span>}
                   </span>
-                  <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,
-                    color:lot.pnl_sek>=0?"var(--emerald)":"var(--rose)"}}>
-                    {fmtSEK(lot.pnl_sek)}
-                  </span>
-                  {lot.buy_rate_sek && s.currency!=="SEK" &&
-                    <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>
-                      {lot.buy_rate_sek.toFixed(2)}kr
-                    </span>}
+                  <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:lot.pnl_sek>=0?DK_POS:DK_NEG}}>{fmtSEK(lot.pnl_sek)}</span>
+                  {lot.buy_rate_sek&&s.currency!=="SEK"&&<span style={{fontFamily:"var(--mono)",fontSize:8,color:DK_T3}}>{lot.buy_rate_sek.toFixed(2)}kr</span>}
                   <button onClick={(e)=>{e.stopPropagation();onEditLot&&onEditLot(lot,s);}}
-                    style={{fontFamily:"var(--dm)",fontSize:10,padding:"2px 7px",borderRadius:5,
-                      border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",cursor:"pointer"}}>
-                    Edit
-                  </button>
+                    style={{fontFamily:"var(--dm)",fontSize:10,padding:"2px 7px",borderRadius:5,border:`1px solid ${DK_DIV}`,background:"rgba(255,255,255,.06)",color:DK_T2,cursor:"pointer"}}>Edit</button>
                   <button onClick={(e)=>{e.stopPropagation();onDeleteLot&&onDeleteLot(lot.id,s);}}
-                    style={{fontFamily:"var(--dm)",fontSize:10,padding:"2px 6px",borderRadius:5,
-                      border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",cursor:"pointer"}}>
-                    ✕
-                  </button>
+                    style={{fontFamily:"var(--dm)",fontSize:10,padding:"2px 6px",borderRadius:5,border:"1px solid rgba(255,92,92,.3)",background:"rgba(255,92,92,.1)",color:DK_NEG,cursor:"pointer"}}>✕</button>
                 </div>
               ))}
-              {s.lots.length > 1 && (
+              {s.lots.length>1&&(
                 <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0 0",marginTop:2}}>
-                  <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>
-                    Total {s.shares} sh · Avg {cu(s.ticker)}{(+s.buy).toFixed(2)}
-                  </span>
-                  <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,
-                    color:s.pnl_sek>=0?"var(--emerald)":"var(--rose)"}}>
-                    {fmtSEK(s.pnl_sek)}
-                  </span>
+                  <span style={{fontFamily:"var(--mono)",fontSize:9,color:DK_T3}}>Total {s.shares} sh · Avg {cu(s.ticker)}{(+s.buy).toFixed(2)}</span>
+                  <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:pnlSEK>=0?DK_POS:DK_NEG}}>{fmtSEK(pnlSEK)}</span>
                 </div>
               )}
             </div>
           )}
           <div style={{display:"flex",gap:7}}>
-            <button onClick={()=>onDetail&&onDetail(s)} style={{flex:2,padding:"8px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
-            <button onClick={(e)=>{e.stopPropagation();onSetAlert&&onSetAlert(s.ticker,s.price,null,null);}} title="Set price alert" style={{flex:"0 0 36px",padding:"8px",borderRadius:8,border:"1px solid rgba(91,114,248,.2)",background:"rgba(91,114,248,.04)",color:"var(--indigo)",fontFamily:"var(--dm)",fontSize:13,cursor:"pointer"}}>🔔</button>
-            {(!s.lots || s.lots.length <= 1) && (
-              <button onClick={()=>onEdit&&onEdit(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Edit</button>
+            <button onClick={()=>onDetail&&onDetail(s)} style={{flex:2,padding:"9px",borderRadius:8,border:"none",background:"linear-gradient(135deg,var(--indigo),var(--sky))",color:"#fff",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Full Analysis →</button>
+            <button onClick={(e)=>{e.stopPropagation();onSetAlert&&onSetAlert(s.ticker,s.price,null,null);}} title="Set price alert" style={{flex:"0 0 36px",padding:"8px",borderRadius:8,border:"1px solid rgba(107,140,255,.25)",background:"rgba(107,140,255,.1)",color:"#6b8cff",fontFamily:"var(--dm)",fontSize:13,cursor:"pointer"}}>🔔</button>
+            {(!s.lots||s.lots.length<=1)&&(
+              <button onClick={()=>onEdit&&onEdit(s)} style={{flex:1,padding:"9px",borderRadius:8,border:`1px solid ${DK_DIV}`,background:"rgba(255,255,255,.05)",color:DK_T2,fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Edit</button>
             )}
             {s.rec==="SELL"&&!isReview
-              ?<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #fca5a5",background:"var(--rose2)",color:"var(--rose)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
-              :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid var(--t4)",background:"var(--card2)",color:"var(--t2)",fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>{s.lots&&s.lots.length>1?`✕ All ${s.lots.length}`:"✕"}</button>
+              ?<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"9px",borderRadius:8,border:"1px solid rgba(255,92,92,.3)",background:"rgba(255,92,92,.1)",color:DK_NEG,fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
+              :<button onClick={()=>onRemove&&onRemove(s)} style={{flex:1,padding:"9px",borderRadius:8,border:`1px solid ${DK_DIV}`,background:"rgba(255,255,255,.05)",color:DK_T2,fontFamily:"var(--dm)",fontSize:11,fontWeight:700,cursor:"pointer"}}>{s.lots&&s.lots.length>1?`✕ All ${s.lots.length}`:"✕"}</button>
             }
           </div>
         </div>
@@ -1587,45 +1614,53 @@ function CompactWatchRow({s, dot, onRemove, onSetAlert}) {
 }
 
 
-function PivotSection({title, accentColor, slices}) {
+function PivotSection({title, accentColor, slices, dark}) {
   const ac = accentColor||"var(--indigo)";
   const [active, setActive] = useState(0);
   const slice = slices[active];
   const total = slices.reduce((s,sl)=>s+sl.items.length,0);
+
+  // Dark palette (My Stocks) vs light palette (Watchlist)
+  const DK_BG  = dark ? "#0a0e14" : "var(--white)";
+  const DK_HDR = dark ? "#0f1420" : "transparent";
+  const DK_T2  = dark ? "#a8b2c0" : "var(--t2)";
+  const DK_T3  = dark ? "#7a8290" : "var(--t3)";
+  const DK_T4  = dark ? "rgba(255,255,255,.07)" : "rgba(15,23,42,.05)";
+  const DK_COL = dark ? "rgba(255,255,255,.03)" : "rgba(15,23,42,.018)";
+  const DK_SHD = dark ? "0 4px 24px rgba(0,0,0,.4)" : "var(--shadow)";
+  const DK_BDR = dark ? "1px solid rgba(255,255,255,.07)" : "1px solid rgba(15,23,42,.06)";
+  const DK_PILL_BG = dark ? "rgba(255,255,255,.05)" : "rgba(15,23,42,.04)";
+
   return (
-    <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadow)",overflow:"hidden",marginBottom:10,border:"1px solid rgba(15,23,42,.06)"}}>
-      {/* Single compact header row: title + inline tabs + count */}
-      <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
+    <div style={{background:DK_BG,borderRadius:12,boxShadow:DK_SHD,overflow:"hidden",marginBottom:10,border:DK_BDR}}>
+      {/* Header: accent bar + title + slice pills + total */}
+      <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",borderBottom:`1px solid ${DK_T4}`,background:DK_HDR}}>
         <div style={{width:3,height:12,borderRadius:2,background:ac,flexShrink:0}}/>
-        <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:10,color:"var(--t2)",textTransform:"uppercase",letterSpacing:.5,marginRight:4}}>{title}</span>
-        {/* Inline pill tabs */}
+        <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:10,color:DK_T2,textTransform:"uppercase",letterSpacing:.5,marginRight:4}}>{title}</span>
         {slices.map((s,i)=>{
           const isAct=active===i;
           return (
             <button key={i} onClick={()=>setActive(i)}
               style={{display:"flex",alignItems:"center",gap:4,padding:"3px 8px",borderRadius:20,border:"none",cursor:"pointer",transition:"all .15s",
-                background:isAct?`${s.color}18`:"rgba(15,23,42,.04)",flexShrink:0}}>
-              <span style={{fontFamily:"var(--dm)",fontSize:9,fontWeight:isAct?700:500,color:isAct?s.color:"var(--t3)"}}>{s.label}</span>
-              <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:isAct?s.color:"var(--t3)"}}>{s.items.length}</span>
+                background:isAct?`${s.color}18`:DK_PILL_BG,flexShrink:0}}>
+              <span style={{fontFamily:"var(--dm)",fontSize:9,fontWeight:isAct?700:500,color:isAct?s.color:DK_T3}}>{s.label}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:isAct?s.color:DK_T3}}>{s.items.length}</span>
             </button>
           );
         })}
-        <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t4)",marginLeft:"auto"}}>{total}</span>
+        <span style={{fontFamily:"var(--mono)",fontSize:8,color:DK_T4,marginLeft:"auto"}}>{total}</span>
       </div>
-      {/* Column headers */}
-      <div style={{display:"grid",gridTemplateColumns:slice.isWatch?"1.4fr 1.8fr .8fr":"1.9fr 1.5fr .7fr .9fr",
-        padding:"4px 12px",background:"rgba(15,23,42,.018)",borderBottom:"1px solid rgba(15,23,42,.05)"}}>
-        {(slice.isWatch
-          ? ["Stock","Signal · Entry", slice.items.some(s=>s.potential&&s.potential!=="—")?"Upside %":"Score"]
-          : ["Stock","Price · P&L","Score","Rec"]
-        ).map((h,i)=>(
-          <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.7,
-            textAlign:slice.isWatch?(i===2?"right":"left"):(i>=2?"center":"left")}}>{h}</span>
-        ))}
-      </div>
+      {/* Column headers — watchlist only (portfolio rows carry their own inline labels) */}
+      {slice.isWatch && (
+        <div style={{display:"grid",gridTemplateColumns:"1.4fr 1.8fr .8fr",padding:"4px 12px",background:DK_COL,borderBottom:`1px solid ${DK_T4}`}}>
+          {["Stock","Signal · Entry",slice.items.some(s=>s.potential&&s.potential!=="—")?"Upside %":"Score"].map((h,i)=>(
+            <span key={i} style={{fontFamily:"var(--mono)",fontSize:7,color:DK_T3,textTransform:"uppercase",letterSpacing:.7,textAlign:i===2?"right":"left"}}>{h}</span>
+          ))}
+        </div>
+      )}
       {/* Rows */}
       {slice.items.length===0
-        ? <div style={{padding:"12px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:"var(--t3)"}}>No stocks in this category</div>
+        ? <div style={{padding:"16px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:DK_T3}}>No stocks in this category</div>
         : slice.items.map(s=>slice.isWatch
             ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove} onSetAlert={slice.onSetAlert}/>
             :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} onEdit={slice.onEdit} onSetAlert={slice.onSetAlert} onAddLot={slice.onAddLot} onEditLot={slice.onEditLot} onDeleteLot={slice.onDeleteLot}/>
@@ -2116,12 +2151,12 @@ function StocksScreen({urgent, watch, good, wlReady, wlWatch, wlAvoid, onDetail,
           <button key={p} className={`pill${f===p?" on":""}`} onClick={()=>setF(p)}>{p}</button>
         ))}
       </div>
-      {f==="All"&&(<><PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/><PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/></>)}
-      {f==="My Stocks"&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/>}
+      {f==="All"&&(<><PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} dark/><PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/></>)}
+      {f==="My Stocks"&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} dark/>}
       {f==="Watchlist"&&<PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/>}
       {["🇺🇸 US","🇪🇺 Europe","🇮🇳 India"].includes(f)&&(
         <>
-          {(fU.length+fW.length+fG.length)>0&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices}/>}
+          {(fU.length+fW.length+fG.length)>0&&<PivotSection title="My Stocks" accentColor="var(--indigo)" slices={myStocksSlices} dark/>}
           {(fWR.length+fWW.length+fWA.length)>0&&<PivotSection title="Watchlist" accentColor="var(--violet)" slices={watchlistSlices}/>}
           {(fU.length+fW.length+fG.length)===0&&(fWR.length+fWW.length+fWA.length)===0&&(
             <div style={{textAlign:"center",padding:"40px 20px"}}>
