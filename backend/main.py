@@ -2060,11 +2060,13 @@ def frameworks_one(ticker: str, user_id: str = Depends(get_current_user)):
 
 
 @app.get("/api/frameworks-verify")
-def frameworks_verify():
-    """No-auth Phase-D verification over the spec's test tickers (debug)."""
+def frameworks_verify(tickers: str = ""):
+    """No-auth verification (debug). ?tickers=A,B,C to sample arbitrary stocks."""
     from intelligence.frameworks import compute_frameworks
+    tl = [t.strip().upper() for t in tickers.split(",") if t.strip()] \
+        or ["NVDA", "SNDK", "TNXP", "LMT", "CRM", "SNOW", "SBIN.NS", "ASML.AS"]
     out = {}
-    for t in ["NVDA", "SNDK", "TNXP", "LMT", "CRM", "SNOW", "SBIN.NS", "ASML.AS"]:
+    for t in tl:
         try:
             fw = compute_frameworks(t)
             out[t] = {"_sector": fw.get("sector")}
