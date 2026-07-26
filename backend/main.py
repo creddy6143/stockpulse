@@ -2059,30 +2059,6 @@ def frameworks_one(ticker: str, user_id: str = Depends(get_current_user)):
     return compute_frameworks(ticker.upper())
 
 
-@app.get("/api/frameworks-verify")
-def frameworks_verify(tickers: str = ""):
-    """No-auth verification (debug). ?tickers=A,B,C to sample arbitrary stocks."""
-    from intelligence.frameworks import compute_frameworks
-    tl = [t.strip().upper() for t in tickers.split(",") if t.strip()] \
-        or ["NVDA", "SNDK", "TNXP", "LMT", "CRM", "SNOW", "SBIN.NS", "ASML.AS"]
-    out = {}
-    for t in tl:
-        try:
-            fw = compute_frameworks(t)
-            out[t] = {"_sector": fw.get("sector")}
-            for f in fw["frameworks"]:
-                out[t][f["key"]] = {
-                    "status": f["status"], "label": f.get("label"),
-                    "verdict": f.get("verdict"),
-                    "inputs": len(f.get("inputs_used", [])),
-                    "checks": len(f.get("checks", []) or []),
-                    "caveats": f.get("caveats", []),
-                }
-        except Exception as exc:
-            out[t] = {"error": str(exc)[:120]}
-    return out
-
-
 # ── ANALOGS ──────────────────────────────────────────────────────────────────
 
 _analogs_cache: dict = {}
@@ -2296,61 +2272,6 @@ def _detect_wl_situation(item: dict, market_data: dict) -> dict:
         "action": "WAIT", "color": "var(--indigo)", "priority": 3,
         "summary": f"Trust {trust_str} — not yet at entry threshold.{upside_str} Wait for ≥75 score.",
     }
-
-
-def _seed_demo_data():
-    """Seeds demo portfolio data only when SEED_DEMO_DATA=true env var is set."""
-    if os.getenv("SEED_DEMO_DATA", "").lower() != "true":
-        return
-    existing = db.get_portfolio()
-    if existing:
-        return
-
-    demo_stocks = [
-        ("TNXP", "Tonix Pharma", "US", "NASDAQ", "USD"),
-        ("XGN",  "Exagen Inc",   "US", "NASDAQ", "USD"),
-        ("GRRR", "Gorilla Technology", "US", "NASDAQ", "USD"),
-        ("INSM", "Insmed Inc",   "US", "NASDAQ", "USD"),
-        ("CVNA", "Carvana Co",   "US", "NYSE",   "USD"),
-        ("NVDA", "NVIDIA Corp",  "US", "NASDAQ", "USD"),
-        ("AXON", "Axon Enterprise","US","NASDAQ","USD"),
-        ("PLTR", "Palantir",     "US", "NYSE",   "USD"),
-        ("MSFT", "Microsoft",    "US", "NASDAQ", "USD"),
-        ("ASML.AS","ASML Holding","EU","AMS",    "EUR"),
-        ("HDFCBANK.NS","HDFC Bank","IN","NSE",   "INR"),
-        ("RELIANCE.NS","Reliance Industries","IN","NSE","INR"),
-    ]
-    for t, name, mkt, exch, cur in demo_stocks:
-        db.upsert_stock(t, name, mkt, exch, cur)
-
-    # Portfolio positions
-    positions = [
-        ("TNXP", 107, 46.0),
-        ("XGN",  50,  10.50),
-        ("GRRR", 100, 41.0),
-        ("INSM", 10,  115.0),
-        ("CVNA", 15,  90.0),
-        ("NVDA", 5,   420.0),
-        ("AXON", 8,   245.0),
-        ("PLTR", 50,  18.0),
-        ("MSFT", 3,   380.0),
-        ("ASML.AS", 2, 820.0),
-        ("HDFCBANK.NS", 10, 1400.0),
-        ("RELIANCE.NS", 5, 2400.0),
-    ]
-    for ticker, shares, buy_price in positions:
-        db.add_position(ticker, shares, buy_price)
-
-    # Watchlist
-    watchlist = ["AXON", "NVDA", "ASML.AS", "HDFCBANK.NS", "TSLA"]
-    for ticker in watchlist:
-        db.add_to_watchlist(ticker)
-
-    # Demo alerts
-    db.create_alert("XGN",  "urgent", "⚡ Pre-market +13% — board resigned before earnings. Exit window open NOW.")
-    db.create_alert("TNXP", "urgent", "Auto-disqualified: 8 reverse splits. Do not hold through earnings today.")
-    db.create_alert("NVDA", "signal", "AI supercycle intact. Revenue +122% YoY. Hold with trailing stop.")
-    db.create_alert("AXON", "signal", "CEO bought $1.2M own money. Entry zone $285-310 active.")
 
 
 if __name__ == "__main__":
