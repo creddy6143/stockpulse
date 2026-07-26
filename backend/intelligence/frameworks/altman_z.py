@@ -43,6 +43,9 @@ def compute_altman_z(ctx: dict) -> dict:
         verdict, label, color = "DISTRESS", f"{z:.1f} — DISTRESS RISK", "rose"
 
     caveats = []
+    if meta.get("is_reit"):
+        caveats.append("Z-Score understates REITs — high debt is normal for this business "
+                       "model, so a low score doesn't imply distress here.")
     if rev <= 0 or (ta and rev < abs(ta) * 0.02):
         caveats.append("Early-stage — Z-Score skews harsh for pre-revenue / pre-profit "
                        "companies.")

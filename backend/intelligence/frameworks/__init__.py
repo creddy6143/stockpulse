@@ -42,6 +42,7 @@ SAAS_THEMES     = {"ai_software", "cloud_hyperscalers", "cybersecurity",
                    "fintech_payments", "gaming"}
 _FIN_THEMES     = {"indian_banks"}
 _FIN_SECTORS    = {"financial services", "financials", "banks", "banking"}
+_REIT_THEMES    = {"data_center_reits"}
 
 _theme_index = None   # ticker(upper) → set(theme_keys)
 
@@ -66,21 +67,29 @@ def _load_theme_index() -> dict:
     return idx
 
 
-def classify_ticker(ticker: str, sector: str | None, name: str | None = None) -> dict:
-    """Applicability flags used by the frameworks (from themes + sector + name)."""
+def classify_ticker(ticker: str, sector: str | None, name: str | None = None,
+                    industry: str | None = None) -> dict:
+    """Applicability flags — driven by the real GICS sector/industry (from Yahoo
+    assetProfile), with theme membership as a fallback when sector is unavailable."""
     themes = _load_theme_index().get((ticker or "").upper(), set())
     sec = (sector or "").lower()
+    ind = (industry or "").lower()
     nm = (name or "").lower()
     is_financial = (
         any(s in sec for s in _FIN_SECTORS)
+        or "bank" in ind or "insurance" in ind
         or bool(themes & _FIN_THEMES)
-        or any(w in nm for w in ("bank", "insurance", "insurer", "financ"))
+        or any(w in nm for w in ("bank", "insurance", "insurer"))
     )
+    # REIT detection by sector/industry — reliable across all REITs (catches AMT,
+    # PLD, EQIX… that a name match would miss), never a false positive.
+    is_reit = (sec == "real estate") or ("reit" in ind) or bool(themes & _REIT_THEMES)
     return {
         "themes": sorted(themes),
-        "is_cyclical": bool(themes & CYCLICAL_THEMES) or sec in ("materials", "energy"),
+        "is_cyclical": bool(themes & CYCLICAL_THEMES) or sec in ("materials", "basic materials", "energy"),
         "is_saas": bool(themes & SAAS_THEMES),
         "is_financial": is_financial,
+        "is_reit": is_reit,
     }
 
 
@@ -108,10 +117,22 @@ def compute_frameworks(ticker: str) -> dict:
                     pass
     except Exception:
         pass
-    meta = classify_ticker(ticker, fund.get("sector"), price.get("name") or fund.get("name"))
+
+    # Real GICS sector/industry (drives REIT / financial applicability reliably).
+    sector = fund.get("sector")
+    industry = None
+    try:
+        from data.fetcher import get_asset_profile
+        ap = get_asset_profile(ticker) or {}
+        sector = ap.get("sector") or sector
+        industry = ap.get("industry")
+    except Exception:
+        pass
+
+    meta = classify_ticker(ticker, sector, price.get("name") or fund.get("name"), industry)
 
     ctx = {"ticker": ticker, "statements": stmts, "fundamentals": fund,
-           "price": price, "meta": meta}
+           "price": price, "meta": meta, "sector": sector, "industry": industry}
 
     results = []
     for key, name, question, fn in FRAMEWORKS:
@@ -138,7 +159,7 @@ def compute_frameworks(ticker: str) -> dict:
 
     return {
         "ticker": ticker,
-        "sector": fund.get("sector"),
+        "sector": sector,
         "frameworks": results,
         "summary": summary,
         "distress_flag": distress,

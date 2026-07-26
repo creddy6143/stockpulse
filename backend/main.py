@@ -112,13 +112,14 @@ def health():
 
 
 def _frameworks_probe() -> dict:
-    """One-shot: does multi-year statement data reach this host (direct vs worker)?"""
+    """One-shot: does statement + assetProfile data reach this host?"""
     try:
-        from data.fetcher import get_financial_statements
+        from data.fetcher import get_financial_statements, get_asset_profile
         s = get_financial_statements("NVDA")
+        ap = get_asset_profile("O")   # REIT — should return 'Real Estate'
         return {"source": s.get("source"), "periods": len(s.get("periods") or []),
                 "has_total_assets": bool([v for v in (s.get("total_assets") or []) if v]),
-                "has_ocf": bool([v for v in (s.get("operating_cash_flow") or []) if v])}
+                "reit_sector": ap.get("sector"), "reit_industry": ap.get("industry")}
     except Exception as e:
         return {"error": str(e)[:120]}
 

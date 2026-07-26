@@ -251,6 +251,54 @@ def _yf_quotesummary(ticker: str) -> dict:
     return empty
 
 
+def get_asset_profile(ticker: str) -> dict:
+    """Sector + industry from Yahoo's assetProfile module (worker-routed on Railway,
+    direct off-Railway). Reliable across markets — 'Real Estate'/'REIT - …' for REITs,
+    'Financial Services'/'Banks …' for financials. Cached 24h. {} on failure."""
+    key = f"asset_profile:{ticker}"
+    cached = cache_get(key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    def _parse(j):
+        r = ((j or {}).get("quoteSummary", {}).get("result") or [{}])[0]
+        ap = r.get("assetProfile") or {}
+        if ap.get("sector") or ap.get("industry"):
+            return {"sector": ap.get("sector"), "industry": ap.get("industry")}
+        return None
+
+    # Worker first (quoteSummary is IP-blocked from Railway; worker isn't).
+    if _CF_WORKER_URL:
+        try:
+            r = requests.get(f"{_CF_WORKER_URL}/yahoo-qs/{ticker}?modules=assetProfile",
+                             headers=_HEADERS, timeout=12)
+            if r.status_code == 200:
+                p = _parse(r.json())
+                if p:
+                    cache_set(key, p, ttl=TTL_FUNDAMENTALS)
+                    return p
+        except Exception:
+            pass
+    # Direct (works off-Railway).
+    try:
+        session, crumb = _get_yf_auth()
+        base = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+                f"?modules=assetProfile&corsDomain=finance.yahoo.com")
+        url = f"{base}&crumb={crumb}" if crumb else base
+        rr = _yf_rest_get(url, session=session, timeout=10)
+        if rr is not None and rr.status_code == 200:
+            p = _parse(rr.json())
+            if p:
+                cache_set(key, p, ttl=TTL_FUNDAMENTALS)
+                return p
+    except Exception:
+        pass
+
+    empty = {"sector": None, "industry": None}
+    cache_set(key, empty, ttl=6 * 3600)
+    return empty
+
+
 def _yf_lib_fundamentals(ticker: str) -> dict:
     """Use yfinance Python library for international stock fundamentals (.ST, .AS, .L etc.).
 
