@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite } from "./api/client";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import AuthScreen from "./screens/AuthScreen";
@@ -47,7 +47,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm);overscroll-behav
 .ab-sub{font-family:var(--mono);font-size:10px;color:rgba(225,29,72,.7);margin-top:1px}
 .ab-btn{font-family:var(--mono);font-size:9px;font-weight:700;background:var(--rose);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;white-space:nowrap}
 .tabs-wrap{flex-shrink:0}
-.tabs{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;background:var(--white);box-shadow:var(--shadow)}
+.tabs{display:grid;grid-template-columns:repeat(5,1fr);background:var(--white);box-shadow:var(--shadow)}
 .tab{display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:10px 4px 12px;position:relative;transition:all .2s}
 .tab-icon{font-size:18px;line-height:1;transition:transform .2s}
 .tab.active .tab-icon{transform:scale(1.1)}
@@ -3319,6 +3319,103 @@ function StrategyScreen({strategyData, onDetail}) {
   );
 }
 
+// ── ELITE / MUST-OWN SCREEN ──────────────────────────
+function EliteScreen({eliteData, onDetail}){
+  const [exp,setExp] = useState(null);
+  const [openSector,setOpenSector] = useState(0);
+  const sectors = (eliteData && eliteData.sectors) || [];
+  const total = (eliteData && eliteData.total) || 0;
+
+  const Header = (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+      <div>
+        <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15}}>⭐ Elite · Must-Own</div>
+        <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Excellent across every dimension — by sector</div>
+      </div>
+      {total>0 && <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#fffbeb",color:"var(--gold)",border:"1px solid #fde68a",padding:"3px 10px",borderRadius:10,fontWeight:700}}>{total} stocks</span>}
+    </div>
+  );
+
+  if(!sectors.length) return (
+    <div className="pad" style={{paddingTop:14}}>
+      {Header}
+      <div style={{textAlign:"center",padding:"50px 20px",color:"var(--t3)",fontSize:12,lineHeight:1.6}}>
+        Scanning the universe for must-own stocks…<br/>
+        <span style={{fontSize:10}}>Come back in a moment — this runs in the background.</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="pad" style={{paddingTop:14}}>
+      {Header}
+      {sectors.map((sec,si)=>{
+        const open = openSector===si;
+        return (
+          <div key={sec.sector} style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",marginBottom:10,overflow:"hidden"}}>
+            <div onClick={()=>setOpenSector(open?-1:si)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 14px",cursor:"pointer",background:"linear-gradient(90deg,rgba(245,158,11,.06),transparent)"}}>
+              <div>
+                <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>{sec.sector}</div>
+                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:2}}>{sec.count} must-own · avg conviction {sec.avg_conviction}</div>
+              </div>
+              <span style={{fontSize:11,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+            </div>
+            {open && sec.stocks.map((s)=>{
+              const sopen = exp===s.ticker;
+              const cc = tc(s.trust);
+              return (
+                <div key={s.ticker} style={{borderTop:"1px solid rgba(15,23,42,.05)"}}>
+                  <div onClick={()=>setExp(sopen?null:s.ticker)} style={{display:"grid",gridTemplateColumns:"1.7fr .6fr .7fr .35fr",alignItems:"center",padding:"9px 14px",cursor:"pointer",gap:6}}>
+                    <div style={{minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:5}}>
+                        <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
+                        <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--gold)",background:"#fffbeb",padding:"1px 5px",borderRadius:3}}>{s.met_count}/6</span>
+                      </div>
+                      <div style={{fontSize:8,color:"var(--t3)",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+                    </div>
+                    <div style={{textAlign:"center"}}><span title="Conviction" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--violet)"}}>{s.conviction}</span></div>
+                    <div style={{textAlign:"center"}}>{(s.upside_pct!=null&&s.upside_pct>0)?<span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--emerald)"}}>+{s.upside_pct}%</span>:<span style={{fontFamily:"var(--mono)",fontSize:9,color:cc}}>{s.trust}</span>}</div>
+                    <div style={{textAlign:"right",fontSize:11,color:"var(--t3)"}}>{sopen?"▲":"▼"}</div>
+                  </div>
+                  {sopen && (
+                    <div style={{padding:"2px 14px 14px"}}>
+                      <div style={{display:"flex",gap:10,marginBottom:9,fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",flexWrap:"wrap"}}>
+                        <span>Trust <b style={{color:cc}}>{s.trust}</b></span>
+                        <span>Conviction <b style={{color:"var(--violet)"}}>{s.conviction}</b></span>
+                        {s.analyst_target && <span>Target <b>${s.analyst_target}</b></span>}
+                        {s.price>0 && <span>Now ${s.price}</span>}
+                      </div>
+                      <div style={{background:"var(--card2)",borderRadius:9,padding:"9px 11px",marginBottom:10}}>
+                        {(s.criteria||[]).map((c,ci)=>(
+                          <div key={ci} style={{display:"flex",alignItems:"flex-start",gap:7,padding:"3px 0"}}>
+                            <span style={{fontSize:11}}>{c.met?"✅":"⬜"}</span>
+                            <div style={{flex:1,minWidth:0}}>
+                              <span style={{fontSize:11,fontWeight:600,color:c.met?"var(--t1)":"var(--t3)"}}>{c.label}</span>
+                              <div style={{fontSize:9,color:"var(--t3)",lineHeight:1.4}}>{c.detail}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={()=>{if(onDetail)onDetail({ticker:s.ticker,name:s.name,flag:"🇺🇸",price:s.price,trust:s.trust,rec:"BUY"});}}
+                        style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:"linear-gradient(135deg,var(--violet),var(--indigo))",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                        Full Analysis →
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      <div style={{textAlign:"center",padding:"6px 20px 12px",fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",lineHeight:1.5}}>
+        Must-own = strong across fundamentals, smart money, balance sheet, sentiment &amp; growth.<br/>
+        Institutional signal is directional (free-tier data). Research, not advice.
+      </div>
+    </div>
+  );
+}
+
 // ── APP ──────────────────────────────────────────────
 export default function App() {
   // Auth state: undefined = loading, null = signed out, object = signed in
@@ -3351,6 +3448,7 @@ export default function App() {
   const [disq, setDisq] = useState([]);
   const [accuracy, setAccuracy] = useState("—");
   const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[],dipBuys:[],unwindThemes:[]});
+  const [eliteData, setEliteData] = useState({sectors:[],total:0});
   const [earnings, setEarnings] = useState([]);
   const [priceAlerts, setPriceAlerts] = useState([]);
   const loadPriceAlerts = () => getPriceAlerts().then(v=>setPriceAlerts(v||[])).catch(()=>{});
@@ -3432,6 +3530,9 @@ export default function App() {
         });
       }).catch(()=>{});
     }, 1000);
+    setTimeout(() => {
+      getElite().then(v => { if(v) setEliteData({sectors: v.sectors || [], total: v.total || 0}); }).catch(()=>{});
+    }, 1400);
 
     return () => clearInterval(ping);
   }, [user?.uid]);
@@ -3506,12 +3607,14 @@ export default function App() {
       },15000);
     }}/>,
     <StrategyScreen strategyData={strategyData} onDetail={setSel}/>,
+    <EliteScreen eliteData={eliteData} onDetail={setSel}/>,
   ];
   const tabDefs = [
     {icon:"🏠",label:"Home",badge:urgentCount},
     {icon:"📊",label:"Stocks",badge:0},
     {icon:"🎯",label:"Picks",badge:0},
     {icon:"🧭",label:"Strategy",badge:stratTotal},
+    {icon:"⭐",label:"Elite",badge:0},
   ];
   // Auth guards
   if (user === undefined) return (

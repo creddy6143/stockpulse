@@ -100,6 +100,8 @@ def startup():
     threading.Thread(target=_prewarm_portfolio_cache, daemon=True).start()
     # Pre-warm dip scan cache so first /api/strategy request returns instantly.
     threading.Thread(target=_refresh_dip_scan, daemon=True).start()
+    # Pre-warm Elite / Must-Own scan so the first /api/elite request is instant.
+    threading.Thread(target=_refresh_elite_scan, daemon=True).start()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
@@ -141,8 +143,10 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "yahoo-proxy-live",   # analyst targets + short interest via CF worker
+        "build": "elite-v1",   # Elite/Must-Own sector-grouped shortlist
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
+        "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
+        "elite_sectors": len(_elite_scan_result),
         "dip_candidates_in_cache": len(candidates),
         "scan_age_seconds": age_s,
         "picks_in_db": picks_count,
@@ -860,6 +864,50 @@ _dip_scan_result: list = []
 _dip_scan_ts: float    = 0.0
 _DIP_SCAN_TTL          = 90    # seconds
 _dip_unwind: list      = []    # correlated-selloff themes from the last scan
+
+# ── Elite / Must-Own scan (sector-grouped high-conviction shortlist) ──────────
+_elite_scan_result: list = []   # [{sector, count, avg_conviction, stocks:[...]}]
+_elite_scan_ts: float    = 0.0
+_ELITE_SCAN_TTL          = 300  # 5 min
+
+
+def _refresh_elite_scan() -> None:
+    """Filter the picks universe against the Elite must-own checklist, grouped by sector."""
+    global _elite_scan_result, _elite_scan_ts
+    try:
+        from intelligence.elite_filter import evaluate_elite, group_by_sector, TRUST_FLOOR
+        from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data
+
+        _pc = db.get_picks_cache()
+        _all = _json.loads(_pc["all_picks_json"]) if _pc and _pc.get("all_picks_json") else []
+        mains = [p for p in _all if not p.get("is_dip")]
+
+        # Pre-filter on trust so we only enrich (insider/analyst fetches) the shortlist.
+        candidates = [
+            p for p in mains
+            if (p.get("trust", {}).get("total_score") or 0) >= TRUST_FLOOR
+            and not p.get("trust", {}).get("auto_disqualified")
+        ]
+
+        entries = []
+        for p in candidates:
+            t = p["ticker"]
+            lv = _picks_live_prices.get(t)
+            if lv and lv.get("price"):
+                p["price"], p["change_pct"] = lv["price"], lv["change_pct"]
+            try:
+                e = evaluate_elite(p, get_fundamentals(t), get_insider_data(t), get_analyst_data(t))
+                if e:
+                    entries.append(e)
+            except Exception:
+                continue
+
+        _elite_scan_result = group_by_sector(entries)
+        _elite_scan_ts = _time.monotonic()
+        print(f"[ELITE] {sum(len(s['stocks']) for s in _elite_scan_result)} must-own "
+              f"across {len(_elite_scan_result)} sectors", flush=True)
+    except Exception as exc:
+        print(f"[ELITE] refresh failed: {exc}", flush=True)
 
 
 def _refresh_dip_scan() -> None:
@@ -1871,6 +1919,22 @@ def get_dips(user_id: str = Depends(get_current_user)):
         # Tier 4b — themes in a correlated selloff. Frontend renders one Unwind
         # banner per theme and forces WATCH on the affected stocks.
         "unwind_themes": list(_dip_unwind),
+    }
+
+
+@app.get("/api/elite")
+def get_elite(user_id: str = Depends(get_current_user)):
+    """Elite / Must-Own — highest-conviction stocks (excellent across every
+    dimension), grouped by sector. Served from a 5-min background cache."""
+    if _time.monotonic() - _elite_scan_ts > _ELITE_SCAN_TTL:
+        threading.Thread(target=_refresh_elite_scan, daemon=True).start()
+    sectors = list(_elite_scan_result)
+    return {
+        "sectors": sectors,
+        "total": sum(len(s["stocks"]) for s in sectors),
+        "sector_count": len(sectors),
+        "scanned_at": _elite_scan_result[0]["stocks"][0].get("scanned_at", "")
+                       if sectors and sectors[0].get("stocks") else "",
     }
 
 
