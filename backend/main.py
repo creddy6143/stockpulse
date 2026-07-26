@@ -143,10 +143,12 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "elite-v1",   # Elite/Must-Own sector-grouped shortlist
+        "build": "elite-v2",   # Elite/Must-Own sector-grouped shortlist
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
+        "elite_diag": _elite_diag,
+        "elite_scan_age": round(_time.monotonic() - _elite_scan_ts, 1) if _elite_scan_ts else None,
         "dip_candidates_in_cache": len(candidates),
         "scan_age_seconds": age_s,
         "picks_in_db": picks_count,
@@ -869,11 +871,14 @@ _dip_unwind: list      = []    # correlated-selloff themes from the last scan
 _elite_scan_result: list = []   # [{sector, count, avg_conviction, stocks:[...]}]
 _elite_scan_ts: float    = 0.0
 _ELITE_SCAN_TTL          = 300  # 5 min
+_elite_diag: dict        = {}   # {candidates, qualified, running, error}
 
 
 def _refresh_elite_scan() -> None:
     """Filter the picks universe against the Elite must-own checklist, grouped by sector."""
-    global _elite_scan_result, _elite_scan_ts
+    global _elite_scan_result, _elite_scan_ts, _elite_diag
+    _elite_diag = {"running": True, "candidates": None, "qualified": None, "error": None,
+                   "top_fresh_scores": []}
     try:
         from intelligence.elite_filter import evaluate_elite, group_by_sector
         from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data, get_stock_price
@@ -893,12 +898,15 @@ def _refresh_elite_scan() -> None:
             and not p.get("trust", {}).get("auto_disqualified")
         ]
 
+        _elite_diag["candidates"] = len(candidates)
         entries = []
+        _fresh_scores = []
         for p in candidates:
             t = p["ticker"]
             try:
                 pd = get_stock_price(t)
                 fresh = get_trust_score_with_fallback(t, pd)   # current, post-fix score
+                _fresh_scores.append((t, fresh.get("total_score")))
                 pick = {
                     "ticker": t,
                     "name": p.get("name") or pd.get("name", t),
@@ -915,9 +923,13 @@ def _refresh_elite_scan() -> None:
 
         _elite_scan_result = group_by_sector(entries)
         _elite_scan_ts = _time.monotonic()
+        _fresh_scores.sort(key=lambda x: -(x[1] or 0))
+        _elite_diag.update({"running": False, "qualified": len(entries),
+                            "top_fresh_scores": _fresh_scores[:8]})
         print(f"[ELITE] {sum(len(s['stocks']) for s in _elite_scan_result)} must-own "
               f"across {len(_elite_scan_result)} sectors", flush=True)
     except Exception as exc:
+        _elite_diag.update({"running": False, "error": str(exc)[:160]})
         print(f"[ELITE] refresh failed: {exc}", flush=True)
 
 
