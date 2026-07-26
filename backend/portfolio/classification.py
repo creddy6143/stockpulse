@@ -145,6 +145,21 @@ def classify_with_hysteresis(ticker: str, user_id: str, trust: dict) -> str:
     pending_group = state.get("pending_group")
     pending_since_raw = state.get("pending_since")
 
+    # ── Fast-demote out of a SOFT "urgent" ───────────────────────────────────
+    # "Urgent" is sticky (5 trading days) to avoid un-flagging genuinely
+    # distressed stocks too soon. But a SOFT urgent — a low fundamental score,
+    # NOT an auto-disqualifier — must not strand a recovered stock in Urgent/SELL
+    # for days after its data improved. This is what left healthy mega-caps like
+    # LMT showing SELL long after their score recovered (often the "urgent" was
+    # only an incomplete-data artifact at add time). Auto-disqualified stocks are
+    # a hard fact and keep the normal slow path.
+    if (stable_group == "urgent" and new_group != "urgent"
+            and not trust.get("auto_disqualified")):
+        update_stable_classification(ticker, user_id, new_group)
+        if pending_group is not None:
+            clear_pending_classification(ticker, user_id)
+        return new_group
+
     # ── No change ───────────────────────────────────────────────────────────
     if new_group == stable_group:
         if pending_group is not None:
