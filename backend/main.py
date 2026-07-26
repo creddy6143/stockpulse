@@ -892,21 +892,24 @@ def _refresh_elite_scan() -> None:
         # then RECOMPUTE fresh trust below. The picks cache can be a day old — and
         # today's data fixes (MA200, short interest, analyst targets) raised many
         # scores — so filtering on cached scores alone would miss elite names.
+        # Only stocks whose CACHED score is within reach of the 78 Elite bar
+        # (today's fixes add at most ~+8). Sort by cached score, cap the pool, and
+        # recompute fresh trust IN PARALLEL — recomputing 130+ sequentially never
+        # finished. ~40 stocks × 10 workers completes in well under a minute.
         candidates = [
             p for p in mains
-            if (p.get("trust", {}).get("total_score") or 0) >= 65
+            if (p.get("trust", {}).get("total_score") or 0) >= 70
             and not p.get("trust", {}).get("auto_disqualified")
         ]
-
+        candidates.sort(key=lambda p: -(p.get("trust", {}).get("total_score") or 0))
+        candidates = candidates[:45]
         _elite_diag["candidates"] = len(candidates)
-        entries = []
-        _fresh_scores = []
-        for p in candidates:
+
+        def _eval_one(p):
             t = p["ticker"]
             try:
                 pd = get_stock_price(t)
                 fresh = get_trust_score_with_fallback(t, pd)   # current, post-fix score
-                _fresh_scores.append((t, fresh.get("total_score")))
                 pick = {
                     "ticker": t,
                     "name": p.get("name") or pd.get("name", t),
@@ -916,10 +919,19 @@ def _refresh_elite_scan() -> None:
                     "trust": fresh,
                 }
                 e = evaluate_elite(pick, get_fundamentals(t), get_insider_data(t), get_analyst_data(t))
+                return (t, fresh.get("total_score"), e)
+            except Exception:
+                return (t, None, None)
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        entries = []
+        _fresh_scores = []
+        with ThreadPoolExecutor(max_workers=10) as _ex:
+            for _fut in as_completed([_ex.submit(_eval_one, p) for p in candidates]):
+                t, sc, e = _fut.result()
+                _fresh_scores.append((t, sc))
                 if e:
                     entries.append(e)
-            except Exception:
-                continue
 
         _elite_scan_result = group_by_sector(entries)
         _elite_scan_ts = _time.monotonic()
