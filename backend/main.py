@@ -875,28 +875,39 @@ def _refresh_elite_scan() -> None:
     """Filter the picks universe against the Elite must-own checklist, grouped by sector."""
     global _elite_scan_result, _elite_scan_ts
     try:
-        from intelligence.elite_filter import evaluate_elite, group_by_sector, TRUST_FLOOR
-        from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data
+        from intelligence.elite_filter import evaluate_elite, group_by_sector
+        from data.fetcher import get_fundamentals, get_insider_data, get_analyst_data, get_stock_price
+        from intelligence.trust_score import get_trust_score_with_fallback
 
         _pc = db.get_picks_cache()
         _all = _json.loads(_pc["all_picks_json"]) if _pc and _pc.get("all_picks_json") else []
         mains = [p for p in _all if not p.get("is_dip")]
 
-        # Pre-filter on trust so we only enrich (insider/analyst fetches) the shortlist.
+        # Pre-filter on the CACHED trust with a lower bar to form a candidate pool,
+        # then RECOMPUTE fresh trust below. The picks cache can be a day old — and
+        # today's data fixes (MA200, short interest, analyst targets) raised many
+        # scores — so filtering on cached scores alone would miss elite names.
         candidates = [
             p for p in mains
-            if (p.get("trust", {}).get("total_score") or 0) >= TRUST_FLOOR
+            if (p.get("trust", {}).get("total_score") or 0) >= 65
             and not p.get("trust", {}).get("auto_disqualified")
         ]
 
         entries = []
         for p in candidates:
             t = p["ticker"]
-            lv = _picks_live_prices.get(t)
-            if lv and lv.get("price"):
-                p["price"], p["change_pct"] = lv["price"], lv["change_pct"]
             try:
-                e = evaluate_elite(p, get_fundamentals(t), get_insider_data(t), get_analyst_data(t))
+                pd = get_stock_price(t)
+                fresh = get_trust_score_with_fallback(t, pd)   # current, post-fix score
+                pick = {
+                    "ticker": t,
+                    "name": p.get("name") or pd.get("name", t),
+                    "sector": p.get("sector", "Other"),
+                    "price": pd.get("price") or p.get("price") or 0,
+                    "change_pct": pd.get("change_pct", p.get("change_pct")),
+                    "trust": fresh,
+                }
+                e = evaluate_elite(pick, get_fundamentals(t), get_insider_data(t), get_analyst_data(t))
                 if e:
                     entries.append(e)
             except Exception:
