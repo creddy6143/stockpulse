@@ -83,9 +83,23 @@ def _write_json(path: str, data) -> None:
 
 
 # ── metrics ────────────────────────────────────────────────────────────────────
-def _worst(td: dict) -> float:
-    """Worst of today's % and the 5-day % — captures the window drop."""
+def _window_drop(td: dict) -> float:
+    """Worst of today's % and the 5-day % — used only for grouping/sorting depth."""
     return min(float(td.get("change_pct") or 0), float(td.get("week_change") or 0))
+
+
+def _in_selloff(td: dict) -> bool:
+    """True only for GENUINE multi-day weakness — the mark of a correlated selloff.
+
+    A red day inside an uptrend is a dip, not an unwind. So a member counts only
+    when it is down >5% over the 5-day window, OR down >5% today while the week is
+    also negative (a fresh leg down). This prevents flagging a theme that is up
+    strongly on the week just because a few members pulled back today
+    (e.g. Storage/Memory +16.5% on the week with a red Friday).
+    """
+    today = float(td.get("change_pct") or 0)
+    week  = float(td.get("week_change") or 0)
+    return week <= MEMBER_DROP_PCT or (today <= MEMBER_DROP_PCT and week < 0)
 
 
 def _avg(vals: list[float]) -> float:
@@ -249,7 +263,7 @@ def detect_unwinds(ticker_data: dict, frozen: dict | None = None,
         if len(present) < MIN_THEME_SIZE:
             continue
 
-        down_members = [t for t in present if _worst(ticker_data[t]) <= MEMBER_DROP_PCT]
+        down_members = [t for t in present if _in_selloff(ticker_data[t])]
         theme_5d_avg    = _avg([float(ticker_data[t].get("week_change") or 0) for t in present])
         theme_today_avg = _avg([float(ticker_data[t].get("change_pct") or 0) for t in present])
 
@@ -257,16 +271,20 @@ def detect_unwinds(ticker_data: dict, frozen: dict | None = None,
         if not triggered:
             continue
 
+        # Group members with genuine weekly weakness — never a member that is up
+        # on the week (that is a dip within the theme's rally, not part of a selloff).
         affected = sorted(
-            {t for t in present if _worst(ticker_data[t]) <= GROUP_DROP_PCT} | set(down_members),
-            key=lambda t: _worst(ticker_data[t]),
+            {t for t in present
+             if _in_selloff(ticker_data[t])
+             or float(ticker_data[t].get("week_change") or 0) <= GROUP_DROP_PCT},
+            key=lambda t: _window_drop(ticker_data[t]),
         )
         if len(affected) < MIN_THEME_SIZE:
             continue
         claimed.update(affected)
 
         day_count = _estimate_day_count(theme_today_avg, theme_5d_avg)
-        max_depth = round(min(_worst(ticker_data[t]) for t in affected), 1)
+        max_depth = round(min(_window_drop(ticker_data[t]) for t in affected), 1)
 
         cards = []
         for t in affected:
