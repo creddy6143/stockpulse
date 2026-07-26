@@ -1915,6 +1915,36 @@ def get_insider_data(ticker: str) -> dict:
         except Exception:
             pass
 
+    # Nasdaq FINRA short-interest (bi-weekly settlement) — the key source for
+    # Railway: Nasdaq's API is reachable from datacenter IPs, where Yahoo's
+    # quoteSummary is BLOCKED (that block is why short_interest AND analyst_target
+    # come back empty for every stock on prod). Nasdaq returns shares short; we
+    # convert to % of shares outstanding via market_cap / price. US stocks only.
+    _is_us = not any(ticker.upper().endswith(s) for s in
+                     (".NS", ".BO", ".AS", ".DE", ".ST", ".PA", ".L",
+                      ".F", ".MI", ".MC", ".BR"))
+    if result["short_interest_pct"] == 0 and _is_us:
+        try:
+            nu = f"https://api.nasdaq.com/api/quote/{clean}/short-interest?assetClass=stocks"
+            nr = requests.get(nu, headers={
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                               "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+                "Accept": "application/json",
+            }, timeout=10)
+            if nr.status_code == 200:
+                rows = (((nr.json() or {}).get("data") or {}).get("shortInterestTable") or {}).get("rows") or []
+                if rows:
+                    shares_short = float(str(rows[0].get("interest", "0")).replace(",", "") or 0)
+                    fund = get_fundamentals(ticker)
+                    mc = float((fund or {}).get("market_cap") or 0)
+                    px = float((get_stock_price(ticker) or {}).get("price") or 0)
+                    shares_out = (mc / px) if px > 0 else 0
+                    if shares_short > 0 and shares_out > 0:
+                        result["short_interest_pct"] = round(shares_short / shares_out * 100, 1)
+                        print(f"[nasdaq_si] {ticker}: short={result['short_interest_pct']}%", flush=True)
+        except Exception:
+            pass
+
     # FMP short interest — last fallback when Finnhub + yfinance both return 0.
     # FINRA publishes bi-weekly; 48h cache matches the publication cadence.
     # Only for US stocks (FMP free tier doesn't cover .NS/.BO/.AS etc.)
