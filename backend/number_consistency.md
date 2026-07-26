@@ -13,6 +13,33 @@ any other class of bug.
 
 ---
 
+## Label must match the number beside it
+
+A **label and the number next to it can never contradict.** The word describing a data
+point must agree in direction with the figure shown.
+
+### Dip label / number rule
+
+The word "dip" implies a *decline*. It must sit next to the **qualifying multi-day drop**
+(`dip_pct` / `dip_window`, e.g. "−6.2% / 1w"), never next to today's daily `change_pct`.
+
+| Bug | Wrong | Right |
+|-----|-------|-------|
+| RR.L +1.0% today, qualified on −6% weekly slide | "+1.0% dip" (green % beside "dip") | "−6.2% / 1w" |
+
+Rules:
+1. If a dip qualified on a multi-day window, show **that window's** number beside the dip
+   tag. Never a green positive daily % next to the word "dip".
+2. If a dip was daily-based and today is positive, the dip tag is removed.
+3. Every DIP-tagged row: the label and its adjacent number must never contradict.
+
+Enforced by exposing `dip_pct` / `dip_window` from `evaluate_dip_candidate`
+(`dip_filter.py`) and rendering those — not `change_pct` — beside the "DIP" badge in
+`mapPick` and the Dip Buys tab. Today's daily % may still appear, but only on the
+clearly-labelled live price line, never as the dip figure.
+
+---
+
 ## Known Failure Patterns (Historical)
 
 | Bug | Root Cause | Fixed in |

@@ -10,6 +10,67 @@ class of bug.
 
 ---
 
+## THE canonical verdict function — `get_recommendation_state()`
+
+> `backend/intelligence/recommendation.py`
+
+Portfolio holdings have ONE verdict function. Every badge that describes an **owned**
+stock — the My Stocks REC pill, the My Stocks category (Urgent/Monitor/Stable), the
+Strategy holdings health badge, and holding alerts — derives from
+`get_recommendation_state(stock)`. No surface computes its own verdict from P&L, group,
+or score. If two screens can disagree, the wiring is broken.
+
+### Inputs it reads (and only these)
+
+`auto_disqualified`, `verification.suppressed` / `display_score`, `group`
+(from classification), `trust_score`, `grade`, `data_quality`.
+**It never reads `pnl_pct` or `change_pct`** — P&L is display information, never a verdict.
+
+### Decision order
+
+```
+1. auto_disqualified              → SELL · Urgent · "Review Position"
+2. no fundamental data            → "—"  · Monitor(neutral) · "Review"
+3. verification suppressed        → Review · Monitor(neutral) · "Review"   (never Urgent)
+4. group=urgent (confident)       → SELL · Urgent · "Review Position"
+5. group=watch                    → HOLD · Monitor · "Monitoring"
+6. group=good & trust≥75          → BUY  · Stable · "On Track"
+7. else                           → HOLD · Monitor · "Monitoring"
+```
+
+### Badge-mapping table
+
+| canonical `rec` | My Stocks pill | `rec_class` | category (`group`) | Strategy `health_label` |
+|-----------------|----------------|-------------|--------------------|-------------------------|
+| SELL            | SELL           | rr-s        | Urgent             | Review Position         |
+| HOLD            | HOLD           | rr-h        | Monitor            | Monitoring              |
+| BUY             | BUY            | rr-b        | Stable             | On Track                |
+| Review          | Review         | rr-h        | Monitor (neutral)  | Review                  |
+| —               | Review         | rr-h        | Monitor (neutral)  | Review                  |
+
+Two invariants enforced by construction:
+- **A SELL-class or suppressed stock can NEVER read "Holding Well" / "On Track"**,
+  regardless of P&L. (Fixes: LMT "SELL/Urgent on My Stocks" vs "Holding Well on Strategy".)
+- **A suppressed ("Review") score can NEVER produce an Urgent category** — recommendation
+  confidence can't exceed score confidence. (Fixes: UNH "Review" score + "Urgent" category.)
+
+### Wiring map — who consumes the canonical state
+
+| Surface | File | How it consumes |
+|---------|------|-----------------|
+| My Stocks REC pill | `tracker.py _build_position` → `pos.rec` / `pos.rec_class`; rendered by `App.jsx mapPosition` | reads `pos.rec` (falls back to legacy `getRecFromGroup` only if the API field is absent) |
+| My Stocks category | `classification.py classify_with_hysteresis` → `pos.group` → section bucket | classifier is now suppression-aware (suppressed → `watch`, never `urgent`) |
+| Strategy holdings badge | `main.py _detect_situation` | calls `get_recommendation_state(pos)`; label = `health_label`, action from `rec`; P&L is summary text only |
+| Holding alerts | `tracker.py get_portfolio_with_pnl` | fire only on `auto_disqualified` (objective) — never on a suppressed score |
+| Watchlist / Smart Picks badges | `wl_group` / `smart_picks_strat` (≥75 threshold, below) | separate entry-threshold path — see next section |
+
+> **Note:** Watchlist and Smart Picks describe stocks the user does **not** own, so they use
+> the entry-threshold path (≥75) documented below rather than the holdings verdict function.
+> The two paths share the same safety overrides (auto_disq, no-data). The −8% daily-drop
+> override for entry candidates is documented in the Safety Overrides section.
+
+---
+
 ## The One Threshold
 
 ```

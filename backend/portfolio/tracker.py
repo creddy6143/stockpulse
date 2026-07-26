@@ -100,6 +100,21 @@ def _build_position(pos: dict, rates: dict, user_id: str = "OWNER") -> dict:
 
     group = classify_with_hysteresis(ticker, user_id, trust)
 
+    # ── Canonical recommendation state — SINGLE SOURCE OF TRUTH ───────────────
+    # Every surface (My Stocks REC, Strategy health badge, alerts) reads these
+    # fields.  Never recompute a verdict downstream.  See intelligence/recommendation.py
+    from intelligence.recommendation import get_recommendation_state
+    _rec_state = get_recommendation_state({
+        "auto_disqualified": trust["auto_disqualified"],
+        "verification": trust.get("verification"),
+        "display_score": trust.get("display_score", trust["total_score"]),
+        "trust_score": trust["total_score"],
+        "group": group,
+        "grade": trust["grade"],
+        "data_quality": trust.get("data_quality", "full"),
+        "disqualify_reason": trust["disqualify_reason"],
+    })
+
     return {
         "id": pos["id"],
         "ticker": ticker,
@@ -131,6 +146,13 @@ def _build_position(pos: dict, rates: dict, user_id: str = "OWNER") -> dict:
         "verified_rec": trust.get("verified_rec"),
         "verification": trust.get("verification"),
         "group": group,
+        # Canonical verdict — the single source of truth for every badge.
+        "rec": _rec_state["rec"],
+        "rec_class": _rec_state["rec_class"],
+        "category": _rec_state["category"],
+        "category_label": _rec_state["category_label"],
+        "health_label": _rec_state["health_label"],
+        "rec_reason": _rec_state["reason"],
         "is_speculative": trust.get("is_speculative", False),
         "analyst_buy": trust.get("analyst_buy", 0),
         "analyst_hold": trust.get("analyst_hold", 0),

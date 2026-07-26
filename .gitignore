@@ -19,3 +19,10 @@ frontend/.env.production.local
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime-generated state / caches
+backend/data/theme_unwind_state.json
+backend/data/theme_unwind_history.json
+backend/.scan_cache.json
+backend/verification_log.jsonl
+cf-screener-proxy/.wrangler/

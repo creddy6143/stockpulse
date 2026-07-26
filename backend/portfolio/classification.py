@@ -62,6 +62,15 @@ def _classify_slow(trust: dict) -> tuple:
     if auto_disq:
         return "urgent", "auto_disqualifier"
 
+    # Suppressed score → the verification layer decided we lack the confidence
+    # to score this stock ("Review").  Recommendation/category confidence can
+    # never exceed score confidence, so a suppressed stock can NEVER be Urgent.
+    # Route to Watch (neutral) — missing confidence is "unknown", not "bad".
+    # (Fixes UNH-class bug: score "Review" but category "Urgent".)
+    verif = trust.get("verification") or {}
+    if verif.get("suppressed") or trust.get("display_score", trust.get("total_score")) is None:
+        return "watch", "score_suppressed"
+
     # Missing either pillar → insufficient data → Watch (never Urgent)
     if fscore is None:
         return "watch", "insufficient_data"

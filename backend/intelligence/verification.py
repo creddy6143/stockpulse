@@ -73,7 +73,12 @@ def get_verification_log(limit: int = 100) -> list[dict]:
 # $20B catches major Indian companies like BPCL (~$42B) that fall below
 # the previous $50B threshold but are clearly large established businesses.
 LARGE_CAP_USD       = 20_000_000_000   # $20 B
-LARGE_CAP_SCORE_FLOOR = 35             # any large-cap below this → SUPPRESSED
+# Raised 35 → 45: a >$20B mega-cap (e.g. LMT) scoring in the 35-44 band with no
+# active auto-disqualifier is almost always a data-completeness artifact (partial
+# analyst coverage, a down-day momentum penalty), not genuine distress. Suppress
+# to "Review" rather than emit a confident SELL. Principle: missing confidence is
+# "unknown", never "bad". Recommendation confidence can't exceed score confidence.
+LARGE_CAP_SCORE_FLOOR = 45             # any large-cap below this → SUPPRESSED
 
 # How many analysts constitute meaningful consensus
 MIN_ANALYST_COVERAGE = 3

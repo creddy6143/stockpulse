@@ -760,6 +760,19 @@ def evaluate_dip_candidate(
             label = "Clean Dip"
             icon  = "📉"
 
+    # ── PART 1 — -8% SAFETY OVERRIDE (single source of truth) ─────────────────
+    # A daily change worse than -8% can never be a BUY / STRONG BUY on ANY
+    # screen. This is a hard cap that executes AFTER all quality scoring: even a
+    # Grade-A, high-conviction setup is capped to WATCH on a catastrophic single
+    # day. Consumers (Smart Picks mapPick, Dip Buys tab) must honour `dip_rec`.
+    safety_capped = chg_pct <= -8.0
+    dip_rec = "WATCH" if safety_capped else "BUY"
+    safety_note = (
+        f"Sharp single-day drop ({chg_pct:.1f}% today) — wait for stabilization "
+        f"before considering entry."
+        if safety_capped else None
+    )
+
     return {
         "ticker":             ticker,
         "quality_score":      quality_score,
@@ -772,12 +785,23 @@ def evaluate_dip_candidate(
         "dip_tier":           dip_tier,          # "A" | "B" | "C"
         "label":              label,
         "icon":               icon,
+        # ── PART 2 — the qualifying multi-day window (label must match number).
+        # The dip qualified on THIS drop over THIS window — never today's daily %.
+        # Frontends must show `dip_pct`/`dip_window` next to the "dip" tag, not
+        # change_pct, so a green +daily% can never sit beside the word "dip".
+        "dip_pct":            round(cumulative, 1),   # e.g. -6.2
+        "dip_window":         label_period,           # "1W" | "3D"
+        # ── PART 1 — safety-override outputs
+        "dip_rec":            dip_rec,                # "BUY" | "WATCH"
+        "safety_capped":      safety_capped,
+        "safety_note":        safety_note,
         "grade":              trust.get("grade", ""),
         "scanned_at":         datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         # Price data
         "price":              price,
         "change_pct":         chg_pct,
         "week_change":        h1w,
+        "3d_change":          h3d,
         "6m_change":          h6m,
         "1y_change":          h1y,
         # Technical

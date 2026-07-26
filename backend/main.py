@@ -846,6 +846,7 @@ _PICKS_PRICE_TTL = 90           # seconds — refresh live prices at most every 
 _dip_scan_result: list = []
 _dip_scan_ts: float    = 0.0
 _DIP_SCAN_TTL          = 90    # seconds
+_dip_unwind: list      = []    # correlated-selloff themes from the last scan
 
 
 def _refresh_dip_scan() -> None:
@@ -903,6 +904,41 @@ def _refresh_dip_scan() -> None:
             current_picks_tickers={p["ticker"] for p in _mains_only},
             top_n=15,
         )
+        # ── Correlated-selloff (Unwind) detection — Tier 4b ───────────────────
+        # Build a theme change-data map over the WHOLE universe (not just
+        # qualifying dips) so a theme-wide selloff is visible even for members
+        # that fell too hard to pass the dip filters.
+        try:
+            from intelligence.unwind_detector import detect_unwinds, apply_unwind_suppression
+            _dip_by_ticker = {c["ticker"]: c for c in candidates}
+            _ticker_data = {}
+            for p in universe:
+                t = p["ticker"]
+                c = _dip_by_ticker.get(t, {})
+                _ticker_data[t] = {
+                    "change_pct":  float(p.get("change_pct") or 0),
+                    "week_change": float(p.get("week_change") or c.get("week_change") or 0),
+                    "d3":          c.get("3d_change"),
+                    "price":       float(p.get("price") or c.get("price") or 0),
+                    "ma50":        c.get("ma50"),
+                    "ma200":       c.get("ma200"),
+                    "next_earnings": c.get("days_to_earnings"),
+                }
+            _frozen = {c["ticker"]: {"rec": c.get("dip_rec", "WATCH"),
+                                     "score": c.get("quality_score")} for c in candidates}
+            _unwinds = detect_unwinds(_ticker_data, frozen=_frozen, deep=True)
+            candidates = apply_unwind_suppression(candidates, _unwinds)
+            _dip_unwind_result = _unwinds
+            if _unwinds:
+                print(f"[UNWIND] {len(_unwinds)} theme(s) in correlated selloff: "
+                      f"{[u['theme_key'] for u in _unwinds]}", flush=True)
+        except Exception as _exc:
+            _dip_unwind_result = []
+            print(f"[UNWIND] detection skipped: {_exc}", flush=True)
+
+        global _dip_unwind
+        _dip_unwind = _dip_unwind_result
+
         _dip_scan_result = candidates
         _dip_scan_ts = _time.monotonic()
         print(f"[DIP] Cache refreshed: {len(candidates)} candidates", flush=True)
@@ -1647,15 +1683,34 @@ def strategy(user_id: str = Depends(get_current_user)):
 
     dip_buys = []
     for d in dip_candidates:
+        # Honour the single-source-of-truth dip verdict: a -8% daily drop or a
+        # correlated-selloff (unwind) forces WATCH — never BUY — on this surface.
+        _capped = d.get("safety_capped") or d.get("unwind")
+        _action = "WATCH" if _capped else d.get("dip_rec", "BUY")
+        _color  = "var(--rose)" if d.get("unwind") else ("var(--amber)" if _capped else "var(--amber)")
+        _summary = d.get("safety_note") or d.get("evidence", "")
         dip_buys.append({
             "ticker": d["ticker"],
             "flag": d.get("flag", "🇺🇸"),
             "situation_type": "dip_buy",
-            "label": d.get("label", "Quality Pullback"),
-            "icon": d.get("icon", "📉"),
-            "action": "BUY",
-            "color": "var(--amber)",
-            "summary": d.get("evidence", ""),
+            "label": ("Suspended — Unwind" if d.get("unwind")
+                      else "Watch — Major Drop" if _capped
+                      else d.get("label", "Quality Pullback")),
+            "icon": ("⚠️" if _capped else d.get("icon", "📉")),
+            "action": _action,
+            "color": _color,
+            "summary": _summary,
+            # Part 1/2 + Tier 4b passthrough
+            "dip_rec": d.get("dip_rec", "BUY"),
+            "dip_pct": d.get("dip_pct"),
+            "dip_window": d.get("dip_window"),
+            "safety_capped": bool(d.get("safety_capped")),
+            "safety_note": d.get("safety_note"),
+            "unwind": bool(d.get("unwind")),
+            "unwind_theme": d.get("unwind_theme"),
+            "unwind_theme_name": d.get("unwind_theme_name"),
+            "scores_frozen": bool(d.get("scores_frozen")),
+            "frozen_score": d.get("frozen_score"),
             "priority": 0 if d.get("on_watchlist") or d.get("is_smart_pick") else 1,
             "playbook": None,
             "name": d.get("name", d["ticker"]),
@@ -1696,6 +1751,8 @@ def strategy(user_id: str = Depends(get_current_user)):
         "watchlist": wl_situations,
         "smart_picks": smart_picks_strat,
         "dip_buys": dip_buys,
+        # Tier 4b — one Unwind banner per theme in a correlated selloff.
+        "unwind_themes": list(_dip_unwind),
     }
 
 
@@ -1798,6 +1855,9 @@ def get_dips(user_id: str = Depends(get_current_user)):
         "total": len(clean_dips),
         "universe_size": len(cached),
         "scanned_at": clean_dips[0].get("scanned_at", "") if clean_dips else "",
+        # Tier 4b — themes in a correlated selloff. Frontend renders one Unwind
+        # banner per theme and forces WATCH on the affected stocks.
+        "unwind_themes": list(_dip_unwind),
     }
 
 
@@ -1907,60 +1967,76 @@ def _get_flag(market: str) -> str:
 
 
 def _detect_situation(pos: dict, market_data: dict) -> dict:
-    """Always returns a situation — every portfolio stock gets a strategy card."""
-    pnl_pct = pos.get("pnl_pct", 0) or 0
-    raw_trust = pos.get("trust_score")          # may be None for Data Unavailable
-    trust = raw_trust if raw_trust is not None else 50
-    auto_disq = pos.get("auto_disqualified", False)
-    grade = pos.get("grade", "")
-    trust_str = f"{trust}/100" if raw_trust is not None else "No Data"
+    """Strategy holdings card — derived from the SINGLE SOURCE OF TRUTH.
 
-    if auto_disq:
+    The verdict (health label + action) comes ENTIRELY from
+    get_recommendation_state().  P&L is display context only — it never flips
+    the verdict.  A SELL-class or suppressed stock can never read "Holding Well"
+    / "On Track", regardless of how far up or down the position is.
+
+    Strategy badge mapping (Part 0 §3):
+        rec BUY   → "On Track"        (health_label)
+        rec HOLD  → "Monitoring"
+        rec SELL  → "Review Position"
+        rec Review/— → "Review"
+    """
+    from intelligence.recommendation import get_recommendation_state
+    st = get_recommendation_state(pos)
+
+    pnl_pct  = pos.get("pnl_pct", 0) or 0
+    pnl_note = f"P&L {pnl_pct:+.0f}% (info only)."
+    ds       = pos.get("display_score")
+    trust_str = (f"Trust {ds}/100." if ds is not None
+                 else ("Score under review." if st["suppressed"] else "No score."))
+
+    # ── Auto-disqualified — objective exit, always wins ───────────────────────
+    if pos.get("auto_disqualified"):
         return {
             "situation_type": "exit_now", "label": "Exit Required", "icon": "🚨",
             "action": "EXIT", "color": "var(--rose)", "priority": 0,
-            "summary": f"Auto-disqualified. {pos.get('disqualify_reason', 'Exit now.')}",
+            "summary": f"Auto-disqualified. {pos.get('disqualify_reason', 'Exit now.')} {pnl_note}",
         }
-    if grade == "Data Unavailable":
+
+    # ── No fundamental data — unknown, never bad ──────────────────────────────
+    if st["no_data"]:
         return {
-            "situation_type": "no_data", "label": "No Data", "icon": "❓",
-            "action": "HOLD", "color": "var(--t2)", "priority": 3,
-            "summary": f"No fundamental data available for this exchange. P&L {pnl_pct:+.0f}%. Price tracking is active.",
+            "situation_type": "no_data", "label": "Review", "icon": "❓",
+            "action": "REVIEW", "color": "var(--t2)", "priority": 3,
+            "summary": f"No fundamental data available for this exchange. {pnl_note} Price tracking is active.",
         }
-    if pnl_pct < -30:
+
+    rec    = st["rec"]
+    health = st["health_label"]   # On Track / Monitoring / Review Position / Review
+
+    # ── SELL-class holding — needs review, can never read "Holding Well" ──────
+    if rec == "SELL":
         return {
-            "situation_type": "crash_decision", "label": "Crash Decision", "icon": "📉",
-            "action": "HOLD" if trust >= 60 else "REVIEW", "color": "var(--amber)", "priority": 1,
-            "summary": f"Down {abs(pnl_pct):.0f}% from your entry. {'Business fundamentals still intact — hold.' if trust >= 60 else f'Trust score {trust_str}. Review recent reports before deciding.'}",
+            "situation_type": "review_position", "label": health, "icon": "⚠️",
+            "action": "REVIEW", "color": "var(--rose)", "priority": 1,
+            "summary": f"{st['reason']} {trust_str} {pnl_note}",
         }
-    if pnl_pct > 30:
+
+    # ── Suppressed score — Review, neutral, no confident call ─────────────────
+    if rec == "Review":
         return {
-            "situation_type": "profit_decision", "label": "Profit Decision", "icon": "💰",
-            "action": "HOLD", "color": "var(--emerald)", "priority": 2,
-            "summary": f"Up {pnl_pct:.0f}% from entry. Consider trimming to lock in gains.",
-        }
-    if trust < 40:
-        return {
-            "situation_type": "weak_fundamentals", "label": "Weak Signal", "icon": "⚠️",
+            "situation_type": "review_score", "label": health, "icon": "🔍",
             "action": "REVIEW", "color": "var(--amber)", "priority": 2,
-            "summary": f"Trust score {trust_str} ({grade}). Review fundamentals before holding further.",
+            "summary": f"{st['reason']} {pnl_note}",
         }
-    if -10 <= pnl_pct <= 10:
+
+    # ── BUY-class — strong fundamentals ───────────────────────────────────────
+    if rec == "BUY":
         return {
-            "situation_type": "monitor", "label": "On Track", "icon": "👁",
-            "action": "HOLD", "color": "var(--indigo)", "priority": 3,
-            "summary": f"Trust {trust_str}. P&L {pnl_pct:+.0f}%. No action required — monitoring.",
+            "situation_type": "on_track", "label": health, "icon": "✅",
+            "action": "HOLD", "color": "var(--emerald)", "priority": 3,
+            "summary": f"{st['reason']} {trust_str} {pnl_note}",
         }
-    if pnl_pct < -10:
-        return {
-            "situation_type": "mild_loss", "label": "Under Pressure", "icon": "📉",
-            "action": "HOLD" if trust >= 60 else "REVIEW", "color": "var(--amber)", "priority": 2,
-            "summary": f"Down {abs(pnl_pct):.0f}%. Trust {trust_str}. {'Hold — fundamentals intact.' if trust >= 60 else 'Review position carefully.'}",
-        }
+
+    # ── HOLD — monitoring ─────────────────────────────────────────────────────
     return {
-        "situation_type": "monitor", "label": "Holding Well", "icon": "✅",
-        "action": "HOLD", "color": "var(--emerald)", "priority": 3,
-        "summary": f"Up {pnl_pct:.0f}%. Trust {trust_str}. Holding well — no action needed.",
+        "situation_type": "monitor", "label": health, "icon": "👁",
+        "action": "HOLD", "color": "var(--indigo)", "priority": 3,
+        "summary": f"{st['reason']} {trust_str} {pnl_note}",
     }
 
 

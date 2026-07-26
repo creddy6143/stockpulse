@@ -274,12 +274,16 @@ const mapPosition = (pos, earningsByTicker) => {
   // Compute verif first — needed to override rec when score is suppressed
   const verifEarly = pos.verification || {};
   const isSuppressed = (verifEarly.suppressed || pos.display_score === null) && !pos.auto_disqualified;
+  // SINGLE SOURCE OF TRUTH: prefer the backend canonical verdict (pos.rec /
+  // pos.rec_class from get_recommendation_state).  This is the SAME verdict the
+  // Strategy tab renders, so the two screens can never disagree (fixes the
+  // LMT "SELL/Urgent on My Stocks vs Holding Well on Strategy" bug).
+  // getRecFromGroup is kept ONLY as a legacy fallback for stale API responses.
   const {rec: groupRec, rcls: groupRcls} = getRecFromGroup(pos.group, pos.trust_score, pos.auto_disqualified);
-  // A suppressed score means we lack sufficient data for a directional call.
-  // Showing SELL alongside "Score suppressed — insufficient data" is a contradiction.
-  // Auto-disqualified stocks always get SELL regardless of suppression.
-  const rec = isSuppressed ? "Review" : groupRec;
-  const rcls = isSuppressed ? "rr-h" : groupRcls;
+  const localRec = isSuppressed ? "Review" : groupRec;
+  const localRcls = isSuppressed ? "rr-h" : groupRcls;
+  const rec = (pos.rec != null) ? pos.rec : localRec;
+  const rcls = (pos.rec_class != null) ? pos.rec_class : localRcls;
   const pnlPct = pos.pnl_pct || 0;
   const fmp = pos.fmp_profile || null;
   const scoreStr = pos.trust_score != null ? `${pos.trust_score}/100` : "score unavailable";
@@ -404,6 +408,13 @@ const mapPick = pick => {
     rcls = rec === "STRONG BUY" ? "rr-sb" : rec === "BUY" ? "rr-b" : rec === "SELL" ? "rr-s" : "rr-h";
   }
 
+  // ── -8% SAFETY OVERRIDE (Part 1) — a sharp single-day drop can never be a
+  // BUY / STRONG BUY on ANY screen. Runs AFTER score-based rec, caps at WATCH.
+  // Also honours the backend unwind/safety cap on dip picks.
+  if ((pick.change_pct || 0) <= -8 || pick.safety_capped || pick.unwind) {
+    rec = "WATCH"; rcls = "rr-h";
+  }
+
   const col = total >= 90 ? "#059669" : "#5b72f8";
   const price = pick.price || 0;
   const curr = cu(pick.ticker);
@@ -435,13 +446,22 @@ const mapPick = pick => {
       ? ["Price moved since last scan — analysis text withheld to avoid contradictions. Scores and recommendation are current."]
       : ["Strong fundamentals across all three pillars."],
     potential: pick.is_dip
-      ? `${(pick.change_pct||0).toFixed(1)}% dip`
+      // Part 2: show the QUALIFYING multi-day drop next to "dip", never today's %.
+      // (A green +1% today beside the word "dip" is a contradiction.)
+      ? (pick.dip_pct != null
+          ? `${pick.dip_pct.toFixed(1)}% / ${(pick.dip_window||"5D").toLowerCase()}`
+          : `${(pick.week_change||0).toFixed(1)}% wk`)
       : cvScore >= 80 ? "+50-80%" : cvScore >= 70 ? "+30-50%" : `+${Math.round((total-60)*1.2+15)}%`,
     entry: price > 0 ? `${curr}${(price*0.97).toFixed(0)}-${curr}${(price*1.03).toFixed(0)}` : "—",
     risk: cvScore >= 80 ? "LOW-MED" : total >= 80 ? "LOW-MED" : "MEDIUM",
     horizon: verdict.time_horizon || "12 months",
     is_dip: pick.is_dip || false,
     change_pct: pick.change_pct || 0,
+    dip_pct: pick.dip_pct != null ? pick.dip_pct : null,
+    dip_window: pick.dip_window || null,
+    week_change: pick.week_change != null ? pick.week_change : null,
+    safety_capped: pick.safety_capped || false,
+    unwind: pick.unwind || false,
     price, curr,
     sector: pick.sector || "Other",
     situationLabel: trust.situation_label || null,
@@ -2245,7 +2265,8 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <div style={{width:5,height:5,borderRadius:"50%",background:isDip?"var(--emerald)":recColor,flexShrink:0}}/>
             <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
-            {isDip&&<span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 5px",borderRadius:3}}>DIP</span>}
+            {isDip&&(()=>{const cap=s.safety_capped||s.unwind;const w=s.dip_pct!=null?`${s.dip_pct.toFixed(1)}%/${(s.dip_window||"5D").toLowerCase()}`:(s.week_change!=null?`${s.week_change.toFixed(1)}%wk`:"");return(
+              <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:cap?"var(--rose)":"var(--emerald)",background:cap?"var(--rose2)":"var(--emerald2)",padding:"1px 5px",borderRadius:3,whiteSpace:"nowrap"}}>{cap?"⚠ ":"DIP "}{w}</span>);})()}
             {trackedSet.has(s.ticker)&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 4px",borderRadius:3}}>✓</span>}
             {hasCv&&s.mixedSignals&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--amber)",background:"var(--amber2)",padding:"1px 5px",borderRadius:3}}>~</span>}
           </div>
@@ -2933,13 +2954,91 @@ function AnalogsTab({onDetail, portfolioTickers, watchlistTickers}) {
   );
 }
 
+// ── UNWIND (correlated-selloff) UI ───────────────────
+function UnwindStockCard({s}){
+  const r=s.reclaim||{};
+  const statusColor=r.status==="confirmed"?"var(--emerald)":(r.status==="reclaimed_day1"||r.status==="testing")?"var(--amber)":"var(--t3)";
+  const rr=s.recovery_resilience||{};
+  return (
+    <div style={{background:"var(--white)",borderRadius:9,padding:"9px 10px",marginBottom:7,border:"1px solid rgba(15,23,42,.06)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:"var(--amber)",background:"var(--amber2)",padding:"1px 5px",borderRadius:3}}>WATCHING</span>
+        </div>
+        <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--t2)"}}>${s.price}<span style={{marginLeft:5,color:(s.change_pct||0)>=0?"var(--emerald)":"var(--rose)"}}>{(s.change_pct||0)>=0?"+":""}{s.change_pct}%</span></div>
+      </div>
+      <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:3,lineHeight:1.5}}>
+        was {s.frozen_rec}{s.frozen_score!=null?` ${s.frozen_score}`:""} · scores frozen
+        {s.drawdown_from_52w_high_pct!=null?` · ${s.drawdown_from_52w_high_pct}% from 52w high`:""}
+        {s.next_earnings!=null?` · earnings in ${s.next_earnings}d`:""}
+      </div>
+      {r.level!=null?(
+        <div style={{marginTop:6,padding:"6px 8px",background:"rgba(15,23,42,.03)",borderRadius:6}}>
+          <span style={{fontSize:9,color:"var(--t2)"}}>Reclaim level <span style={{fontFamily:"var(--mono)",fontWeight:700,color:"var(--t1)"}}>${r.level}</span> · now ${s.price}{r.pct_below!=null?` (${r.pct_below}% below)`:""}</span>
+          <div style={{fontFamily:"var(--mono)",fontSize:8.5,fontWeight:700,color:statusColor,marginTop:3}}>{r.status_label}</div>
+        </div>
+      ):(
+        <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:5}}>{r.status_label||"No overhead level"}</div>
+      )}
+      <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:5}}>
+        Recovery resilience: {rr.score!=null?`${rr.score}/100 (${rr.label})`:(rr.label||"Insufficient history")}
+        {rr.median_recovery_days!=null?` · median recovery ${rr.median_recovery_days}d`:""}
+      </div>
+      {s.safety_override&&<div style={{fontSize:9,color:"var(--rose)",marginTop:4}}>⚠️ {s.safety_override}</div>}
+    </div>
+  );
+}
+
+function UnwindBanner({u}){
+  const [open,setOpen]=useState(true);
+  const st=u.stabilization||{criteria:[],met_count:0,total:4};
+  const stabilized=st.stabilized;
+  const accent=stabilized?"var(--emerald)":"var(--rose)";
+  return (
+    <div style={{margin:"10px 12px",borderRadius:12,overflow:"hidden",border:`1.5px solid ${stabilized?"#6ee7b7":"#fecdd3"}`,background:stabilized?"rgba(5,150,105,.05)":"rgba(225,29,72,.04)"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{padding:"10px 12px",cursor:"pointer"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+          <span style={{fontSize:14}}>{u.icon}</span>
+          <span style={{fontFamily:"var(--syne)",fontWeight:800,fontSize:13,color:accent}}>{u.name}</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t2)",background:"rgba(15,23,42,.05)",padding:"1px 6px",borderRadius:6}}>{u.affected_count} stocks · ~{u.day_count}d</span>
+          <span style={{marginLeft:"auto",fontSize:10,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+        </div>
+        <div style={{fontSize:10.5,color:"var(--t2)",lineHeight:1.5}}>
+          {stabilized?`✅ THEME STABILIZED · ${u.name} — 5 days flat-or-up · Dip signals resumed`:u.banner_copy}
+        </div>
+        <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:4}}>
+          5-day avg {u.theme_5d_avg>=0?"+":""}{u.theme_5d_avg}% · driver: {u.driver}
+        </div>
+      </div>
+      {open&&(
+      <div style={{padding:"0 12px 12px"}}>
+        <div style={{background:"var(--white)",borderRadius:9,padding:"9px 10px",marginBottom:10,border:"1px solid rgba(15,23,42,.06)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <span style={{fontFamily:"var(--mono)",fontSize:8,fontWeight:700,color:"var(--t2)",letterSpacing:.5,textTransform:"uppercase"}}>Stabilization tracker</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:800,color:accent}}>{st.met_count} of {st.total} met</span>
+          </div>
+          {(st.criteria||[]).map((c,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:6,padding:"2px 0"}}>
+              <span style={{fontSize:11}}>{c.met?"✅":"⬜"}</span>
+              <span style={{fontSize:10,color:c.met?"var(--t1)":"var(--t3)",flex:1}}>{c.label}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{c.detail}</span>
+            </div>
+          ))}
+        </div>
+        {(u.stocks||[]).map(s=><UnwindStockCard key={s.ticker} s={s}/>)}
+      </div>)}
+    </div>
+  );
+}
+
 // ── STRATEGY SCREEN ──────────────────────────────────
 function StrategyScreen({strategyData, onDetail}) {
   const [tab,setTab] = useState(0);
   const [exp,setExp] = useState(null);
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
-  const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[]};
+  const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[], unwindThemes:[]};
   const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs"];
   const _tierOrder = {"A":0,"B":1,"C":2};
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
@@ -2956,9 +3055,11 @@ function StrategyScreen({strategyData, onDetail}) {
   // Build a displayItems array that injects grade-header and empty-grade
   // sentinel objects so all three sections are always visible.
   const displayItems = tab !== 3 ? items : (()=>{
-    const gradeA = items.filter(x=>x.dip_tier==="A");
-    const gradeB = items.filter(x=>x.dip_tier==="B");
-    const gradeC = items.filter(x=>x.dip_tier==="C");
+    // Unwind-affected stocks are shown under their Unwind banner, not in the
+    // grade sections — so they are excluded here to avoid duplication.
+    const gradeA = items.filter(x=>x.dip_tier==="A" && !x.unwind);
+    const gradeB = items.filter(x=>x.dip_tier==="B" && !x.unwind);
+    const gradeC = items.filter(x=>x.dip_tier==="C" && !x.unwind);
     return [
       {_isGradeHeader:true, tier:"A", count:gradeA.length},
       ...(gradeA.length>0 ? gradeA : [{_isEmptyGrade:true, tier:"A"}]),
@@ -3021,6 +3122,10 @@ function StrategyScreen({strategyData, onDetail}) {
         {tab===4&&(
           <AnalogsTab onDetail={onDetail} portfolioTickers={portfolioTickers} watchlistTickers={watchlistTickers}/>
         )}
+        {/* Tier 4b — Unwind banners at the top of the Dip Buys tab. Affected
+            stocks are grouped here under one banner per theme, forced to WATCH,
+            with a live stabilization tracker and per-stock reclaim levels. */}
+        {tab===3&&(SD.unwindThemes||[]).map(u=><UnwindBanner key={u.theme_key} u={u}/>)}
         {tab!==4&&tab!==3&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
@@ -3234,7 +3339,7 @@ export default function App() {
   const [picksLoading, setPicksLoading] = useState(false);
   const [disq, setDisq] = useState([]);
   const [accuracy, setAccuracy] = useState("—");
-  const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[],dipBuys:[]});
+  const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[],dipBuys:[],unwindThemes:[]});
   const [earnings, setEarnings] = useState([]);
   const [priceAlerts, setPriceAlerts] = useState([]);
   const loadPriceAlerts = () => getPriceAlerts().then(v=>setPriceAlerts(v||[])).catch(()=>{});
@@ -3312,6 +3417,7 @@ export default function App() {
           watchlist: v.watchlist || [],
           smartPicks: v.smart_picks || [],
           dipBuys: v.dip_buys || [],
+          unwindThemes: v.unwind_themes || [],
         });
       }).catch(()=>{});
     }, 1000);
