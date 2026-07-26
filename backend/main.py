@@ -141,12 +141,24 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
+        "build": "unwind-v1",   # bumps when the correlated-selloff system ships
         "dip_candidates_in_cache": len(candidates),
         "scan_age_seconds": age_s,
         "picks_in_db": picks_count,
         "dip_picks_in_db": dip_picks_count,
         "picks_updated_at": picks_updated,
-        "candidates": [{"ticker": c["ticker"], "dip_tier": c.get("dip_tier"), "quality_score": c.get("quality_score")} for c in candidates],
+        "candidates": [{"ticker": c["ticker"], "dip_tier": c.get("dip_tier"),
+                        "quality_score": c.get("quality_score"),
+                        "dip_rec": c.get("dip_rec"), "unwind": bool(c.get("unwind")),
+                        "safety_capped": bool(c.get("safety_capped"))} for c in candidates],
+        # Tier 4b — authless verification window for the Unwind system
+        "unwind_themes": [
+            {"theme": u.get("theme_key"), "name": u.get("name"),
+             "affected": u.get("affected_tickers"),
+             "theme_5d_avg": u.get("theme_5d_avg"),
+             "stabilization_met": (u.get("stabilization") or {}).get("met_count")}
+            for u in list(_dip_unwind)
+        ],
         "top_15_by_week_change": top_week_changes,
     }
 
