@@ -141,7 +141,8 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "unwind-v1",   # bumps when the correlated-selloff system ships
+        "build": "yahoo-proxy-v2",   # bump to confirm Railway is deploying latest commits
+        "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "dip_candidates_in_cache": len(candidates),
         "scan_age_seconds": age_s,
         "picks_in_db": picks_count,
