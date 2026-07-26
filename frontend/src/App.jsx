@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite, getFrameworks, getFrameworksFor } from "./api/client";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import AuthScreen from "./screens/AuthScreen";
@@ -617,12 +617,81 @@ function ScoreDetail({ticker, trust, grade, onClose}) {
 }
 
 // ── STOCK DETAIL OVERLAY ────────────────────────────
+// ── FRAMEWORKS (analysis lenses) — shared display ────
+const FW_COLORS = {emerald:"var(--emerald)",indigo:"var(--indigo)",amber:"var(--amber)",rose:"var(--rose)"};
+function FrameworksSection({fw}){
+  const [openK,setOpenK] = useState(null);
+  if(!fw) return (
+    <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,border:"1px solid rgba(91,114,248,.06)"}}>
+      <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:6}}>🧮 Investment Frameworks</div>
+      <div style={{fontSize:10,color:"var(--t3)"}}>Loading analysis lenses…</div>
+    </div>
+  );
+  const frameworks = fw.frameworks || [];
+  const s = fw.summary || {};
+  const statusColor = f => f.status==="ok" ? (FW_COLORS[f.color]||"var(--t2)") : "var(--t3)";
+  return (
+    <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadowsm)",padding:14,border:"1px solid rgba(91,114,248,.06)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+        <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>🧮 Investment Frameworks</div>
+        <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)"}}>{s.ok||0} ✅ · {s.na||0} N/A · {s.insufficient||0} ?</span>
+      </div>
+      <div style={{fontSize:9,color:"var(--t3)",marginBottom:10,lineHeight:1.4}}>Analysis lenses, not recommendations. A stock can fail a lens and still be a reasonable holding.</div>
+      {frameworks.map(f=>{
+        const open = openK===f.key;
+        const col = statusColor(f);
+        return (
+          <div key={f.key} style={{borderTop:"1px solid rgba(15,23,42,.05)"}}>
+            <div onClick={()=>setOpenK(open?null:f.key)} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",cursor:"pointer"}}>
+              <div style={{minWidth:82}}><span style={{fontFamily:"var(--dm)",fontWeight:700,fontSize:11}}>{f.name}</span></div>
+              <div style={{flex:1,minWidth:0}}>
+                <span style={{fontFamily:"var(--mono)",fontSize:10.5,fontWeight:700,color:col}}>{f.status==="ok"||f.status==="na"?f.label:"Insufficient data"}</span>
+              </div>
+              <span style={{fontSize:10,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+            </div>
+            {open && (
+              <div style={{padding:"0 0 12px"}}>
+                <div style={{fontSize:9,color:"var(--t3)",marginBottom:8,fontStyle:"italic"}}>{f.question}</div>
+                {f.checks && (
+                  <div style={{background:"var(--card2)",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
+                    {f.checks.map((c,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:6,padding:"2px 0"}}>
+                        <span style={{fontSize:10}}>{c.met===true?"✅":c.met===false?"❌":"➖"}</span>
+                        <span style={{flex:1,fontSize:10,color:c.met===true?"var(--t1)":"var(--t3)"}}>{c.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {f.inputs_used && f.inputs_used.length>0 && (
+                  <div style={{background:"var(--card2)",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
+                    {f.inputs_used.map((inp,i)=>(
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",fontSize:10}}>
+                        <span style={{color:"var(--t2)"}}>{inp.label}{inp.period?` · ${inp.period}`:""}</span>
+                        <span style={{fontFamily:"var(--mono)",fontWeight:700,color:"var(--t1)"}}>{inp.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {f.applicability && <div style={{fontSize:10,color:"var(--t2)",lineHeight:1.5,marginBottom:6}}>{f.applicability}</div>}
+                {(f.caveats||[]).map((cv,i)=>(
+                  <div key={i} style={{color:"var(--amber)",fontSize:9.5,lineHeight:1.5,marginTop:3}}>{cv}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
   const [tf,setTf] = useState("3M");
   const [d, setD] = useState(null);
   const [dLoading, setDLoading] = useState(true);
   const [verdict, setVerdict] = useState(null);
   const [vLoading, setVLoading] = useState(true);
+  const [fw, setFw] = useState(null);
   const tfs = ["1W","1M","3M","6M","1Y"];
 
   useEffect(() => {
@@ -637,6 +706,9 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
     getStockVerdict(ticker)
       .then(v => { setVerdict(v); setVLoading(false); })
       .catch(() => setVLoading(false));
+    // Frameworks (analysis lenses — independent of the recommendation)
+    setFw(null);
+    getFrameworksFor(ticker).then(setFw).catch(()=>{});
   }, [ticker]);
 
   const c = tc(trust);
@@ -858,6 +930,9 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
               ))}
             </div>
           </div>}
+
+          {/* Frameworks (analysis lenses — never change the recommendation) */}
+          <FrameworksSection fw={fw}/>
 
           {/* News */}
           {d && d.news && d.news.length > 0 && (
@@ -3044,19 +3119,74 @@ function UnwindBanner({u}){
 }
 
 // ── STRATEGY SCREEN ──────────────────────────────────
+// ── STRATEGY → FRAMEWORKS sub-tab ────────────────────
+function FrameworksTab({onDetail}){
+  const [data,setData] = useState(null);
+  const [fwSel,setFwSel] = useState("garp");
+  const [region,setRegion] = useState("All");
+  useEffect(()=>{ getFrameworks().then(setData).catch(()=>{}); },[]);
+  const FWS = [{k:"garp",label:"GARP"},{k:"f_score",label:"F-Score"},{k:"rule_of_40",label:"Rule of 40"},{k:"altman_distress",label:"Altman Z"}];
+  const REGIONS = ["All","US","EU","India"];
+  const flagOf = r => r==="US"?"🇺🇸":r==="EU"?"🇪🇺":r==="IN"?"🇮🇳":"";
+  const list = (data && data[fwSel]) || [];
+  const filtered = region==="All" ? list : list.filter(x=> region==="India"?x.region==="IN":x.region===region);
+  const pill = a => ({padding:"3px 9px",borderRadius:14,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:9,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,borderColor:a?"var(--indigo)":"var(--t4)",background:a?"linear-gradient(135deg,var(--indigo),var(--sky))":"var(--white)",color:a?"#fff":"var(--t3)"});
+  const isDistress = fwSel==="altman_distress";
+  const valColor = x => ["STRONG","SAFE","PASSES"].includes(x.verdict)?"var(--emerald)":["OK","SOLID"].includes(x.verdict)?"var(--indigo)":["DISTRESS","EXPENSIVE","WEAK","BELOW"].includes(x.verdict)?"var(--rose)":"var(--amber)";
+  const emptyMsg = !data ? "Computing frameworks… (statement data — first load can take a minute)"
+    : isDistress ? "✅ No stocks currently flag balance-sheet distress."
+    : fwSel==="rule_of_40" ? "No SaaS-type stocks scored in this scan."
+    : "No qualifying stocks in this view.";
+  return (
+    <div style={{padding:"10px 12px 14px"}}>
+      <div style={{fontSize:9.5,color:"var(--t2)",lineHeight:1.5,background:"var(--card2)",borderRadius:8,padding:"8px 10px",marginBottom:10}}>
+        Frameworks are analysis lenses, not recommendations. A stock can fail a framework and still be a reasonable holding.
+      </div>
+      <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto",scrollbarWidth:"none"}}>
+        {FWS.map(f=><button key={f.k} onClick={()=>setFwSel(f.k)} style={pill(fwSel===f.k)}>{f.label}{data&&data.counts?` (${data.counts[f.k]||0})`:""}</button>)}
+      </div>
+      <div style={{display:"flex",gap:5,marginBottom:10,overflowX:"auto",scrollbarWidth:"none"}}>
+        {REGIONS.map(r=><button key={r} onClick={()=>setRegion(r)} style={pill(region===r)}>{r}</button>)}
+      </div>
+      {isDistress && <div style={{fontSize:9,color:"var(--rose)",marginBottom:8,lineHeight:1.5}}>⚠️ Informational risk view — flagged for balance-sheet distress. This does NOT change the app's recommendation.</div>}
+      <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadowsm)",overflow:"hidden"}}>
+        {filtered.length===0 ? <div style={{padding:"28px 20px",textAlign:"center",color:"var(--t3)",fontSize:11,lineHeight:1.5}}>{emptyMsg}</div>
+        : filtered.map((x,i)=>(
+          <div key={x.ticker} onClick={()=>onDetail&&onDetail({ticker:x.ticker,name:x.name,flag:flagOf(x.region),price:0,trust:x.trust||50,rec:x.grade||"—"})}
+            style={{display:"grid",gridTemplateColumns:"1.5fr .95fr .55fr",alignItems:"center",padding:"9px 12px",borderTop:i>0?"1px solid rgba(15,23,42,.04)":"none",cursor:"pointer",gap:6}}>
+            <div style={{minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:5}}>
+                <span style={{fontSize:11}}>{flagOf(x.region)}</span>
+                <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{x.ticker}</span>
+              </div>
+              <div style={{fontSize:8,color:"var(--t3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{x.name}</div>
+            </div>
+            <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:valColor(x)}}>{x.label}</span></div>
+            <div style={{textAlign:"right"}}><span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>T{x.trust!=null?x.trust:"—"}</span></div>
+          </div>
+        ))}
+      </div>
+      <div style={{textAlign:"center",padding:"8px 16px",fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",lineHeight:1.5}}>
+        GARP by PEG (cheapest first) · F-Score &amp; Rule of 40 by score · Altman = distress-risk list.<br/>Trust (T) shown for context only — frameworks never change any recommendation.
+      </div>
+    </div>
+  );
+}
+
 function StrategyScreen({strategyData, onDetail}) {
   const [tab,setTab] = useState(0);
   const [exp,setExp] = useState(null);
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
   const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[], unwindThemes:[]};
-  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs"];
+  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs","Frameworks"];
   const _tierOrder = {"A":0,"B":1,"C":2};
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
     (SD.dipBuys||[]).map(mapStrategy).sort((a,b)=>(_tierOrder[a.dip_tier]||1)-(_tierOrder[b.dip_tier]||1)||(b.quality_score||0)-(a.quality_score||0)),
-    []   // Analogs tab — data managed internally by AnalogsTab component
+    [],  // Analogs tab — data managed internally by AnalogsTab component
+    []   // Frameworks tab — data managed internally by FrameworksTab component
   ];
-  const items = tab===4 ? [] : lists[tab];
+  const items = (tab===4||tab===5) ? [] : lists[tab];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
   // Portfolio/watchlist ticker sets for AnalogsTab badge detection
   const portfolioTickers = new Set((SD.myStocks||[]).map(s=>s.ticker));
@@ -3124,23 +3254,26 @@ function StrategyScreen({strategyData, onDetail}) {
       <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",overflow:"hidden"}}>
         <div style={{display:"flex",borderBottom:"1px solid var(--t4)",overflowX:"auto",scrollbarWidth:"none"}}>
           {tabs.map((t,i)=>(
-            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:"0 0 auto",minWidth:i===4?"60px":"0",padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:i===4?9:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
+            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:"0 0 auto",minWidth:i>=4?"58px":"0",padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:i>=4?9:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
               {t}
-              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":lists[i].length}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":i===5?"🧮":lists[i].length}</span>
             </button>
           ))}
         </div>
         {tab===4&&(
           <AnalogsTab onDetail={onDetail} portfolioTickers={portfolioTickers} watchlistTickers={watchlistTickers}/>
         )}
+        {tab===5&&(
+          <FrameworksTab onDetail={onDetail}/>
+        )}
         {/* Tier 4b — Unwind banners at the top of the Dip Buys tab. Affected
             stocks are grouped here under one banner per theme, forced to WATCH,
             with a live stabilization tracker and per-stock reclaim levels. */}
         {tab===3&&(SD.unwindThemes||[]).map(u=><UnwindBanner key={u.theme_key} u={u}/>)}
-        {tab!==4&&tab!==3&&items.length===0&&(
+        {tab!==4&&tab!==5&&tab!==3&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
-        {tab!==4&&displayItems.map((s,i)=>{
+        {tab!==4&&tab!==5&&displayItems.map((s,i)=>{
           // ── Grade header sentinel ──────────────────────────────────────────
           if(s._isGradeHeader){
             const tier=s.tier;

@@ -125,6 +125,8 @@ export const clearAllPortfolio = () => request('/api/portfolio/all', { method: '
 
 export const getDips = () => request('/api/dips');
 export const getElite = () => request('/api/elite');
+export const getFrameworks = () => request('/api/frameworks');
+export const getFrameworksFor = (t) => request(`/api/frameworks/${encodeURIComponent(t)}`);
 export const getAnalogs = () => request('/api/analogs');
 
 // ── PRICE ALERTS ─────────────────────────────────────────────────────────────
