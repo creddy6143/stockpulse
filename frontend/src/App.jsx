@@ -3322,15 +3322,18 @@ function StrategyScreen({strategyData, onDetail}) {
 // ── ELITE / MUST-OWN SCREEN ──────────────────────────
 function EliteScreen({eliteData, onDetail}){
   const [exp,setExp] = useState(null);
-  const [openSector,setOpenSector] = useState(0);
+  const [sectF,setSectF] = useState("All");
   const sectors = (eliteData && eliteData.sectors) || [];
   const total = (eliteData && eliteData.total) || 0;
+  const allStocks = sectors.flatMap(s=>s.stocks||[]);
+  const currentStocks = sectF==="All" ? allStocks : ((sectors.find(s=>s.sector===sectF)||{}).stocks || []);
+  const pill = (active) => ({padding:"3px 9px",borderRadius:14,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:9,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,transition:"all .15s",borderColor:active?"var(--indigo)":"var(--t4)",background:active?"linear-gradient(135deg,var(--indigo),var(--sky))":"var(--white)",color:active?"#fff":"var(--t3)"});
 
   const Header = (
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
       <div>
         <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15}}>⭐ Elite · Must-Own</div>
-        <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Excellent across every dimension — by sector</div>
+        <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Excellent across every dimension</div>
       </div>
       {total>0 && <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#fffbeb",color:"var(--gold)",border:"1px solid #fde68a",padding:"3px 10px",borderRadius:10,fontWeight:700}}>{total} stocks</span>}
     </div>
@@ -3349,66 +3352,64 @@ function EliteScreen({eliteData, onDetail}){
   return (
     <div className="pad" style={{paddingTop:14}}>
       {Header}
-      {sectors.map((sec,si)=>{
-        const open = openSector===si;
-        return (
-          <div key={sec.sector} style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",marginBottom:10,overflow:"hidden"}}>
-            <div onClick={()=>setOpenSector(open?-1:si)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 14px",cursor:"pointer",background:"linear-gradient(90deg,rgba(245,158,11,.06),transparent)"}}>
-              <div>
-                <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13}}>{sec.sector}</div>
-                <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:2}}>{sec.count} must-own · avg conviction {sec.avg_conviction}</div>
-              </div>
-              <span style={{fontSize:11,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
-            </div>
-            {open && sec.stocks.map((s)=>{
-              const sopen = exp===s.ticker;
-              const cc = tc(s.trust);
-              return (
-                <div key={s.ticker} style={{borderTop:"1px solid rgba(15,23,42,.05)"}}>
-                  <div onClick={()=>setExp(sopen?null:s.ticker)} style={{display:"grid",gridTemplateColumns:"1.7fr .6fr .7fr .35fr",alignItems:"center",padding:"9px 14px",cursor:"pointer",gap:6}}>
-                    <div style={{minWidth:0}}>
-                      <div style={{display:"flex",alignItems:"center",gap:5}}>
-                        <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
-                        <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--gold)",background:"#fffbeb",padding:"1px 5px",borderRadius:3}}>{s.met_count}/6</span>
-                      </div>
-                      <div style={{fontSize:8,color:"var(--t3)",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
-                    </div>
-                    <div style={{textAlign:"center"}}><span title="Conviction" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--violet)"}}>{s.conviction}</span></div>
-                    <div style={{textAlign:"center"}}>{(s.upside_pct!=null&&s.upside_pct>0)?<span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--emerald)"}}>+{s.upside_pct}%</span>:<span style={{fontFamily:"var(--mono)",fontSize:9,color:cc}}>{s.trust}</span>}</div>
-                    <div style={{textAlign:"right",fontSize:11,color:"var(--t3)"}}>{sopen?"▲":"▼"}</div>
-                  </div>
-                  {sopen && (
-                    <div style={{padding:"2px 14px 14px"}}>
-                      <div style={{display:"flex",gap:10,marginBottom:9,fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",flexWrap:"wrap"}}>
-                        <span>Trust <b style={{color:cc}}>{s.trust}</b></span>
-                        <span>Conviction <b style={{color:"var(--violet)"}}>{s.conviction}</b></span>
-                        {s.analyst_target && <span>Target <b>${s.analyst_target}</b></span>}
-                        {s.price>0 && <span>Now ${s.price}</span>}
-                      </div>
-                      <div style={{background:"var(--card2)",borderRadius:9,padding:"9px 11px",marginBottom:10}}>
-                        {(s.criteria||[]).map((c,ci)=>(
-                          <div key={ci} style={{display:"flex",alignItems:"flex-start",gap:7,padding:"3px 0"}}>
-                            <span style={{fontSize:11}}>{c.met?"✅":"⬜"}</span>
-                            <div style={{flex:1,minWidth:0}}>
-                              <span style={{fontSize:11,fontWeight:600,color:c.met?"var(--t1)":"var(--t3)"}}>{c.label}</span>
-                              <div style={{fontSize:9,color:"var(--t3)",lineHeight:1.4}}>{c.detail}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <button onClick={()=>{if(onDetail)onDetail({ticker:s.ticker,name:s.name,flag:"🇺🇸",price:s.price,trust:s.trust,rec:"BUY"});}}
-                        style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:"linear-gradient(135deg,var(--violet),var(--indigo))",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                        Full Analysis →
-                      </button>
-                    </div>
-                  )}
+      {/* Sector filter pills — side by side, horizontal scroll (like Smart Picks) */}
+      <div style={{display:"flex",gap:5,marginBottom:10,overflowX:"auto",scrollbarWidth:"none",paddingBottom:2}}>
+        <button onClick={()=>{setSectF("All");setExp(null);}} style={pill(sectF==="All")}>All ({total})</button>
+        {sectors.map(sec=>(
+          <button key={sec.sector} onClick={()=>{setSectF(sec.sector);setExp(null);}} style={pill(sectF===sec.sector)}>
+            {SECTOR_SHORT[sec.sector]||sec.sector} ({sec.count})
+          </button>
+        ))}
+      </div>
+      {/* Stocks for the selected sector — clean list, tap to expand checklist */}
+      <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",overflow:"hidden"}}>
+        {currentStocks.map((s,i)=>{
+          const sopen = exp===s.ticker;
+          const cc = tc(s.trust);
+          return (
+            <div key={s.ticker} style={{borderTop:i>0?"1px solid rgba(15,23,42,.05)":"none"}}>
+              <div onClick={()=>setExp(sopen?null:s.ticker)} style={{display:"grid",gridTemplateColumns:"1.7fr .48fr .52fr .6fr .3fr",alignItems:"center",padding:"9px 14px",cursor:"pointer",gap:6}}>
+                <div style={{minWidth:0}}>
+                  <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
+                  <div style={{fontSize:8,color:"var(--t3)",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
                 </div>
-              );
-            })}
-          </div>
-        );
-      })}
-      <div style={{textAlign:"center",padding:"6px 20px 12px",fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",lineHeight:1.5}}>
+                <div style={{textAlign:"center"}}><span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--gold)",background:"#fffbeb",padding:"1px 5px",borderRadius:3}}>{s.met_count}/6</span></div>
+                <div style={{textAlign:"center"}}><span title="Conviction" style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--violet)"}}>{s.conviction}</span></div>
+                <div style={{textAlign:"center"}}>{(s.upside_pct!=null&&s.upside_pct>0)?<span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--emerald)"}}>+{s.upside_pct}%</span>:<span style={{fontFamily:"var(--mono)",fontSize:9,color:cc}}>{s.trust}</span>}</div>
+                <div style={{textAlign:"right",fontSize:11,color:"var(--t3)"}}>{sopen?"▲":"▼"}</div>
+              </div>
+              {sopen && (
+                <div style={{padding:"2px 14px 14px"}}>
+                  <div style={{display:"flex",gap:10,marginBottom:9,fontFamily:"var(--mono)",fontSize:9,color:"var(--t2)",flexWrap:"wrap"}}>
+                    <span>Trust <b style={{color:cc}}>{s.trust}</b></span>
+                    <span>Conviction <b style={{color:"var(--violet)"}}>{s.conviction}</b></span>
+                    {s.analyst_target && <span>Target <b>${s.analyst_target}</b></span>}
+                    {s.price>0 && <span>Now ${s.price}</span>}
+                    <span style={{color:"var(--t3)"}}>· {SECTOR_SHORT[s.sector]||s.sector}</span>
+                  </div>
+                  <div style={{background:"var(--card2)",borderRadius:9,padding:"9px 11px",marginBottom:10}}>
+                    {(s.criteria||[]).map((c,ci)=>(
+                      <div key={ci} style={{display:"flex",alignItems:"flex-start",gap:7,padding:"3px 0"}}>
+                        <span style={{fontSize:11}}>{c.met?"✅":"⬜"}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <span style={{fontSize:11,fontWeight:600,color:c.met?"var(--t1)":"var(--t3)"}}>{c.label}</span>
+                          <div style={{fontSize:9,color:"var(--t3)",lineHeight:1.4}}>{c.detail}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={()=>{if(onDetail)onDetail({ticker:s.ticker,name:s.name,flag:"🇺🇸",price:s.price,trust:s.trust,rec:"BUY"});}}
+                    style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:"linear-gradient(135deg,var(--violet),var(--indigo))",color:"#fff",fontFamily:"var(--dm)",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                    Full Analysis →
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {currentStocks.length===0 && <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No must-own stocks in this sector.</div>}
+      </div>
+      <div style={{textAlign:"center",padding:"8px 20px 12px",fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",lineHeight:1.5}}>
         Must-own = strong across fundamentals, smart money, balance sheet, sentiment &amp; growth.<br/>
         Institutional signal is directional (free-tier data). Research, not advice.
       </div>
