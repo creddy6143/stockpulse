@@ -109,6 +109,39 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
+def _yahoo_proxy_diag() -> dict:
+    """One-shot diagnostic: pinpoint where the backend→worker→Yahoo read breaks."""
+    out = {}
+    try:
+        import requests as _rq
+        from data import fetcher as _f
+        out["cf_url_in_fetcher"] = bool(_f._CF_WORKER_URL)
+        out["cf_url_tail"] = _f._CF_WORKER_URL[-24:] if _f._CF_WORKER_URL else ""
+        # 1. Can the backend reach the worker's /yahoo-qs path directly?
+        if _f._CF_WORKER_URL:
+            try:
+                r = _rq.get(f"{_f._CF_WORKER_URL}/yahoo-qs/PANW?modules=financialData,defaultKeyStatistics",
+                            timeout=12)
+                out["direct_status"] = r.status_code
+                j = r.json()
+                fd = ((j.get("quoteSummary", {}).get("result") or [{}])[0]).get("financialData", {})
+                out["direct_targetMeanPrice"] = (fd.get("targetMeanPrice") or {}).get("raw")
+            except Exception as e:
+                out["direct_error"] = str(e)[:120]
+        # 2. What does _yf_quotesummary('PANW') actually return (fresh)?
+        try:
+            from data.cache import cache_del
+            cache_del("yf_qs:PANW")
+        except Exception:
+            pass
+        qs = _f._yf_quotesummary("PANW")
+        out["qs_keys"] = len(qs or {})
+        out["qs_targetMeanPrice"] = (qs or {}).get("targetMeanPrice")
+    except Exception as e:
+        out["error"] = str(e)[:160]
+    return out
+
+
 @app.get("/api/dip-status")
 def dip_status():
     """No-auth diagnostic endpoint — shows dip scan state for debugging prod."""
@@ -141,8 +174,9 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "yahoo-proxy-v2",   # bump to confirm Railway is deploying latest commits
+        "build": "yahoo-proxy-v3",   # bump to confirm Railway is deploying latest commits
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
+        "yahoo_diag": _yahoo_proxy_diag(),
         "dip_candidates_in_cache": len(candidates),
         "scan_age_seconds": age_s,
         "picks_in_db": picks_count,
