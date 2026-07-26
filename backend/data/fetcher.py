@@ -1788,6 +1788,22 @@ def get_fundamentals(ticker: str) -> dict:
             if not result.get("data_source") and fmp.get("data_source"):
                 result["data_source"] = fmp["data_source"]
 
+    # ── Moving-average fallback ────────────────────────────────────────────────
+    # ma_200d / ma_50d come only from yfinance's throttled `info` dict, with no
+    # backup — so they are frequently None (e.g. PANW), silently costing the
+    # momentum pillar its +7 "above 200-day MA" and forcing dip filters F7/F8 to
+    # UNKNOWN. Backfill from daily-close history (cached) so a moving average that
+    # clearly exists is actually used. Only fetched when a value is missing.
+    if result.get("ma_200d") is None or result.get("ma_50d") is None:
+        try:
+            _h = get_stock_history(ticker)
+            if result.get("ma_200d") is None and _h.get("ma_200d"):
+                result["ma_200d"] = _h["ma_200d"]
+            if result.get("ma_50d") is None and _h.get("ma_50d"):
+                result["ma_50d"] = _h["ma_50d"]
+        except Exception:
+            pass
+
     # Use a short retry TTL (5 min) when we got no usable data — prevents an empty
     # fetch from locking out the stock for the full 24-hour fundamentals cache window.
     #
@@ -2369,10 +2385,19 @@ def get_stock_history(ticker: str) -> dict:
         if prices and closes:
             prices[-1]["price"] = round(closes[-1], 2)
 
+        # Moving averages computed from the RAW daily closes. These are a
+        # reliable fallback for ma_200d / ma_50d, which otherwise come only from
+        # yfinance's heavily-throttled `info` dict (fetcher.py ~335) with no
+        # backup — so momentum silently lost its +7 "above 200-day MA" component
+        # (and the dip filter's F7/F8 went UNKNOWN) whenever `info` was blocked.
+        ma_200d = round(sum(closes[-200:]) / len(closes[-200:]), 2) if len(closes) >= 100 else None
+        ma_50d  = round(sum(closes[-50:])  / len(closes[-50:]),  2) if len(closes) >= 30  else None
+
         result = {
             "3D": pct(3),   # 3-trading-day return — detects post-peak selloffs
             "1W": pct(5), "1M": pct(22), "3M": pct(65),
             "6M": pct(130), "1Y": pct(min(252, len(closes) - 1)),
+            "ma_200d": ma_200d, "ma_50d": ma_50d,
             "prices": prices,
         }
         cache_set(key, result)
