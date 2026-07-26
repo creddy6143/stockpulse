@@ -26,17 +26,19 @@ def compute_garp(ctx: dict) -> dict:
     eps_vals = [(i, e) for i, e in enumerate(eps_series) if e is not None]
     eps_latest = eps_vals[-1][1] if eps_vals else None
 
-    # Growth rate. Prefer a forward EPS growth estimate ONLY when it's on a
-    # consistent scale with reported EPS (forward_eps can be split-adjusted while
-    # statement shares are raw — a mismatch that produces nonsense). Otherwise use
-    # the self-consistent trailing EPS CAGR from the statements.
+    # Growth rate. Prefer the analyst FORWARD EPS growth (forward vs trailing EPS,
+    # both from Yahoo so they're on a consistent scale) — this is the growth GARP
+    # is really about, and it captures companies whose trailing EPS is flat on the
+    # endpoints but are expected to grow (e.g. LMT: trailing ~flat, forward +20%).
+    # Fall back to the self-consistent trailing EPS CAGR from the statements.
     growth = None
     growth_src = None
     fwd_eps = fund.get("forward_eps")
-    if fwd_eps and eps_latest and eps_latest > 0 and 0.2 <= (float(fwd_eps) / eps_latest) <= 5.0:
-        g = (float(fwd_eps) / eps_latest - 1) * 100
+    trail_eps = fund.get("trailing_eps")
+    if fwd_eps and trail_eps and trail_eps > 0:
+        g = (float(fwd_eps) / float(trail_eps) - 1) * 100
         if g > 0:
-            growth, growth_src = g, "Forward EPS growth"
+            growth, growth_src = g, "Forward EPS growth (analyst est.)"
     if growth is None and len(eps_vals) >= 2 and eps_vals[0][1] and eps_vals[0][1] > 0 \
             and eps_latest and eps_latest > 0:
         e_old = eps_vals[0][1]

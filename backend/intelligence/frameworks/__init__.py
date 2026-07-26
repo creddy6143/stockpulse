@@ -88,9 +88,26 @@ def compute_frameworks(ticker: str) -> dict:
     """Compute all four frameworks for one ticker. Never raises."""
     from data.fetcher import get_financial_statements, get_fundamentals, get_stock_price
 
-    fund = get_fundamentals(ticker) or {}
+    fund = dict(get_fundamentals(ticker) or {})
     stmts = get_financial_statements(ticker) or {"periods": []}
     price = get_stock_price(ticker) or {}
+
+    # Enrich with forward metrics from quoteSummary (worker-routed → reaches
+    # Railway, unlike the yfinance-library path). These feed GARP's forward growth.
+    try:
+        from data.fetcher import _yf_quotesummary
+        qs = _yf_quotesummary(ticker) or {}
+        for k_qs, k_fund in (("forwardEps", "forward_eps"),
+                             ("forwardPE", "forward_pe"),
+                             ("trailingEps", "trailing_eps")):
+            v = qs.get(k_qs)
+            if v:
+                try:
+                    fund[k_fund] = float(v)
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
     meta = classify_ticker(ticker, fund.get("sector"), price.get("name") or fund.get("name"))
 
     ctx = {"ticker": ticker, "statements": stmts, "fundamentals": fund,
