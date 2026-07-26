@@ -2448,7 +2448,24 @@ def get_financial_statements(ticker: str) -> dict:
     types = ",".join(_TS_TYPE_MAP.keys())
 
     raw = None
-    if _CF_WORKER_URL:
+    # 1. Direct crumb-authed fetch — the fundamentals-timeseries endpoint is a
+    #    DIFFERENT host (query2) than the IP-blocked quoteSummary, and may be
+    #    reachable from this host directly (the v8 chart endpoint is). Try first.
+    try:
+        session, crumb = _get_yf_auth()
+        base = (f"https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{ticker}"
+                f"?symbol={ticker}&type={types}&period1=1500000000&period2=1900000000")
+        url = f"{base}&crumb={crumb}" if crumb else base
+        rr = _yf_rest_get(url, session=session, timeout=12)
+        if rr is not None and rr.status_code == 200:
+            j = rr.json()
+            if (j.get("timeseries", {}) or {}).get("result"):
+                raw = j
+    except Exception:
+        raw = None
+
+    # 2. Fall back to the Cloudflare worker (needed if the direct call is blocked).
+    if not raw and _CF_WORKER_URL:
         try:
             r = requests.get(
                 f"{_CF_WORKER_URL}/yahoo-ts/{ticker}?type={types}",

@@ -111,6 +111,18 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
+def _frameworks_probe() -> dict:
+    """One-shot: does multi-year statement data reach this host (direct vs worker)?"""
+    try:
+        from data.fetcher import get_financial_statements
+        s = get_financial_statements("NVDA")
+        return {"source": s.get("source"), "periods": len(s.get("periods") or []),
+                "has_total_assets": bool([v for v in (s.get("total_assets") or []) if v]),
+                "has_ocf": bool([v for v in (s.get("operating_cash_flow") or []) if v])}
+    except Exception as e:
+        return {"error": str(e)[:120]}
+
+
 @app.get("/api/dip-status")
 def dip_status():
     """No-auth diagnostic endpoint — shows dip scan state for debugging prod."""
@@ -143,12 +155,11 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "elite-v2",   # Elite/Must-Own sector-grouped shortlist
+        "build": "frameworks-v1",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
-        "elite_diag": _elite_diag,
-        "elite_scan_age": round(_time.monotonic() - _elite_scan_ts, 1) if _elite_scan_ts else None,
+        "frameworks_diag": _frameworks_probe(),
         "dip_candidates_in_cache": len(candidates),
         "scan_age_seconds": age_s,
         "picks_in_db": picks_count,
