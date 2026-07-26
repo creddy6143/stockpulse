@@ -446,11 +446,14 @@ const mapPick = pick => {
       ? ["Price moved since last scan — analysis text withheld to avoid contradictions. Scores and recommendation are current."]
       : ["Strong fundamentals across all three pillars."],
     potential: pick.is_dip
-      // Part 2: show the QUALIFYING multi-day drop next to "dip", never today's %.
-      // (A green +1% today beside the word "dip" is a contradiction.)
+      // Part 2: the "dip" figure must be the DROP, never a positive number.
+      // A post-peak dip can be UP on the week (surged, then pulled back) — so we
+      // never fall back to a raw week_change; we use the actual pullback (the
+      // more-negative of today vs week). A green % beside "dip" is a contradiction.
       ? (pick.dip_pct != null
           ? `${pick.dip_pct.toFixed(1)}% / ${(pick.dip_window||"5D").toLowerCase()}`
-          : `${(pick.week_change||0).toFixed(1)}% wk`)
+          : (()=>{ const drop=Math.min(pick.change_pct||0, pick.week_change||0);
+                   return drop < 0 ? `${drop.toFixed(1)}% pullback` : "recent pullback"; })())
       : cvScore >= 80 ? "+50-80%" : cvScore >= 70 ? "+30-50%" : `+${Math.round((total-60)*1.2+15)}%`,
     entry: price > 0 ? `${curr}${(price*0.97).toFixed(0)}-${curr}${(price*1.03).toFixed(0)}` : "—",
     risk: cvScore >= 80 ? "LOW-MED" : total >= 80 ? "LOW-MED" : "MEDIUM",
@@ -2265,7 +2268,15 @@ function PickRow({s, expKey, exp, setExp, onSetAlert, onRemove, trackedSet}) {
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <div style={{width:5,height:5,borderRadius:"50%",background:isDip?"var(--emerald)":recColor,flexShrink:0}}/>
             <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{s.ticker}</span>
-            {isDip&&(()=>{const cap=s.safety_capped||s.unwind;const w=s.dip_pct!=null?`${s.dip_pct.toFixed(1)}%/${(s.dip_window||"5D").toLowerCase()}`:(s.week_change!=null?`${s.week_change.toFixed(1)}%wk`:"");return(
+            {isDip&&(()=>{const cap=s.safety_capped||s.unwind;
+              // Never show a positive % next to "DIP". Prefer the qualifying
+              // multi-day drop; otherwise use the actual pullback (more-negative
+              // of today vs week) so a post-peak dip that's up on the week still
+              // reads as a drop, not "DIP +17%wk".
+              let w;
+              if(s.dip_pct!=null) w=`${s.dip_pct.toFixed(1)}%/${(s.dip_window||"5D").toLowerCase()}`;
+              else {const drop=Math.min(s.change_pct||0, s.week_change||0); w=drop<0?`${drop.toFixed(1)}%`:"";}
+              return(
               <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:cap?"var(--rose)":"var(--emerald)",background:cap?"var(--rose2)":"var(--emerald2)",padding:"1px 5px",borderRadius:3,whiteSpace:"nowrap"}}>{cap?"⚠ ":"DIP "}{w}</span>);})()}
             {trackedSet.has(s.ticker)&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--emerald)",background:"var(--emerald2)",padding:"1px 4px",borderRadius:3}}>✓</span>}
             {hasCv&&s.mixedSignals&&<span style={{fontFamily:"var(--mono)",fontSize:7,color:"var(--amber)",background:"var(--amber2)",padding:"1px 5px",borderRadius:3}}>~</span>}
