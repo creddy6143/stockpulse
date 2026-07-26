@@ -2408,6 +2408,98 @@ def get_analyst_data(ticker: str) -> dict:
 
 # ── STOCK HISTORY ─────────────────────────────────────────────────────────────
 
+_TS_TYPE_MAP = {
+    "annualTotalAssets":                          "total_assets",
+    "annualTotalLiabilitiesNetMinorityInterest":  "total_liabilities",
+    "annualRetainedEarnings":                     "retained_earnings",
+    "annualEBIT":                                 "ebit",
+    "annualOperatingCashFlow":                    "operating_cash_flow",
+    "annualNetIncome":                            "net_income",
+    "annualTotalRevenue":                         "revenue",
+    "annualGrossProfit":                          "gross_profit",
+    "annualCurrentAssets":                        "current_assets",
+    "annualCurrentLiabilities":                   "current_liabilities",
+    "annualLongTermDebt":                         "long_term_debt",
+    "annualOrdinarySharesNumber":                 "shares_outstanding",
+}
+
+
+def get_financial_statements(ticker: str) -> dict:
+    """Multi-year financial statements (balance sheet + income + cash flow) from
+    Yahoo's fundamentals-timeseries endpoint, routed through the CF worker (that
+    endpoint is IP-blocked from Railway, like quoteSummary).
+
+    Returns aligned annual series (oldest → newest)::
+
+        {"periods": ["2022-01-30", ...],
+         "total_assets": [..], "total_liabilities": [..], "ebit": [..], ...,
+         "source": "yahoo_ts"}
+
+    Missing metric → key present with None entries (never fabricated). Returns
+    {"periods": [], "source": None} when unavailable so callers degrade honestly.
+    Cached 24h — statement data moves slowly.
+    """
+    key = f"stmts:{ticker}"
+    cached = cache_get(key, TTL_FUNDAMENTALS)
+    if cached is not None:
+        return cached
+
+    empty = {"periods": [], "source": None}
+    types = ",".join(_TS_TYPE_MAP.keys())
+
+    raw = None
+    if _CF_WORKER_URL:
+        try:
+            r = requests.get(
+                f"{_CF_WORKER_URL}/yahoo-ts/{ticker}?type={types}",
+                headers=_HEADERS, timeout=15,
+            )
+            if r.status_code == 200:
+                raw = r.json()
+        except Exception:
+            raw = None
+
+    if not raw:
+        cache_set(key, empty, ttl=6 * 3600)   # short retry TTL when unavailable
+        return empty
+
+    try:
+        results = (raw.get("timeseries", {}) or {}).get("result") or []
+        # metric field → {asOfDate: value}
+        by_field: dict = {}
+        for res in results:
+            tname = ((res.get("meta", {}) or {}).get("type") or [None])[0]
+            field = _TS_TYPE_MAP.get(tname)
+            if not field:
+                continue
+            series = res.get(tname) or []
+            fmap = by_field.setdefault(field, {})
+            for item in series:
+                if not item:
+                    continue
+                d = item.get("asOfDate")
+                rv = (item.get("reportedValue") or {}).get("raw")
+                if d and rv is not None:
+                    fmap[d] = float(rv)
+
+        if not by_field:
+            cache_set(key, empty, ttl=6 * 3600)
+            return empty
+
+        # Align all metrics on the union of report dates, oldest → newest.
+        all_dates = sorted({d for fmap in by_field.values() for d in fmap})
+        out = {"periods": all_dates, "source": "yahoo_ts"}
+        for field in _TS_TYPE_MAP.values():
+            fmap = by_field.get(field, {})
+            out[field] = [fmap.get(d) for d in all_dates]
+
+        cache_set(key, out, ttl=TTL_FUNDAMENTALS)
+        return out
+    except Exception:
+        cache_set(key, empty, ttl=6 * 3600)
+        return empty
+
+
 def get_stock_history(ticker: str) -> dict:
     """Performance % for 1W/1M/3M/6M/1Y + full price series for charting."""
     key = f"history:{ticker}"

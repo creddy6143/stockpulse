@@ -33,6 +33,11 @@ export default {
       return handleYahooQuoteSummary(url);
     }
 
+    // ── Yahoo fundamentals-timeseries proxy (multi-year statements) ───────────
+    if (url.pathname.startsWith("/yahoo-ts/")) {
+      return handleYahooTimeseries(url);
+    }
+
     // ── Screener.in passthrough (original behavior — unchanged) ──────────────
     const target = "https://www.screener.in" + url.pathname + url.search;
     const response = await fetch(target, {
@@ -108,6 +113,55 @@ async function handleYahooQuoteSummary(url) {
         "content-type": "application/json",
         "access-control-allow-origin": "*",
       },
+    });
+  } catch (err) {
+    return json({ error: String(err) }, 502);
+  }
+}
+
+/**
+ * Yahoo fundamentals-timeseries — multi-year financial statements (balance sheet,
+ * income, cash flow). quoteSummary's statement modules were gutted by Yahoo; this
+ * endpoint is where the real line items live. Crumb-authed, same as quoteSummary.
+ */
+async function handleYahooTimeseries(url) {
+  const parts = url.pathname.split("/").filter(Boolean); // ["yahoo-ts", "<TICKER>"]
+  const ticker = parts[1];
+  const type = url.searchParams.get("type") || "";
+  const period1 = url.searchParams.get("period1") || "1500000000";
+  const period2 =
+    url.searchParams.get("period2") || String(Math.floor(Date.now() / 1000) + 86400);
+
+  if (!ticker || !type) return json({ error: "missing ticker or type" }, 400);
+
+  try {
+    const cookieResp = await fetch("https://fc.yahoo.com/", { headers: { "User-Agent": UA } });
+    let cookie = "";
+    if (typeof cookieResp.headers.getSetCookie === "function") {
+      cookie = cookieResp.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+    }
+    if (!cookie) cookie = (cookieResp.headers.get("set-cookie") || "").split(";")[0];
+
+    const crumbResp = await fetch(
+      "https://query1.finance.yahoo.com/v1/test/getcrumb",
+      { headers: { "User-Agent": UA, Cookie: cookie } }
+    );
+    const crumb = (await crumbResp.text()).trim();
+
+    const tsUrl =
+      `https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${encodeURIComponent(ticker)}` +
+      `?symbol=${encodeURIComponent(ticker)}&type=${encodeURIComponent(type)}` +
+      `&period1=${encodeURIComponent(period1)}&period2=${encodeURIComponent(period2)}` +
+      `&crumb=${encodeURIComponent(crumb)}`;
+    const tsResp = await fetch(tsUrl, {
+      headers: { "User-Agent": UA, Cookie: cookie },
+      cf: { cacheTtl: 86400, cacheEverything: true },   // statements move slowly
+    });
+
+    const body = await tsResp.text();
+    return new Response(body, {
+      status: tsResp.status,
+      headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
     });
   } catch (err) {
     return json({ error: String(err) }, 502);

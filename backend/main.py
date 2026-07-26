@@ -1971,6 +1971,83 @@ def get_elite(user_id: str = Depends(get_current_user)):
     }
 
 
+# ── INVESTMENT FRAMEWORKS (GARP · F-Score · Rule of 40 · Altman Z) ────────────
+# Analysis LENSES only — additive, never feed the recommendation engine.
+_frameworks_scan: dict = {}
+_frameworks_ts: float  = 0.0
+_FRAMEWORKS_TTL        = 6 * 3600   # statement data is slow; refresh every 6h
+
+
+def _refresh_frameworks_scan() -> None:
+    """Compute all four frameworks across the top picks universe → ranked lists."""
+    global _frameworks_scan, _frameworks_ts
+    try:
+        from intelligence.frameworks import compute_frameworks
+
+        _pc = db.get_picks_cache()
+        _all = _json.loads(_pc["all_picks_json"]) if _pc and _pc.get("all_picks_json") else []
+        mains = [p for p in _all if not p.get("is_dip")]
+        mains.sort(key=lambda p: -(p.get("trust", {}).get("total_score") or 0))
+        universe = mains[:40]
+
+        garp, fscore, r40, distress = [], [], [], []
+        for p in universe:
+            t = p["ticker"]
+            try:
+                fw = compute_frameworks(t)
+            except Exception:
+                continue
+            trust = p.get("trust", {}) or {}
+            base = {"ticker": t, "name": p.get("name", t),
+                    "sector": fw.get("sector") or p.get("sector"),
+                    "region": _detect_market(t),
+                    "trust": trust.get("total_score"), "grade": trust.get("grade")}
+            by = {f["key"]: f for f in fw.get("frameworks", [])}
+            g = by.get("garp", {})
+            if g.get("status") == "ok":
+                garp.append({**base, "value": g["value"], "label": g["label"], "verdict": g.get("verdict")})
+            fs = by.get("f_score", {})
+            if fs.get("status") == "ok":
+                fscore.append({**base, "value": fs["value"], "label": fs["label"], "verdict": fs.get("verdict")})
+            ro = by.get("rule_of_40", {})
+            if ro.get("status") == "ok":
+                r40.append({**base, "value": ro["value"], "label": ro["label"], "verdict": ro.get("verdict")})
+            az = by.get("altman_z", {})
+            if az.get("status") == "ok" and az.get("verdict") == "DISTRESS":
+                distress.append({**base, "value": az["value"], "label": az["label"]})
+
+        garp.sort(key=lambda x: x["value"])          # PEG ascending (cheapest first)
+        fscore.sort(key=lambda x: -x["value"])       # highest F-Score first
+        r40.sort(key=lambda x: -x["value"])          # highest Rule-of-40 score first
+        distress.sort(key=lambda x: x["value"])      # lowest (riskiest) Z first
+
+        _frameworks_scan = {
+            "garp": garp, "f_score": fscore, "rule_of_40": r40, "altman_distress": distress,
+            "counts": {"garp": len(garp), "f_score": len(fscore),
+                       "rule_of_40": len(r40), "altman_distress": len(distress)},
+        }
+        _frameworks_ts = _time.monotonic()
+        print(f"[FRAMEWORKS] garp={len(garp)} fscore={len(fscore)} r40={len(r40)} "
+              f"distress={len(distress)}", flush=True)
+    except Exception as exc:
+        print(f"[FRAMEWORKS] refresh failed: {exc}", flush=True)
+
+
+@app.get("/api/frameworks")
+def frameworks_all(user_id: str = Depends(get_current_user)):
+    """Ranked framework lists for the Strategy → Frameworks tab (6h cache)."""
+    if _time.monotonic() - _frameworks_ts > _FRAMEWORKS_TTL:
+        threading.Thread(target=_refresh_frameworks_scan, daemon=True).start()
+    return {**_frameworks_scan, "ready": bool(_frameworks_scan)}
+
+
+@app.get("/api/frameworks/{ticker}")
+def frameworks_one(ticker: str, user_id: str = Depends(get_current_user)):
+    """All four frameworks for one stock (stock-detail Frameworks section)."""
+    from intelligence.frameworks import compute_frameworks
+    return compute_frameworks(ticker.upper())
+
+
 # ── ANALOGS ──────────────────────────────────────────────────────────────────
 
 _analogs_cache: dict = {}
