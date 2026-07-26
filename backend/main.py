@@ -2059,6 +2059,28 @@ def frameworks_one(ticker: str, user_id: str = Depends(get_current_user)):
     return compute_frameworks(ticker.upper())
 
 
+@app.get("/api/frameworks-verify")
+def frameworks_verify():
+    """No-auth Phase-D verification over the spec's test tickers (debug)."""
+    from intelligence.frameworks import compute_frameworks
+    out = {}
+    for t in ["NVDA", "SNDK", "TNXP", "LMT", "CRM", "SNOW", "SBIN.NS", "ASML.AS"]:
+        try:
+            fw = compute_frameworks(t)
+            out[t] = {"_sector": fw.get("sector")}
+            for f in fw["frameworks"]:
+                out[t][f["key"]] = {
+                    "status": f["status"], "label": f.get("label"),
+                    "verdict": f.get("verdict"),
+                    "inputs": len(f.get("inputs_used", [])),
+                    "checks": len(f.get("checks", []) or []),
+                    "caveats": f.get("caveats", []),
+                }
+        except Exception as exc:
+            out[t] = {"error": str(exc)[:120]}
+    return out
+
+
 # ── ANALOGS ──────────────────────────────────────────────────────────────────
 
 _analogs_cache: dict = {}
