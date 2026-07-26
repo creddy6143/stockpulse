@@ -1893,6 +1893,28 @@ def get_insider_data(ticker: str) -> dict:
         if yf_short > 0:
             result["short_interest_pct"] = yf_short
 
+    # yfinance quoteSummary fallback — reads shortPercentOfFloat (or derives it
+    # from sharesShort / floatShares) from the defaultKeyStatistics module via the
+    # crumb-authed REST path (semaphore + 429 backoff). This is far more reliable
+    # than the throttled yfinance `info` dict above, and it is the ONLY live source
+    # since Finnhub free never carried short interest and FMP deprecated its
+    # short-interest endpoints (Aug 2025). Shares the yf_qs cache with fundamentals
+    # (TTL_FUNDAMENTALS) — normally a cache hit, so no extra HTTP call. Purely
+    # additive: existing Finnhub / yfinance-lib / FMP branches are untouched.
+    if result["short_interest_pct"] == 0:
+        try:
+            qs = _yf_quotesummary(ticker)
+            spf = qs.get("shortPercentOfFloat")
+            if spf and float(spf) > 0:
+                result["short_interest_pct"] = round(float(spf) * 100, 1)
+            else:
+                ss = qs.get("sharesShort")
+                fl = qs.get("floatShares")
+                if ss and fl and float(fl) > 0:
+                    result["short_interest_pct"] = round(float(ss) / float(fl) * 100, 1)
+        except Exception:
+            pass
+
     # FMP short interest — last fallback when Finnhub + yfinance both return 0.
     # FINRA publishes bi-weekly; 48h cache matches the publication cadence.
     # Only for US stocks (FMP free tier doesn't cover .NS/.BO/.AS etc.)
