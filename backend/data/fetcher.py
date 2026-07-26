@@ -171,18 +171,62 @@ def _yf_chart(symbol: str) -> dict:
     return {}
 
 
+# Cloudflare worker proxy — same var as the Screener proxy. When set, Yahoo's
+# quoteSummary (IP-blocked from Railway) is fetched through the CF edge IP, which
+# recovers analyst price targets AND short interest on prod. Inert when unset.
+_CF_WORKER_URL = os.getenv("CF_WORKER_URL", "").rstrip("/")
+
+
+def _parse_quotesummary(qs_json: dict) -> dict | None:
+    """Merge financialData + defaultKeyStatistics raw values from a quoteSummary
+    JSON body. Returns None on error/empty so callers can fall through."""
+    qs = (qs_json or {}).get("quoteSummary", {})
+    if qs.get("error"):
+        return None
+    results = qs.get("result") or []
+    if not results:
+        return None
+    fd = results[0].get("financialData", {})
+    ks = results[0].get("defaultKeyStatistics", {})
+    merged: dict = {}
+    for d in (fd, ks):
+        for k, v in d.items():
+            merged[k] = v.get("raw") if isinstance(v, dict) else v
+    return merged
+
+
 def _yf_quotesummary(ticker: str) -> dict:
-    """Yahoo Finance v10 quoteSummary — returns rich fundamentals + analyst target price.
-    More reliable than Finnhub for international stocks (.ST, .AS, .L etc.).
-    Uses cookie+crumb auth and _yf_rest_get (semaphore + 429 backoff).
+    """Yahoo Finance v10 quoteSummary — rich fundamentals + analyst target price +
+    short interest. More reliable than Finnhub for international stocks.
+
+    Routes through the Cloudflare worker (CF_WORKER_URL) when configured, because
+    Yahoo blocks this endpoint from Railway's datacenter IP. Falls back to the
+    direct cookie+crumb path (which works off-Railway) when no proxy is set.
     """
     key = f"yf_qs:{ticker}"
     cached = cache_get(key, TTL_FUNDAMENTALS)
     if cached is not None:
         return cached
 
-    session, crumb = _get_yf_auth()
     modules = "financialData,defaultKeyStatistics"
+
+    # ── Preferred on Railway: via the CF worker (dodges the IP block) ─────────
+    if _CF_WORKER_URL:
+        try:
+            pr = requests.get(
+                f"{_CF_WORKER_URL}/yahoo-qs/{ticker}?modules={modules}",
+                headers=_HEADERS, timeout=12,
+            )
+            if pr.status_code == 200:
+                merged = _parse_quotesummary(pr.json())
+                if merged:
+                    cache_set(key, merged, ttl=TTL_FUNDAMENTALS)
+                    return merged
+        except Exception:
+            pass  # fall through to the direct path
+
+    # ── Direct path (works off-Railway; blocked on Railway's datacenter IP) ──
+    session, crumb = _get_yf_auth()
     base = (
         f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
         f"?modules={modules}&corsDomain=finance.yahoo.com"
@@ -195,17 +239,8 @@ def _yf_quotesummary(ticker: str) -> dict:
             r = _yf_rest_get(url, session=session, timeout=10)
             if r is None:
                 continue
-            qs = r.json().get("quoteSummary", {})
-            if qs.get("error"):
-                break
-            results = qs.get("result") or []
-            if results:
-                fd = results[0].get("financialData", {})
-                ks = results[0].get("defaultKeyStatistics", {})
-                merged = {}
-                for d in (fd, ks):
-                    for k, v in d.items():
-                        merged[k] = v.get("raw") if isinstance(v, dict) else v
+            merged = _parse_quotesummary(r.json())
+            if merged is not None:
                 cache_set(key, merged, ttl=TTL_FUNDAMENTALS)
                 return merged
         except Exception:
