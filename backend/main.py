@@ -127,6 +127,8 @@ def _frameworks_probe() -> dict:
 @app.get("/api/dip-status")
 def dip_status():
     """No-auth diagnostic endpoint — shows dip scan state for debugging prod."""
+    if _time.monotonic() - _shock_scan_ts > _SHOCK_SCAN_TTL:
+        threading.Thread(target=_refresh_shock_scan, daemon=True).start()
     cache = db.get_picks_cache()
     picks_count = 0
     dip_picks_count = 0
@@ -156,7 +158,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "shock-cov-v1",   # Investment frameworks system
+        "build": "shock-decoupled-v1",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -1085,31 +1087,52 @@ def _refresh_dip_scan() -> None:
             _dip_unwind_result = []
             print(f"[UNWIND] detection skipped: {_exc}", flush=True)
 
-        # ── Same-day sector shock (additive; separate from the unwind above) ───
-        # 3+ theme members down >5% TODAY (live prices) → surfaced as its own
-        # banner. Independent of the multi-day unwind; suppresses nothing.
-        try:
-            from intelligence.unwind_detector import detect_sector_shocks, _load_membership
-            _unwind_keys = {u["theme_key"] for u in _dip_unwind_result}
-            _shock_td = _enrich_shock_ticker_data(_ticker_data, _load_membership())
-            _shocks = detect_sector_shocks(_shock_td, exclude_themes=_unwind_keys)
-            _dip_shocks_result = _shocks
-            if _shocks:
-                print(f"[SHOCK] {len(_shocks)} same-day sector shock(s): "
-                      f"{[s['theme_key'] for s in _shocks]}", flush=True)
-        except Exception as _exc:
-            _dip_shocks_result = []
-            print(f"[SHOCK] detection skipped: {_exc}", flush=True)
+        # Same-day sector shocks run in their OWN background scan (_refresh_shock_scan,
+        # 3-min TTL) so the roster fetches never slow this dip scan.
 
-        global _dip_unwind, _dip_shocks
+        global _dip_unwind
         _dip_unwind = _dip_unwind_result
-        _dip_shocks = _dip_shocks_result
 
         _dip_scan_result = candidates
         _dip_scan_ts = _time.monotonic()
         print(f"[DIP] Cache refreshed: {len(candidates)} candidates", flush=True)
     except Exception as exc:
         print(f"[DIP] Refresh failed: {exc}", flush=True)
+
+
+_shock_scan_ts: float = 0.0
+_SHOCK_SCAN_TTL       = 180   # 3 min — decoupled so it never slows the dip scan
+
+
+def _refresh_shock_scan() -> None:
+    """Same-day sector-shock detection on its OWN cadence. Builds theme change-data
+    from the picks cache (live overlay), enriches theme rosters (winner-gated, 15-min
+    cached fetches), and detects shocks. Kept off the dip-scan critical path so Dip
+    Buys populates fast. Excludes themes already flagged by the multi-day unwind."""
+    global _dip_shocks, _shock_scan_ts
+    try:
+        from intelligence.unwind_detector import detect_sector_shocks, _load_membership
+        _pc = db.get_picks_cache()
+        _all = _json.loads(_pc["all_picks_json"]) if _pc and _pc.get("all_picks_json") else []
+        base = {}
+        for p in _all:
+            t = p.get("ticker")
+            if not t:
+                continue
+            lv = _picks_live_prices.get(t)
+            cp = lv["change_pct"] if (lv and lv.get("change_pct") is not None) else p.get("change_pct")
+            base[t] = {"change_pct": float(cp or 0),
+                       "week_change": float(p.get("week_change") or 0),
+                       "price": float((lv.get("price") if lv else None) or p.get("price") or 0)}
+        td = _enrich_shock_ticker_data(base, _load_membership())
+        _unwind_keys = {u["theme_key"] for u in _dip_unwind}
+        _dip_shocks = detect_sector_shocks(td, exclude_themes=_unwind_keys)
+        _shock_scan_ts = _time.monotonic()
+        if _dip_shocks:
+            print(f"[SHOCK] {len(_dip_shocks)} same-day shock(s): "
+                  f"{[s['theme_key'] for s in _dip_shocks]}", flush=True)
+    except Exception as exc:
+        print(f"[SHOCK] refresh failed: {exc}", flush=True)
 
 
 def _run_picks_scan_background():
@@ -1845,6 +1868,8 @@ def strategy(user_id: str = Depends(get_current_user)):
     # hot path. _refresh_dip_scan() runs in background and updates the cache.
     if _time.monotonic() - _dip_scan_ts > _DIP_SCAN_TTL:
         threading.Thread(target=_refresh_dip_scan, daemon=True).start()
+    if _time.monotonic() - _shock_scan_ts > _SHOCK_SCAN_TTL:
+        threading.Thread(target=_refresh_shock_scan, daemon=True).start()
     dip_candidates = list(_dip_scan_result)  # snapshot
 
     dip_buys = []
@@ -2012,6 +2037,8 @@ def get_dips(user_id: str = Depends(get_current_user)):
     # Serve from background cache — same as /api/strategy
     if _time.monotonic() - _dip_scan_ts > _DIP_SCAN_TTL:
         threading.Thread(target=_refresh_dip_scan, daemon=True).start()
+    if _time.monotonic() - _shock_scan_ts > _SHOCK_SCAN_TTL:
+        threading.Thread(target=_refresh_shock_scan, daemon=True).start()
     dip_candidates = list(_dip_scan_result)
 
     _PRIVATE = {"_watchlist_boost", "_pick_boost", "sector_concentrated"}
