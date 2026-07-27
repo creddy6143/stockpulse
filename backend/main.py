@@ -156,7 +156,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "frameworks-v1",   # Investment frameworks system
+        "build": "shock-cov-v1",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -962,6 +962,42 @@ def _refresh_elite_scan() -> None:
         print(f"[ELITE] refresh failed: {exc}", flush=True)
 
 
+def _enrich_shock_ticker_data(base_td: dict, membership: dict) -> dict:
+    """Give the same-day shock detector visibility into ALL members of a theme —
+    not just the top-100 picks. Winner-gated to bound fetches: fetch each theme's
+    winner (cheap), then fetch the FULL roster only for themes where a member is
+    already down >5% today. get_stock_price is 15-min cached, so repeat scans are
+    mostly cache hits. Fetched members carry live change_pct (week_change unknown → 0)."""
+    from data.fetcher import get_stock_price
+    td = dict(base_td)
+
+    def _members(theme):
+        w = theme.get("early_winner")
+        return ([w] if w else []) + list(theme.get("candidates") or [])
+
+    def _fetch(t):
+        if not t or t in td:
+            return
+        try:
+            p = get_stock_price(t)
+            if p and p.get("price"):
+                td[t] = {"change_pct": float(p.get("change_pct") or 0),
+                         "week_change": 0.0, "price": float(p.get("price") or 0)}
+        except Exception:
+            pass
+
+    # Pass 1 — theme winners (cheap gate).
+    for theme in membership.values():
+        _fetch(theme.get("early_winner"))
+    # Pass 2 — full roster only for themes already showing a >5%-down member today.
+    for theme in membership.values():
+        mem = _members(theme)
+        if any(t in td and float(td[t].get("change_pct") or 0) <= -5.0 for t in mem):
+            for t in mem:
+                _fetch(t)
+    return td
+
+
 def _refresh_dip_scan() -> None:
     """Run the 28-filter dip scan in a background thread and update cache."""
     global _dip_scan_result, _dip_scan_ts
@@ -1053,9 +1089,10 @@ def _refresh_dip_scan() -> None:
         # 3+ theme members down >5% TODAY (live prices) → surfaced as its own
         # banner. Independent of the multi-day unwind; suppresses nothing.
         try:
-            from intelligence.unwind_detector import detect_sector_shocks
+            from intelligence.unwind_detector import detect_sector_shocks, _load_membership
             _unwind_keys = {u["theme_key"] for u in _dip_unwind_result}
-            _shocks = detect_sector_shocks(_ticker_data, exclude_themes=_unwind_keys)
+            _shock_td = _enrich_shock_ticker_data(_ticker_data, _load_membership())
+            _shocks = detect_sector_shocks(_shock_td, exclude_themes=_unwind_keys)
             _dip_shocks_result = _shocks
             if _shocks:
                 print(f"[SHOCK] {len(_shocks)} same-day sector shock(s): "
