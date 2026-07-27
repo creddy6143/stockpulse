@@ -3076,6 +3076,46 @@ function UnwindStockCard({s}){
   );
 }
 
+function ShockBanner({s}){
+  const [open,setOpen]=useState(true);
+  const selloff = s.kind==="selloff";
+  const accent = selloff ? "var(--rose)" : "var(--amber)";
+  const bg = selloff ? "rgba(225,29,72,.05)" : "rgba(217,119,6,.06)";
+  const border = selloff ? "#fecdd3" : "#fcd34d";
+  return (
+    <div style={{margin:"10px 12px",borderRadius:12,overflow:"hidden",border:`1.5px solid ${border}`,background:bg}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{padding:"10px 12px",cursor:"pointer"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+          <span style={{fontSize:14}}>⚡</span>
+          <span style={{fontFamily:"var(--syne)",fontWeight:800,fontSize:13,color:accent}}>{s.name}</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t2)",background:"rgba(15,23,42,.05)",padding:"1px 6px",borderRadius:6}}>{s.affected_count} down today</span>
+          <span style={{marginLeft:"auto",fontSize:10,color:"var(--t3)"}}>{open?"▲":"▼"}</span>
+        </div>
+        <div style={{fontSize:10.5,color:"var(--t2)",lineHeight:1.5}}>{s.banner_copy}</div>
+        <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",marginTop:4}}>
+          {selloff?"Sector-wide selloff":"Sharp same-day drop"} · avg {s.today_avg}% today{s.driver?` · ${s.driver}`:""}
+        </div>
+      </div>
+      {open && (
+        <div style={{padding:"0 12px 12px",display:"flex",flexDirection:"column",gap:6}}>
+          {(s.stocks||[]).map(x=>(
+            <div key={x.ticker} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"var(--white)",borderRadius:8,padding:"7px 10px",border:"1px solid rgba(15,23,42,.06)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{x.ticker}</span>
+                <span style={{fontFamily:"var(--mono)",fontSize:7,fontWeight:700,color:"var(--amber)",background:"var(--amber2)",padding:"1px 5px",borderRadius:3}}>WATCH</span>
+              </div>
+              <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--t2)"}}>${x.price}<span style={{marginLeft:6,color:"var(--rose)",fontWeight:700}}>{x.change_pct}%</span><span style={{marginLeft:6,color:"var(--t3)",fontSize:8}}>{x.week_change>=0?"+":""}{x.week_change}% wk</span></div>
+            </div>
+          ))}
+          <div style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--t3)",lineHeight:1.5,marginTop:2}}>
+            Informational — a same-day correlated move. Doesn't change any recommendation; the −8% cap still applies to the sharpest drops.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UnwindBanner({u}){
   const [open,setOpen]=useState(true);
   const st=u.stabilization||{criteria:[],met_count:0,total:4};
@@ -3178,7 +3218,7 @@ function StrategyScreen({strategyData, onDetail}) {
   const [exp,setExp] = useState(null);
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
-  const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[], unwindThemes:[]};
+  const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[], unwindThemes:[], sectorShocks:[]};
   const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs","Frameworks"];
   const _tierOrder = {"A":0,"B":1,"C":2};
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
@@ -3270,6 +3310,7 @@ function StrategyScreen({strategyData, onDetail}) {
             stocks are grouped here under one banner per theme, forced to WATCH,
             with a live stabilization tracker and per-stock reclaim levels. */}
         {tab===3&&(SD.unwindThemes||[]).map(u=><UnwindBanner key={u.theme_key} u={u}/>)}
+        {tab===3&&(SD.sectorShocks||[]).map(s2=><ShockBanner key={s2.theme_key} s={s2}/>)}
         {tab!==4&&tab!==5&&tab!==3&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
@@ -3581,7 +3622,7 @@ export default function App() {
   const [picksLoading, setPicksLoading] = useState(false);
   const [disq, setDisq] = useState([]);
   const [accuracy, setAccuracy] = useState("—");
-  const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[],dipBuys:[],unwindThemes:[]});
+  const [strategyData, setStrategyData] = useState({myStocks:[],watchlist:[],smartPicks:[],dipBuys:[],unwindThemes:[],sectorShocks:[]});
   const [eliteData, setEliteData] = useState({sectors:[],total:0});
   const [earnings, setEarnings] = useState([]);
   const [priceAlerts, setPriceAlerts] = useState([]);
@@ -3661,6 +3702,7 @@ export default function App() {
           smartPicks: v.smart_picks || [],
           dipBuys: v.dip_buys || [],
           unwindThemes: v.unwind_themes || [],
+          sectorShocks: v.sector_shocks || [],
         });
       }).catch(()=>{});
     }, 1000);

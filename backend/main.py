@@ -178,6 +178,12 @@ def dip_status():
              "stabilization_met": (u.get("stabilization") or {}).get("met_count")}
             for u in list(_dip_unwind)
         ],
+        "sector_shocks": [
+            {"theme": s.get("theme_key"), "name": s.get("name"), "kind": s.get("kind"),
+             "affected": s.get("affected_tickers"), "today_avg": s.get("today_avg"),
+             "week_avg": s.get("week_avg")}
+            for s in list(_dip_shocks)
+        ],
         "top_15_by_week_change": top_week_changes,
     }
 
