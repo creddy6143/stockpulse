@@ -878,6 +878,7 @@ _dip_scan_result: list = []
 _dip_scan_ts: float    = 0.0
 _DIP_SCAN_TTL          = 90    # seconds
 _dip_unwind: list      = []    # correlated-selloff themes from the last scan
+_dip_shocks: list      = []    # same-day sector shocks from the last scan
 
 # ── Elite / Must-Own scan (sector-grouped high-conviction shortlist) ──────────
 _elite_scan_result: list = []   # [{sector, count, avg_conviction, stocks:[...]}]
@@ -1042,8 +1043,24 @@ def _refresh_dip_scan() -> None:
             _dip_unwind_result = []
             print(f"[UNWIND] detection skipped: {_exc}", flush=True)
 
-        global _dip_unwind
+        # ── Same-day sector shock (additive; separate from the unwind above) ───
+        # 3+ theme members down >5% TODAY (live prices) → surfaced as its own
+        # banner. Independent of the multi-day unwind; suppresses nothing.
+        try:
+            from intelligence.unwind_detector import detect_sector_shocks
+            _unwind_keys = {u["theme_key"] for u in _dip_unwind_result}
+            _shocks = detect_sector_shocks(_ticker_data, exclude_themes=_unwind_keys)
+            _dip_shocks_result = _shocks
+            if _shocks:
+                print(f"[SHOCK] {len(_shocks)} same-day sector shock(s): "
+                      f"{[s['theme_key'] for s in _shocks]}", flush=True)
+        except Exception as _exc:
+            _dip_shocks_result = []
+            print(f"[SHOCK] detection skipped: {_exc}", flush=True)
+
+        global _dip_unwind, _dip_shocks
         _dip_unwind = _dip_unwind_result
+        _dip_shocks = _dip_shocks_result
 
         _dip_scan_result = candidates
         _dip_scan_ts = _time.monotonic()
@@ -1859,6 +1876,7 @@ def strategy(user_id: str = Depends(get_current_user)):
         "dip_buys": dip_buys,
         # Tier 4b — one Unwind banner per theme in a correlated selloff.
         "unwind_themes": list(_dip_unwind),
+        "sector_shocks": list(_dip_shocks),
     }
 
 
@@ -1964,6 +1982,7 @@ def get_dips(user_id: str = Depends(get_current_user)):
         # Tier 4b — themes in a correlated selloff. Frontend renders one Unwind
         # banner per theme and forces WATCH on the affected stocks.
         "unwind_themes": list(_dip_unwind),
+        "sector_shocks": list(_dip_shocks),
     }
 
 

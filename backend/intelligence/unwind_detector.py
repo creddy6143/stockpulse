@@ -42,6 +42,11 @@ THEME_AVG_DROP   = -8.0    # theme 5-day average this bad → correlated
 MIN_THEME_SIZE   = 3       # need ≥3 members present to judge correlation at all
 GROUP_DROP_PCT   = -2.0    # members down at least this much are grouped as affected
 
+# ── Same-day sector shock (SEPARATE, additive — see detect_sector_shocks) ──────
+SHOCK_DROP_PCT    = -5.0   # a member "down badly TODAY"
+SHOCK_MIN_MEMBERS = 3      # 3+ members down >5% today → same-day sector shock
+SHOCK_WEEK_WEAK   = -3.0   # theme 5-day avg this bad → "selloff" vs "sharp drop"
+
 _DATA_DIR      = os.path.join(os.path.dirname(__file__), "..", "data")
 _STATE_FILE    = os.path.join(_DATA_DIR, "theme_unwind_state.json")
 _HISTORY_FILE  = os.path.join(_DATA_DIR, "theme_unwind_history.json")
@@ -370,6 +375,76 @@ def apply_unwind_suppression(dip_results: list[dict], unwinds: list[dict]) -> li
             f"Individual dip quality can't be assessed during a correlated selloff."
         )
     return dip_results
+
+
+# ── Same-day sector shock (additive; independent of the multi-day unwind above) ──
+def detect_sector_shocks(ticker_data: dict, membership: dict | None = None,
+                         exclude_themes: set | None = None) -> list[dict]:
+    """Detect a SAME-DAY sector shock: 3+ members of a (tightest) theme down >5%
+    TODAY. Uses live daily change (not the cached weekly data the multi-day unwind
+    relies on), so it catches a sector cratering *today* even if the week is still
+    up. Purely informational — does NOT suppress or freeze anything, and does NOT
+    touch the multi-day unwind flow.
+
+    `exclude_themes` — theme keys already flagged as a multi-day unwind, so a theme
+    shows EITHER the unwind banner OR the shock banner, never both.
+    """
+    membership = membership or _load_membership()
+    exclude = set(exclude_themes or [])
+    shocks: list[dict] = []
+    claimed: set[str] = set()
+
+    # Tightest theme first so a ticker is grouped under its most specific theme.
+    themed = sorted(membership.items(), key=lambda kv: len(_theme_members(kv[1])))
+    for key, theme in themed:
+        if key in exclude:
+            continue
+        present = [t for t in _theme_members(theme)
+                   if t in ticker_data and t not in claimed]
+        if len(present) < SHOCK_MIN_MEMBERS:
+            continue
+
+        down_today = [t for t in present
+                      if float(ticker_data[t].get("change_pct") or 0) <= SHOCK_DROP_PCT]
+        if len(down_today) < SHOCK_MIN_MEMBERS:
+            continue
+
+        # Group the coherent falling cohort (down ≥2% today); ensure ≥ the min.
+        affected = sorted(
+            [t for t in present if float(ticker_data[t].get("change_pct") or 0) <= -2.0],
+            key=lambda t: float(ticker_data[t].get("change_pct") or 0))
+        if len(affected) < SHOCK_MIN_MEMBERS:
+            affected = sorted(down_today,
+                              key=lambda t: float(ticker_data[t].get("change_pct") or 0))
+        claimed.update(affected)
+
+        today_avg = _avg([float(ticker_data[t].get("change_pct") or 0) for t in affected])
+        week_avg  = _avg([float(ticker_data[t].get("week_change") or 0) for t in present])
+        weekly_weak = week_avg <= SHOCK_WEEK_WEAK
+        kind = "selloff" if weekly_weak else "pullback"
+        name = theme.get("name", key)
+        if weekly_weak:
+            copy = (f"⚡ Sector-wide selloff today — {name}: {len(affected)} names down "
+                    f"together (avg {today_avg:.1f}% today · {week_avg:.1f}% on the week).")
+        else:
+            copy = (f"⚡ Sharp same-day drop across {name}: {len(affected)} names down "
+                    f"together (avg {today_avg:.1f}% today · theme still {week_avg:+.1f}% "
+                    f"on the week).")
+
+        stocks = [{
+            "ticker": t,
+            "price": round(float(ticker_data[t].get("price") or 0), 2),
+            "change_pct": round(float(ticker_data[t].get("change_pct") or 0), 1),
+            "week_change": round(float(ticker_data[t].get("week_change") or 0), 1),
+        } for t in affected]
+
+        shocks.append({
+            "theme_key": key, "name": name, "icon": theme.get("icon", "⚡"),
+            "kind": kind, "affected_count": len(affected), "affected_tickers": affected,
+            "today_avg": today_avg, "week_avg": week_avg,
+            "driver": theme.get("force", ""), "banner_copy": copy, "stocks": stocks,
+        })
+    return shocks
 
 
 # ── history log (Part 5) ────────────────────────────────────────────────────────
