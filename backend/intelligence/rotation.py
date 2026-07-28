@@ -216,31 +216,42 @@ def detect_rotation(history_rows: list, membership: dict) -> dict:
         return {"state": "risk_off", "red": red, "total": total,
                 "latest_date": latest}
 
-    # 2 — DERIVE correlated clusters from the log.
     themes = sorted({th for d in dates for th in by_date[d]})
     series = {th: [by_date[d].get(th, (None, None))[0] for d in dates] for th in themes}
-    clusters = _cluster(themes, series)
 
     def cluster_series(cluster):
         return [_cluster_avg(cluster, by_date[d])[0] for d in dates]
 
-    # 3 — Candidate OUT (most negative, ≥60% red) / IN (most positive, ≥60% green)
-    #      clusters on the latest session.
-    scored = []
-    for cl in clusters:
-        avg, br = _cluster_avg(cl, latest_map)
-        if avg is not None:
-            scored.append((avg, br, cl))
-    downs = [(a, b, cl) for a, b, cl in scored if a <= -MOVE_MIN and b <= BREADTH_RED]
-    ups = [(a, b, cl) for a, b, cl in scored if a >= MOVE_MIN and b >= BREADTH_GREEN]
-
-    if not downs or not ups:
+    # 2 — QUALIFYING SIDES at the theme level (this session): themes that are
+    #      clearly down (≥60% red, ≤ -0.8%) and clearly up (≥60% green, ≥ +0.8%).
+    down_themes = [th for th in latest_map
+                   if latest_map[th][0] is not None
+                   and latest_map[th][0] <= -MOVE_MIN and latest_map[th][1] <= BREADTH_RED]
+    up_themes = [th for th in latest_map
+                 if latest_map[th][0] is not None
+                 and latest_map[th][0] >= MOVE_MIN and latest_map[th][1] >= BREADTH_GREEN]
+    if not down_themes or not up_themes:
         return {"state": "none", "latest_date": latest,
-                "reason": "No divergent OUT/IN clusters that clear the breadth "
-                          "and noise thresholds this session."}
+                "reason": "No theme clears the breadth + noise thresholds on both "
+                          "the down and up side this session."}
 
-    out_cl = min(downs, key=lambda x: x[0])[2]
-    in_cl = max(ups, key=lambda x: x[0])[2]
+    # 3 — GROUP correlated themes WITHIN each qualifying side (derived from the log),
+    #      then take the strongest group as the OUT / IN side. Clustering only the
+    #      already-qualifying themes avoids single-linkage chaining across the whole
+    #      universe (which would wash out an obvious divergence).
+    def strongest_group(side_themes, most_negative):
+        best, best_avg = None, None
+        for g in _cluster(side_themes, series):
+            a, _b = _cluster_avg(g, latest_map)
+            if a is None:
+                continue
+            if best is None or (most_negative and a < best_avg) or \
+                    (not most_negative and a > best_avg):
+                best, best_avg = g, a
+        return best
+
+    out_cl = strongest_group(down_themes, True)
+    in_cl = strongest_group(up_themes, False)
     out_series = cluster_series(out_cl)
     in_series = cluster_series(in_cl)
 
