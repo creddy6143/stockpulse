@@ -129,6 +129,8 @@ def dip_status():
     """No-auth diagnostic endpoint — shows dip scan state for debugging prod."""
     if _time.monotonic() - _shock_scan_ts > _SHOCK_SCAN_TTL:
         threading.Thread(target=_refresh_shock_scan, daemon=True).start()
+    if _time.monotonic() - _rotation_scan_ts > _ROTATION_SCAN_TTL:
+        threading.Thread(target=_refresh_rotation_scan, daemon=True).start()
     cache = db.get_picks_cache()
     picks_count = 0
     dip_picks_count = 0
@@ -158,7 +160,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "shock-decoupled-v1",   # Investment frameworks system
+        "build": "pulse-rotation-v1",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -186,6 +188,20 @@ def dip_status():
              "week_avg": s.get("week_avg")}
             for s in list(_dip_shocks)
         ],
+        # Pulse — authless verification window for the Sector Rotation tab.
+        "rotation": {
+            "state": _rotation_result.get("state"),
+            "session_label": _rotation_result.get("session_label"),
+            "sessions_stored": _rotation_result.get("sessions_stored"),
+            "premarket_coverage": _rotation_result.get("premarket_coverage"),
+            "data_fallback": _rotation_result.get("data_fallback"),
+            "heatmap_themes": len(_rotation_result.get("heatmap") or []),
+            "watch_main": len(_rotation_result.get("watch_main") or []),
+            "watch_earnings": len(_rotation_result.get("watch_earnings") or []),
+            "out": (_rotation_result.get("detection") or {}).get("out", {}).get("label"),
+            "in": (_rotation_result.get("detection") or {}).get("in", {}).get("label"),
+            "day_count": (_rotation_result.get("detection") or {}).get("day_count"),
+        },
         "top_15_by_week_change": top_week_changes,
     }
 
@@ -1135,6 +1151,195 @@ def _refresh_shock_scan() -> None:
         print(f"[SHOCK] refresh failed: {exc}", flush=True)
 
 
+# ── Pulse / Sector Rotation ───────────────────────────────────────────────────
+_rotation_result: dict = {"state": "insufficient", "sessions_stored": 0,
+                          "heatmap": [], "watch_main": [], "watch_earnings": [],
+                          "ended_regimes": []}
+_rotation_scan_ts: float = 0.0
+_ROTATION_SCAN_TTL       = 300   # 5 min
+_rotation_lock           = threading.Lock()
+
+
+def _yf_price_module(ticker: str) -> dict:
+    """Yahoo quoteSummary 'price' module via the CF worker (reaches Railway):
+    marketState + pre/regular/post change (as fractions). {} on failure."""
+    import requests
+    from data.fetcher import _CF_WORKER_URL, _HEADERS
+    url = (f"{_CF_WORKER_URL}/yahoo-qs/{ticker}?modules=price" if _CF_WORKER_URL
+           else f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=price")
+    try:
+        r = requests.get(url, headers=_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return {}
+        p = r.json()["quoteSummary"]["result"][0]["price"]
+
+        def num(k):
+            v = p.get(k)
+            return v.get("raw") if isinstance(v, dict) else v
+        return {"marketState": p.get("marketState"),
+                "regular": num("regularMarketChangePercent"),
+                "pre": num("preMarketChangePercent"),
+                "post": num("postMarketChangePercent")}
+    except Exception:
+        return {}
+
+
+def _backfill_theme_history(mem: dict) -> None:
+    """Seed theme_daily_history from ~10 real regular sessions using v8 daily bars
+    (reachable directly from Railway). Runs once when the store is empty/sparse."""
+    import requests
+    from data.fetcher import _HEADERS
+    from intelligence import rotation as rot
+    tickers = sorted({t for th in mem.values() for t in rot._members(th)})
+    bars = {}   # ticker → {date: daily_pct}
+    for t in tickers:
+        try:
+            r = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{t}"
+                f"?range=1mo&interval=1d", headers=_HEADERS, timeout=10)
+            if r.status_code != 200:
+                continue
+            res = r.json()["chart"]["result"][0]
+            ts = res["timestamp"]
+            closes = res["indicators"]["quote"][0]["close"]
+            series = [(datetime.utcfromtimestamp(ts[i]).date().isoformat(), closes[i])
+                      for i in range(len(ts)) if closes[i] is not None]
+            pmap = {}
+            for i in range(1, len(series)):
+                prev = series[i - 1][1]
+                if prev:
+                    pmap[series[i][0]] = (series[i][1] - prev) / prev * 100
+            bars[t] = pmap
+        except Exception:
+            continue
+    alldates = sorted({d for pm in bars.values() for d in pm})[-10:]
+    for d in alldates:
+        tp = {t: pm[d] for t, pm in bars.items() if d in pm}
+        for row in rot.compute_session_log(tp, mem):
+            db.upsert_theme_day(row["theme"], d, "close",
+                                row["avg_pct"], row["breadth"], row["member_count"])
+    print(f"[PULSE] backfilled {len(alldates)} sessions from daily bars", flush=True)
+
+
+def _refresh_rotation_scan() -> None:
+    """Log this session's per-theme moves, detect a rotation regime, and build the
+    IN-theme quality watch list. Full universe, ~5-min TTL, off the request path."""
+    global _rotation_result, _rotation_scan_ts
+    if not _rotation_lock.acquire(blocking=False):
+        return
+    try:
+        from intelligence.unwind_detector import _load_membership
+        from intelligence import rotation as rot
+        mem = _load_membership()
+
+        if db.count_theme_history_dates() < 3:
+            _backfill_theme_history(mem)
+
+        # Dominant session from a liquid probe.
+        probe = _yf_price_module("SPY") or _yf_price_module("AAPL")
+        ms = (probe.get("marketState") or "REGULAR").upper()
+        session_type = {"PRE": "pre", "REGULAR": "regular",
+                        "POST": "post", "POSTPOST": "post"}.get(ms, "close")
+        want_pre = session_type == "pre"
+
+        tickers = sorted({t for th in mem.values() for t in rot._members(th)})
+        ticker_pct = {}
+        pre_have = pre_want = 0
+        for t in tickers:
+            pm = _yf_price_module(t)
+            reg, pre, post = pm.get("regular"), pm.get("pre"), pm.get("post")
+            val = None
+            if want_pre:
+                pre_want += 1
+                if pre is not None:
+                    val, _c = pre * 100, pre_have
+                    pre_have += 1
+                elif reg is not None:
+                    val = reg * 100           # per-ticker fallback
+            elif session_type == "post":
+                v = post if post is not None else reg
+                val = v * 100 if v is not None else None
+            else:
+                val = reg * 100 if reg is not None else None
+            if val is not None:
+                ticker_pct[t] = round(val, 2)
+
+        # Fallback labelling — inadequate premarket coverage → show close, say so.
+        fallback = want_pre and pre_want and (pre_have / pre_want) < 0.40
+        if fallback:
+            session_type = "close"
+        session_label = {"pre": "PREMARKET", "regular": "LIVE",
+                         "post": "AFTER-HOURS", "close": "CLOSE"}[session_type]
+
+        today = datetime.utcnow().date().isoformat()
+        log = rot.compute_session_log(ticker_pct, mem)
+        for row in log:
+            db.upsert_theme_day(row["theme"], today, session_type,
+                                row["avg_pct"], row["breadth"], row["member_count"])
+
+        history = db.get_theme_history(days=20)
+        detection = rot.detect_rotation(history, mem)
+        history_regimes = rot.ended_regimes(history, mem, limit=5)
+
+        watch_main, watch_earn = [], []
+        if detection.get("state") == "active":
+            in_keys = [t["theme"] for t in detection["in"]["themes"]]
+            seen = set()
+            for thkey in in_keys:
+                for t in rot._members(mem.get(thkey, {})):
+                    if t in seen:
+                        continue
+                    seen.add(t)
+                    try:
+                        pd = get_stock_price(t)
+                        trust = get_trust_score_with_fallback(t, pd)
+                        fund = get_fundamentals(t)
+                        hist = get_stock_history(t) or {}
+                        ma50 = hist.get("ma_50d") or fund.get("ma_50d")
+                        g = rot.watch_gate(trust, fund.get("next_earnings_date"),
+                                           pd.get("price"), ma50)
+                    except Exception:
+                        continue
+                    row = {"ticker": t,
+                           "name": pd.get("name") or fund.get("name") or t,
+                           "trust": trust.get("total_score"),
+                           "change_pct": ticker_pct.get(t, pd.get("change_pct")),
+                           "theme": mem.get(thkey, {}).get("name", thkey)}
+                    if g["status"] == "main":
+                        row.update({"extended": g["extended"],
+                                    "earnings_unverified": g["earnings_unverified"]})
+                        watch_main.append(row)
+                    elif g["status"] == "earnings_soon":
+                        row.update({"earnings_days": g["earnings_days"],
+                                    "earnings_label": g["earnings_label"]})
+                        watch_earn.append(row)
+            watch_main.sort(key=lambda x: -(x["trust"] or 0))
+            watch_main = watch_main[:4]
+            watch_earn.sort(key=lambda x: x["earnings_days"])
+
+        _rotation_result = {
+            "state": detection.get("state"),
+            "detection": detection,
+            "session_label": session_label,
+            "session_type": session_type,
+            "as_of": datetime.utcnow().isoformat() + "Z",
+            "data_fallback": bool(fallback),
+            "premarket_coverage": round(pre_have / pre_want, 2) if pre_want else None,
+            "heatmap": log,
+            "watch_main": watch_main,
+            "watch_earnings": watch_earn,
+            "ended_regimes": history_regimes,
+            "sessions_stored": db.count_theme_history_dates(),
+        }
+        _rotation_scan_ts = _time.monotonic()
+        print(f"[PULSE] {session_label} state={detection.get('state')} "
+              f"themes={len(log)} watch={len(watch_main)}", flush=True)
+    except Exception as exc:
+        print(f"[PULSE] refresh failed: {exc}", flush=True)
+    finally:
+        _rotation_lock.release()
+
+
 def _run_picks_scan_background():
     """Full curated-universe scan — runs in a daemon thread, saves to DB when done."""
     global _scan_running
@@ -1870,6 +2075,9 @@ def strategy(user_id: str = Depends(get_current_user)):
         threading.Thread(target=_refresh_dip_scan, daemon=True).start()
     if _time.monotonic() - _shock_scan_ts > _SHOCK_SCAN_TTL:
         threading.Thread(target=_refresh_shock_scan, daemon=True).start()
+    # Warm the Pulse rotation scan when Strategy opens (served via /api/rotation).
+    if _time.monotonic() - _rotation_scan_ts > _ROTATION_SCAN_TTL:
+        threading.Thread(target=_refresh_rotation_scan, daemon=True).start()
     dip_candidates = list(_dip_scan_result)  # snapshot
 
     dip_buys = []
@@ -1946,6 +2154,15 @@ def strategy(user_id: str = Depends(get_current_user)):
         "unwind_themes": list(_dip_unwind),
         "sector_shocks": list(_dip_shocks),
     }
+
+
+@app.get("/api/rotation")
+def rotation(user_id: str = Depends(get_current_user)):
+    """Pulse — Sector Rotation. Served from the background rotation scan cache;
+    lazily refreshed (5-min TTL) so it never blocks the request."""
+    if _time.monotonic() - _rotation_scan_ts > _ROTATION_SCAN_TTL:
+        threading.Thread(target=_refresh_rotation_scan, daemon=True).start()
+    return dict(_rotation_result)
 
 
 class PlaybookRequest(BaseModel):

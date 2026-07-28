@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS classification_audit (
   hysteresis_days_required REAL,
   hysteresis_days_elapsed  REAL
 );
+
+-- Pulse / Sector Rotation: one row per theme per date per session, the log the
+-- rotation-regime detector reads.  Additive; feeds only the Pulse tab.
+CREATE TABLE IF NOT EXISTS theme_daily_history (
+  theme         TEXT    NOT NULL,
+  date          TEXT    NOT NULL,          -- 'YYYY-MM-DD'
+  session_type  TEXT    NOT NULL,          -- 'pre' | 'regular' | 'post' | 'close'
+  avg_pct       REAL,                      -- average member % move that session
+  breadth       REAL,                      -- fraction 0..1 of members green
+  member_count  INTEGER,
+  updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (theme, date, session_type)
+);
+CREATE INDEX IF NOT EXISTS idx_theme_hist_date ON theme_daily_history(date);
 """
 
 

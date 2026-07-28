@@ -816,3 +816,52 @@ def get_classification_audit(ticker: str = None, user_id: str = None,
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── THEME DAILY HISTORY (Pulse / Sector Rotation) ────────────────────────────
+
+def upsert_theme_day(theme, date, session_type, avg_pct, breadth, member_count):
+    """One row per (theme, date, session_type). Re-running a session overwrites it."""
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO theme_daily_history
+             (theme, date, session_type, avg_pct, breadth, member_count, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(theme, date, session_type) DO UPDATE SET
+             avg_pct=excluded.avg_pct,
+             breadth=excluded.breadth,
+             member_count=excluded.member_count,
+             updated_at=excluded.updated_at""",
+        (theme, date, session_type, avg_pct, breadth, member_count,
+         datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_theme_history(days=20):
+    """All theme rows for the most recent `days` distinct dates, oldest→newest."""
+    conn = get_connection()
+    dates = conn.execute(
+        "SELECT DISTINCT date FROM theme_daily_history ORDER BY date DESC LIMIT ?",
+        (days,),
+    ).fetchall()
+    if not dates:
+        conn.close()
+        return []
+    cutoff = min(d["date"] for d in dates)
+    rows = conn.execute(
+        "SELECT * FROM theme_daily_history WHERE date >= ? ORDER BY date ASC, theme ASC",
+        (cutoff,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def count_theme_history_dates():
+    conn = get_connection()
+    n = conn.execute(
+        "SELECT COUNT(DISTINCT date) AS n FROM theme_daily_history"
+    ).fetchone()["n"]
+    conn.close()
+    return n
