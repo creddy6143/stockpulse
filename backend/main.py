@@ -160,7 +160,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "pulse-rotation-v1",   # Investment frameworks system
+        "build": "pulse-rotation-v2",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -201,6 +201,11 @@ def dip_status():
             "out": (_rotation_result.get("detection") or {}).get("out", {}).get("label"),
             "in": (_rotation_result.get("detection") or {}).get("in", {}).get("label"),
             "day_count": (_rotation_result.get("detection") or {}).get("day_count"),
+            "reason": (_rotation_result.get("detection") or {}).get("reason"),
+            "top3": [{"n": t["name"], "avg": t["avg_pct"], "br": t["breadth"]}
+                     for t in (_rotation_result.get("heatmap") or [])[:3]],
+            "bottom3": [{"n": t["name"], "avg": t["avg_pct"], "br": t["breadth"]}
+                        for t in (_rotation_result.get("heatmap") or [])[-3:]],
         },
         "top_15_by_week_change": top_week_changes,
     }
