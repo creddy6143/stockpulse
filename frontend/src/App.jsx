@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite, getFrameworks, getFrameworksFor } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite, getFrameworks, getFrameworksFor, getRotation } from "./api/client";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import AuthScreen from "./screens/AuthScreen";
@@ -3213,20 +3213,230 @@ function FrameworksTab({onDetail}){
   );
 }
 
+// ── STRATEGY → PULSE (Sector Rotation) sub-tab ────────────────────
+function PulseTab({onDetail}){
+  const [data,setData] = useState(null);
+  const [loading,setLoading] = useState(true);
+  const [openTheme,setOpenTheme] = useState(null);
+  const [showHist,setShowHist] = useState(false);
+  const load = ()=>{ setLoading(true); getRotation().then(d=>{setData(d);setLoading(false);}).catch(()=>setLoading(false)); };
+  useEffect(load,[]);
+
+  // Avanza dark palette (matches the My Stocks aesthetic).
+  const BG="#111111", EXP="#0D0D0D", HOVER="#161616", T1="#F5F5F7", T2="#8E8E93",
+        T3="#636366", DIV="rgba(255,255,255,.06)", POS="#4FA8F7", NEG="#FF6B9D",
+        FONT="system-ui,-apple-system,'SF Pro Display',Inter,sans-serif";
+  const num={fontVariantNumeric:"tabular-nums"};
+  const pc = v => `${v>=0?"+":"−"}${Math.abs(v).toFixed(1)}%`;
+  const col = v => v>=0?POS:NEG;
+
+  const det = (data && data.detection) || {};
+  const state = data && data.state;
+  const heatmap = (data && data.heatmap) || [];
+  const wMain = (data && data.watch_main) || [];
+  const wEarn = (data && data.watch_earnings) || [];
+  const ended = (data && data.ended_regimes) || [];
+  const sessLabel = (data && data.session_label) || "—";
+  const fallback = data && data.data_fallback;
+
+  const sessColor = sessLabel==="PREMARKET"?"#FFD60A":sessLabel==="LIVE"?POS:T2;
+  const asOf = data && data.as_of ? new Date(data.as_of).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+
+  const card = {background:BG,borderRadius:14,overflow:"hidden"};
+  const lbl = {fontSize:8,letterSpacing:1,textTransform:"uppercase",color:T3,fontWeight:700};
+
+  return (
+    <div style={{background:"#000",borderRadius:14,margin:"8px",padding:"12px 12px 16px",fontFamily:FONT}}>
+      {/* 1 — HEADER */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:15,color:T1}}>Pulse — Sector Rotation</div>
+          <div style={{fontSize:9.5,color:T2,marginTop:3,display:"flex",alignItems:"center",gap:6}}>
+            <span style={{...lbl,color:sessColor,fontSize:8.5}}>● {sessLabel}</span>
+            <span style={{color:T3}}>{asOf}</span>
+          </div>
+        </div>
+        <button onClick={load} disabled={loading} style={{background:HOVER,border:`1px solid ${DIV}`,color:T2,borderRadius:9,padding:"5px 10px",fontSize:9.5,fontWeight:600,cursor:"pointer",fontFamily:FONT}}>
+          {loading?"…":"↻ Refresh"}
+        </button>
+      </div>
+
+      {fallback && (
+        <div style={{background:"rgba(255,214,10,.08)",border:"1px solid rgba(255,214,10,.25)",borderRadius:10,padding:"7px 10px",marginBottom:10,fontSize:9.5,color:"#FFD60A",lineHeight:1.5}}>
+          ⏳ Premarket data unavailable or thin — showing the most recent regular-session close.
+        </div>
+      )}
+
+      {/* 2 — ROTATION BANNER */}
+      {loading && !data ? (
+        <div style={{...card,padding:"22px 16px",textAlign:"center",color:T2,fontSize:11,marginBottom:12}}>Loading rotation state…</div>
+      ) : state==="insufficient" ? (
+        <div style={{...card,padding:"20px 16px",textAlign:"center",marginBottom:12}}>
+          <div style={{color:T1,fontSize:12,fontWeight:600,marginBottom:4}}>Building history…</div>
+          <div style={{color:T3,fontSize:9.5,lineHeight:1.5}}>Seeding daily theme history — regime detection needs ≥2 sessions. Check back shortly.</div>
+        </div>
+      ) : state==="risk_off" ? (
+        <div style={{background:"rgba(255,107,157,.10)",border:`1px solid ${NEG}55`,borderRadius:14,padding:"14px 14px",marginBottom:12}}>
+          <div style={{fontSize:12.5,fontWeight:700,color:NEG,marginBottom:4}}>🔴 Broad risk-off</div>
+          <div style={{fontSize:10.5,color:T1,lineHeight:1.55,...num}}>{det.red} of {det.total} themes red this session. Not a rotation — correlated selling. Rotation pairs are suppressed until breadth normalises.</div>
+        </div>
+      ) : state==="active" ? (
+        <div style={{background:"linear-gradient(135deg,rgba(79,168,247,.10),rgba(255,107,157,.08))",border:`1px solid ${DIV}`,borderRadius:14,padding:"13px 14px",marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7}}>
+            <span style={{fontSize:14}}>↔️</span>
+            <span style={{fontSize:13,fontWeight:700,color:T1}}>{det.out?.label} <span style={{color:T3}}>→</span> {det.in?.label}</span>
+          </div>
+          <div style={{fontSize:9.5,color:T2,marginBottom:10,...num}}>
+            Day {det.day_count} · started {det.start_date} · divergence +{det.divergence_cum}% cum.
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+              <span style={{...lbl,color:NEG,width:30}}>OUT</span>
+              <span style={{fontSize:10,color:T1,...num}}>{(det.out?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.avg_pct)}`).join(" · ")}</span>
+            </div>
+            <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+              <span style={{...lbl,color:POS,width:30}}>IN</span>
+              <span style={{fontSize:10,color:T1,...num}}>{(det.in?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.avg_pct)}`).join(" · ")}</span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{...card,padding:"18px 16px",textAlign:"center",marginBottom:12}}>
+          <div style={{color:T1,fontSize:12,fontWeight:600}}>No persistent rotation pattern detected.</div>
+          <div style={{color:T3,fontSize:9.5,marginTop:4,lineHeight:1.5}}>Themes aren't diverging with enough persistence and breadth to call a regime.</div>
+        </div>
+      )}
+
+      {/* 3 — QUALITY WATCH (active only) */}
+      {state==="active" && (
+        <div style={{marginBottom:12}}>
+          <div style={{...lbl,color:T2,marginBottom:6,paddingLeft:2}}>Quality watch · receiving side</div>
+          <div style={card}>
+            {wMain.length===0 ? (
+              <div style={{padding:"16px",textAlign:"center",color:T3,fontSize:10}}>No names clear the quality gates in the IN theme right now.</div>
+            ) : wMain.map((s,i)=>(
+              <div key={s.ticker} onClick={()=>onDetail&&onDetail({ticker:s.ticker,name:s.name,flag:"",price:0,trust:s.trust||50,rec:"—"})}
+                style={{display:"grid",gridTemplateColumns:"1.5fr .7fr .8fr",alignItems:"center",gap:6,padding:"9px 12px",borderTop:i>0?`1px solid ${DIV}`:"none",cursor:"pointer"}}>
+                <div style={{minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontWeight:700,fontSize:12,color:T1}}>{s.ticker}</span>
+                    {s.extended && <span style={{fontSize:8,color:"#FFD60A"}} title="More than 20% above its 50-day average">⚠️ extended</span>}
+                    {s.earnings_unverified && <span style={{fontSize:7.5,color:T3}}>earnings date unverified</span>}
+                  </div>
+                  <div style={{fontSize:8,color:T3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+                </div>
+                <div style={{textAlign:"center"}}><span style={{fontSize:9.5,fontWeight:700,color:col(s.change_pct||0),...num}}>{pc(s.change_pct||0)}</span></div>
+                <div style={{textAlign:"right"}}><span style={{fontSize:9.5,color:T2,...num}}>Trust {s.trust!=null?s.trust:"—"}</span></div>
+              </div>
+            ))}
+          </div>
+
+          {/* ⏳ EARNINGS SOON */}
+          {wEarn.length>0 && (
+            <div style={{marginTop:8}}>
+              <div style={{...lbl,color:"#FFD60A",marginBottom:5,paddingLeft:2}}>⏳ Earnings soon · excluded</div>
+              <div style={card}>
+                {wEarn.slice(0,3).map((s,i)=>(
+                  <div key={s.ticker} onClick={()=>onDetail&&onDetail({ticker:s.ticker,name:s.name,flag:"",price:0,trust:s.trust||50,rec:"—"})}
+                    style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderTop:i>0?`1px solid ${DIV}`:"none",cursor:"pointer"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,minWidth:0}}>
+                      <span style={{fontWeight:700,fontSize:11.5,color:T1}}>{s.ticker}</span>
+                      <span style={{fontSize:9,color:T3,...num}}>Trust {s.trust}</span>
+                    </div>
+                    <span style={{fontSize:9,color:"#FFD60A",...num}}>{s.earnings_label}</span>
+                  </div>
+                ))}
+                {wEarn.length>3 && <div style={{padding:"6px 12px",fontSize:8.5,color:T3}}>+{wEarn.length-3} more</div>}
+                <div style={{padding:"6px 12px",fontSize:8,color:T3,borderTop:`1px solid ${DIV}`}}>→ each re-eligible the day after it reports</div>
+              </div>
+            </div>
+          )}
+
+          <div style={{fontSize:8,color:T3,lineHeight:1.55,marginTop:8,padding:"0 2px"}}>
+            Research candidates from existing quality scores — not buy signals. Rotations reverse without warning.
+          </div>
+        </div>
+      )}
+
+      {/* 4 — FULL THEME HEATMAP */}
+      <div style={{marginBottom:10}}>
+        <div style={{...lbl,color:T2,marginBottom:6,paddingLeft:2}}>Theme heatmap · {sessLabel.toLowerCase()}</div>
+        <div style={card}>
+          {heatmap.length===0 ? (
+            <div style={{padding:"16px",textAlign:"center",color:T3,fontSize:10}}>No theme data this session.</div>
+          ) : heatmap.map((t,i)=>{
+            const open = openTheme===t.theme;
+            const bpct = Math.round((t.breadth||0)*100);
+            return (
+              <div key={t.theme} style={{borderTop:i>0?`1px solid ${DIV}`:"none"}}>
+                <div onClick={()=>setOpenTheme(open?null:t.theme)} style={{display:"grid",gridTemplateColumns:"1.4fr 1fr .5fr",alignItems:"center",gap:8,padding:"8px 12px",cursor:"pointer",background:open?HOVER:"transparent"}}>
+                  <span style={{fontSize:10.5,color:T1,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t.name}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <div style={{flex:1,height:4,background:"rgba(255,255,255,.07)",borderRadius:2,overflow:"hidden"}}>
+                      <div style={{width:`${bpct}%`,height:"100%",background:col(t.avg_pct)}}/>
+                    </div>
+                    <span style={{fontSize:7.5,color:T3,width:26,...num}}>{bpct}%</span>
+                  </div>
+                  <span style={{textAlign:"right",fontSize:10,fontWeight:700,color:col(t.avg_pct),...num}}>{pc(t.avg_pct)}</span>
+                </div>
+                {open && (
+                  <div style={{background:EXP,padding:"6px 12px 10px"}}>
+                    {(t.members||[]).map(m=>(
+                      <div key={m.ticker} onClick={()=>onDetail&&onDetail({ticker:m.ticker,name:m.ticker,flag:"",price:0,trust:50,rec:"—"})}
+                        style={{display:"flex",justifyContent:"space-between",padding:"3px 0",cursor:"pointer"}}>
+                        <span style={{fontSize:9.5,color:T2}}>{m.ticker}</span>
+                        <span style={{fontSize:9.5,fontWeight:600,color:col(m.pct),...num}}>{pc(m.pct)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 5 — REGIME HISTORY (collapsed) */}
+      <div>
+        <div onClick={()=>setShowHist(!showHist)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 2px",cursor:"pointer"}}>
+          <span style={{...lbl,color:T2}}>Past rotations — context, don't repeat on schedule</span>
+          <span style={{color:T3,fontSize:10}}>{showHist?"▲":"▼"} {ended.length}</span>
+        </div>
+        {showHist && (
+          <div style={card}>
+            {ended.length===0 ? (
+              <div style={{padding:"14px",textAlign:"center",color:T3,fontSize:9.5}}>No completed regimes logged yet.</div>
+            ) : ended.map((r,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderTop:i>0?`1px solid ${DIV}`:"none"}}>
+                <div>
+                  <div style={{fontSize:10.5,color:T1,fontWeight:600}}>{r.pair}</div>
+                  <div style={{fontSize:8,color:T3,...num}}>{r.start} → {r.end} · {r.days} sessions</div>
+                </div>
+                <span style={{fontSize:9.5,color:POS,...num}}>max +{r.max_div}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StrategyScreen({strategyData, onDetail}) {
   const [tab,setTab] = useState(0);
   const [exp,setExp] = useState(null);
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
   const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[], unwindThemes:[], sectorShocks:[]};
-  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs","Frameworks"];
+  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs","Frameworks","Pulse"];
   const _tierOrder = {"A":0,"B":1,"C":2};
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
     (SD.dipBuys||[]).map(mapStrategy).sort((a,b)=>(_tierOrder[a.dip_tier]||1)-(_tierOrder[b.dip_tier]||1)||(b.quality_score||0)-(a.quality_score||0)),
     [],  // Analogs tab — data managed internally by AnalogsTab component
-    []   // Frameworks tab — data managed internally by FrameworksTab component
+    [],  // Frameworks tab — data managed internally by FrameworksTab component
+    []   // Pulse tab — data managed internally by PulseTab component
   ];
-  const items = (tab===4||tab===5) ? [] : lists[tab];
+  const items = (tab>=4) ? [] : lists[tab];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
   // Portfolio/watchlist ticker sets for AnalogsTab badge detection
   const portfolioTickers = new Set((SD.myStocks||[]).map(s=>s.ticker));
@@ -3296,7 +3506,7 @@ function StrategyScreen({strategyData, onDetail}) {
           {tabs.map((t,i)=>(
             <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:"0 0 auto",minWidth:i>=4?"58px":"0",padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:i>=4?9:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
               {t}
-              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":i===5?"🧮":lists[i].length}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":i===5?"🧮":i===6?"↔️":lists[i].length}</span>
             </button>
           ))}
         </div>
@@ -3306,15 +3516,18 @@ function StrategyScreen({strategyData, onDetail}) {
         {tab===5&&(
           <FrameworksTab onDetail={onDetail}/>
         )}
+        {tab===6&&(
+          <PulseTab onDetail={onDetail}/>
+        )}
         {/* Tier 4b — Unwind banners at the top of the Dip Buys tab. Affected
             stocks are grouped here under one banner per theme, forced to WATCH,
             with a live stabilization tracker and per-stock reclaim levels. */}
         {tab===3&&(SD.unwindThemes||[]).map(u=><UnwindBanner key={u.theme_key} u={u}/>)}
         {tab===3&&(SD.sectorShocks||[]).map(s2=><ShockBanner key={s2.theme_key} s={s2}/>)}
-        {tab!==4&&tab!==5&&tab!==3&&items.length===0&&(
+        {tab<4&&tab!==3&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
-        {tab!==4&&tab!==5&&displayItems.map((s,i)=>{
+        {tab<4&&displayItems.map((s,i)=>{
           // ── Grade header sentinel ──────────────────────────────────────────
           if(s._isGradeHeader){
             const tier=s.tier;
