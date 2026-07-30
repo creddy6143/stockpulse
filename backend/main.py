@@ -160,7 +160,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "pulse-p1-datafix2",   # Investment frameworks system
+        "build": "pulse-p3-pairs",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -208,6 +208,10 @@ def dip_status():
             "divergence_cum": (_rotation_result.get("detection") or {}).get("divergence_cum"),
             "watch_sample": [{"t": w["ticker"], "theme": w.get("theme"), "today": w.get("change_pct")}
                              for w in (_rotation_result.get("watch_main") or [])[:5]],
+            "stock_pairs": [{"out": p["out_ticker"], "out_today": p["out_today"],
+                             "in": p["in_ticker"], "in_today": p["in_today"],
+                             "opp": p["opposite_days"]}
+                            for p in (_rotation_result.get("stock_pairs") or [])],
             "day_count": (_rotation_result.get("detection") or {}).get("day_count"),
             "reason": (_rotation_result.get("detection") or {}).get("reason"),
             "top3": [{"n": t["name"], "avg": t["avg_pct"], "br": t["breadth"]}
@@ -1234,6 +1238,122 @@ def _backfill_theme_history(mem: dict) -> None:
     print(f"[PULSE] backfilled {len(alldates)} sessions from daily bars", flush=True)
 
 
+def _daily_changes(ticker: str, sessions: int = 10):
+    """Last `sessions` daily close-to-close % moves (chronological, oldest→newest)
+    from v8 daily bars. None if fewer than sessions+1 real closes — never partial."""
+    import requests
+    from data.fetcher import _HEADERS
+    try:
+        r = requests.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+            f"?range=1mo&interval=1d", headers=_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return None
+        res = r.json()["chart"]["result"][0]
+        closes = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
+        if len(closes) < sessions + 1:
+            return None
+        closes = closes[-(sessions + 1):]
+        return [(closes[i] - closes[i - 1]) / closes[i - 1] * 100
+                for i in range(1, len(closes))]
+    except Exception:
+        return None
+
+
+# Part 3 — stock-pair gates
+_PAIR_TRUST_MIN   = 60
+_PAIR_MCAP_MIN    = 1e9
+_PAIR_MIN_OPP     = 6      # <6 opposite days over 10 → coincidence, not a seesaw
+_PAIR_SESSIONS    = 10
+
+
+def _compute_stock_pairs(detection: dict, ticker_pct: dict, mem: dict) -> list:
+    """The clearest OUT-red ↔ IN-green stock pairs today, ranked by how often they
+    closed opposite over the last 10 sessions. Illustrates the theme rotation with
+    familiar tickers — NOT a trade. Only runs when a rotation is active."""
+    from intelligence import rotation as rot
+
+    def candidates(theme_keys, want_green):
+        seen, out = set(), []
+        for k in theme_keys:
+            for t in rot._members(mem.get(k, {})):
+                if t in seen:
+                    continue
+                seen.add(t)
+                tp = ticker_pct.get(t)
+                if tp is None or (want_green and tp <= 0) or (not want_green and tp >= 0):
+                    continue
+                try:
+                    pd = get_stock_price(t)
+                    trust = get_trust_score_with_fallback(t, pd)
+                    fund = get_fundamentals(t)
+                except Exception:
+                    continue
+                if (trust.get("total_score") or 0) < _PAIR_TRUST_MIN:
+                    continue
+                if trust.get("suppressed") or trust.get("auto_disqualified"):
+                    continue
+                if (fund.get("market_cap") or 0) < _PAIR_MCAP_MIN:
+                    continue
+                out.append({"ticker": t, "today": tp, "theme": k,
+                            "name": pd.get("name") or fund.get("name") or t})
+        return out
+
+    outs = candidates([t["theme"] for t in detection["out"]["themes"]], False)
+    ins = candidates([t["theme"] for t in detection["in"]["themes"]], True)
+    if not outs or not ins:
+        return []
+
+    dc = {}   # ticker → last-10 daily changes (shared history; both need ≥10)
+    for c in outs + ins:
+        if c["ticker"] not in dc:
+            dc[c["ticker"]] = _daily_changes(c["ticker"], _PAIR_SESSIONS)
+
+    scored = []
+    for o in outs:
+        oc = dc.get(o["ticker"])
+        if not oc:
+            continue
+        for n in ins:
+            ic = dc.get(n["ticker"])
+            if not ic:
+                continue
+            opp = sum(1 for a, b in zip(oc, ic)
+                      if a != 0 and b != 0 and (a > 0) != (b > 0))
+            if opp < _PAIR_MIN_OPP:
+                continue
+            scored.append({
+                "out_ticker": o["ticker"], "out_name": o["name"],
+                "out_today": round(o["today"], 1), "out_theme": o["theme"],
+                "in_ticker": n["ticker"], "in_name": n["name"],
+                "in_today": round(n["today"], 1), "in_theme": n["theme"],
+                "opposite_days": opp,
+                "magnitude": round(abs(o["today"]) + abs(n["today"]), 1)})
+    scored.sort(key=lambda x: (-x["opposite_days"], -x["magnitude"]))
+
+    # Top 3 — no ticker reused; first pass prefers distinct theme combos.
+    used, combos, picks = set(), set(), []
+    for s in scored:
+        if s["out_ticker"] in used or s["in_ticker"] in used:
+            continue
+        if (s["out_theme"], s["in_theme"]) in combos:
+            continue
+        used |= {s["out_ticker"], s["in_ticker"]}
+        combos.add((s["out_theme"], s["in_theme"]))
+        picks.append(s)
+        if len(picks) >= 3:
+            break
+    if len(picks) < 3:   # fill remaining slots, still unique tickers
+        for s in scored:
+            if len(picks) >= 3:
+                break
+            if s["out_ticker"] in used or s["in_ticker"] in used:
+                continue
+            used |= {s["out_ticker"], s["in_ticker"]}
+            picks.append(s)
+    return picks
+
+
 def _refresh_rotation_scan() -> None:
     """Log this session's per-theme moves, detect a rotation regime, and build the
     IN-theme quality watch list. Full universe, ~5-min TTL, off the request path."""
@@ -1356,9 +1476,18 @@ def _refresh_rotation_scan() -> None:
             watch_main = watch_main[:4]
             watch_earn.sort(key=lambda x: x["earnings_days"])
 
+        # Part 3 — clearest opposite stock pairs (active only).
+        stock_pairs = []
+        if detection.get("state") == "active":
+            try:
+                stock_pairs = _compute_stock_pairs(detection, ticker_pct, mem)
+            except Exception as exc:
+                print(f"[PULSE] pairs failed: {exc}", flush=True)
+
         _rotation_result = {
             "state": detection.get("state"),
             "detection": detection,
+            "stock_pairs": stock_pairs,
             "session_label": session_label,
             "session_type": session_type,
             "as_of": datetime.utcnow().isoformat() + "Z",
