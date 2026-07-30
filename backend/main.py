@@ -160,7 +160,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "pulse-rotation-v3",   # Investment frameworks system
+        "build": "pulse-p1-datafix",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -1269,22 +1269,45 @@ def _refresh_rotation_scan() -> None:
             if val is not None:
                 ticker_pct[t] = round(val, 2)
 
-        # Fallback labelling — inadequate premarket coverage → show close, say so.
-        fallback = want_pre and pre_want and (pre_have / pre_want) < 0.40
-        if fallback:
-            session_type = "close"
+        # Fallback affects only the DISPLAY label — the row is still stored under its
+        # true session_type so it never shadows a later, fresher row (collapse ranks
+        # by updated_at, not session_type).
+        fallback = bool(want_pre and pre_want and (pre_have / pre_want) < 0.40)
         session_label = {"pre": "PREMARKET", "regular": "LIVE",
-                         "post": "AFTER-HOURS", "close": "CLOSE"}[session_type]
+                         "post": "AFTER-HOURS", "close": "CLOSE"}.get(session_type, "CLOSE")
+        if fallback:
+            session_label = "CLOSE"   # premarket too thin — showing last regular close
 
         today = datetime.utcnow().date().isoformat()
         log = rot.compute_session_log(ticker_pct, mem)
         for row in log:
             db.upsert_theme_day(row["theme"], today, session_type,
                                 row["avg_pct"], row["breadth"], row["member_count"])
+        # Single shared price source for every % on the tab (heatmap + banner + watch).
+        log_map = {r["theme"]: r for r in log}
 
         history = db.get_theme_history(days=20)
         detection = rot.detect_rotation(history, mem)
         history_regimes = rot.ended_regimes(history, mem, limit=5)
+
+        # Reconcile the banner's OUT/IN theme %s to TODAY's shared source (log_map) so
+        # they can never contradict the heatmap. The regime's persistence/cumulative
+        # figures stay as computed; today's per-theme move comes from the heatmap source.
+        if detection.get("state") == "active":
+            for side in ("out", "in"):
+                sd = detection.get(side) or {}
+                fresh = []
+                for th in sd.get("themes", []):
+                    lm = log_map.get(th["theme"])
+                    fresh.append({**th,
+                                  "today_pct": round(lm["avg_pct"], 2) if lm else th.get("avg_pct"),
+                                  "breadth": round(lm["breadth"], 3) if lm else th.get("breadth")})
+                vals = [x["today_pct"] for x in fresh if x.get("today_pct") is not None]
+                sd["themes"] = fresh
+                sd["today_avg"] = round(sum(vals) / len(vals), 2) if vals else None
+            _oa = (detection["out"].get("today_avg") or 0)
+            _ia = (detection["in"].get("today_avg") or 0)
+            detection["today_gap"] = round(_ia - _oa, 2)   # today's gap between sides
 
         watch_main, watch_earn = [], []
         if detection.get("state") == "active":
@@ -1308,7 +1331,10 @@ def _refresh_rotation_scan() -> None:
                     row = {"ticker": t,
                            "name": pd.get("name") or fund.get("name") or t,
                            "trust": trust.get("total_score"),
-                           "change_pct": ticker_pct.get(t, pd.get("change_pct")),
+                           # TODAY's move from the single shared source only — never a
+                           # fallback that could be a cumulative figure (the MSFT +16.9%
+                           # bug). None → the UI shows "—" for today.
+                           "change_pct": ticker_pct.get(t),
                            "theme": mem.get(thkey, {}).get("name", thkey)}
                     if g["status"] == "main":
                         row.update({"extended": g["extended"],

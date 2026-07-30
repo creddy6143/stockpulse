@@ -87,18 +87,21 @@ def compute_session_log(ticker_pct: dict, membership: dict) -> list:
 
 # ── history shaping ───────────────────────────────────────────────────────────
 def _collapse_by_date(rows: list):
-    """(date)→{theme:(avg,breadth)} using the freshest session per (theme,date)."""
-    best = {}   # (date,theme) → (rank, avg, breadth)
+    """(date)→{theme:(avg,breadth)} using the MOST RECENTLY WRITTEN session per
+    (theme,date). Ranking by updated_at (not session_type) is what keeps today's
+    live 'regular' reading from being shadowed by an earlier premarket/fallback row
+    written the same day — the bug behind banner↔heatmap contradictions."""
+    best = {}   # (date,theme) → (updated_at, avg, breadth)
     for r in rows:
         if r.get("avg_pct") is None:
             continue
         k = (r["date"], r["theme"])
-        rk = _SESSION_RANK.get(r.get("session_type"), 2)
-        if k not in best or rk > best[k][0]:
-            best[k] = (rk, r["avg_pct"], r.get("breadth"))
+        stamp = r.get("updated_at") or ""
+        if k not in best or stamp >= best[k][0]:
+            best[k] = (stamp, r["avg_pct"], r.get("breadth"))
     dates = sorted({d for d, _ in best})
     by_date = {d: {} for d in dates}
-    for (d, th), (_rk, avg, br) in best.items():
+    for (d, th), (_stamp, avg, br) in best.items():
         by_date[d][th] = (avg, br if br is not None else 0.5)
     return dates, by_date
 

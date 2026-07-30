@@ -3286,17 +3286,20 @@ function PulseTab({onDetail}){
             <span style={{fontSize:14}}>↔️</span>
             <span style={{fontSize:13,fontWeight:700,color:T1}}>{det.out?.label} <span style={{color:T3}}>→</span> {det.in?.label}</span>
           </div>
+          <div style={{fontSize:9.5,color:T2,marginBottom:4,...num}}>
+            Day {det.day_count} · started {det.start_date}
+          </div>
           <div style={{fontSize:9.5,color:T2,marginBottom:10,...num}}>
-            Day {det.day_count} · started {det.start_date} · divergence +{det.divergence_cum}% cum.
+            gap {det.today_gap!=null?Math.abs(det.today_gap).toFixed(1):"—"}% today · total since it started +{det.divergence_cum}%
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
             <div style={{display:"flex",alignItems:"baseline",gap:6}}>
               <span style={{...lbl,color:NEG,width:30}}>OUT</span>
-              <span style={{fontSize:10,color:T1,...num}}>{(det.out?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.avg_pct)}`).join(" · ")}</span>
+              <span style={{fontSize:10,color:T1,...num}}>{(det.out?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.today_pct!=null?t.today_pct:t.avg_pct)}`).join(" · ")} <span style={{color:T3,fontSize:8.5}}>today</span></span>
             </div>
             <div style={{display:"flex",alignItems:"baseline",gap:6}}>
               <span style={{...lbl,color:POS,width:30}}>IN</span>
-              <span style={{fontSize:10,color:T1,...num}}>{(det.in?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.avg_pct)}`).join(" · ")}</span>
+              <span style={{fontSize:10,color:T1,...num}}>{(det.in?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.today_pct!=null?t.today_pct:t.avg_pct)}`).join(" · ")} <span style={{color:T3,fontSize:8.5}}>today</span></span>
             </div>
           </div>
         </div>
@@ -3325,7 +3328,7 @@ function PulseTab({onDetail}){
                   </div>
                   <div style={{fontSize:8,color:T3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
                 </div>
-                <div style={{textAlign:"center"}}><span style={{fontSize:9.5,fontWeight:700,color:col(s.change_pct||0),...num}}>{pc(s.change_pct||0)}</span></div>
+                <div style={{textAlign:"center"}}>{s.change_pct!=null ? <span style={{fontSize:9.5,fontWeight:700,color:col(s.change_pct),...num}}>{pc(s.change_pct)}<span style={{color:T3,fontSize:7.5,fontWeight:400}}> today</span></span> : <span style={{fontSize:9.5,color:T3}}>—</span>}</div>
                 <div style={{textAlign:"right"}}><span style={{fontSize:9.5,color:T2,...num}}>Trust {s.trust!=null?s.trust:"—"}</span></div>
               </div>
             ))}
