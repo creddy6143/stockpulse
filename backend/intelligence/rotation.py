@@ -383,6 +383,11 @@ def ended_regimes(history_rows: list, membership: dict, limit: int = 5) -> list:
             if r["end"] != latest and r["days"] >= MIN_CONSEC]
     out_name = _name_cluster(out_cl, membership)
     in_name = _name_cluster(in_cl, membership)
-    return [{"pair": f"{out_name} → {in_name}", "start": r["start"], "end": r["end"],
+    # Real member theme names so the UI can write a plain sentence, not a codename.
+    out_themes = [membership.get(t, {}).get("name", t) for t in out_cl]
+    in_themes = [membership.get(t, {}).get("name", t) for t in in_cl]
+    return [{"pair": f"{out_name} → {in_name}",
+             "out_themes": out_themes, "in_themes": in_themes,
+             "start": r["start"], "end": r["end"],
              "days": r["days"], "max_div": round(r["max_div"], 2)}
             for r in list(reversed(runs))[:limit]]

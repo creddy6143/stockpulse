@@ -3219,6 +3219,7 @@ function PulseTab({onDetail}){
   const [loading,setLoading] = useState(true);
   const [openTheme,setOpenTheme] = useState(null);
   const [showHist,setShowHist] = useState(false);
+  const [showHelp,setShowHelp] = useState(false);
   const load = ()=>{ setLoading(true); getRotation().then(d=>{setData(d);setLoading(false);}).catch(()=>setLoading(false)); };
   useEffect(load,[]);
 
@@ -3229,6 +3230,9 @@ function PulseTab({onDetail}){
   const num={fontVariantNumeric:"tabular-nums"};
   const pc = v => `${v>=0?"+":"−"}${Math.abs(v).toFixed(1)}%`;
   const col = v => v>=0?POS:NEG;
+  const fmtDate = s => { if(!s) return ""; const d=new Date(s+"T00:00:00"); return isNaN(d)?s:d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
+  const joinNames = names => { const a=(names||[]).slice(0,3); if(a.length<=1) return a[0]||""; if(a.length===2) return `${a[0]} & ${a[1]}`; return `${a.slice(0,-1).join(", ")} & ${a[a.length-1]}`; };
+  const strengthText = g => { const x=Math.abs(g||0); return x<3?"small — could be noise":x<=8?"moderate — worth watching":"big, clear rotation"; };
 
   const det = (data && data.detection) || {};
   const state = data && data.state;
@@ -3236,19 +3240,42 @@ function PulseTab({onDetail}){
   const wMain = (data && data.watch_main) || [];
   const wEarn = (data && data.watch_earnings) || [];
   const ended = (data && data.ended_regimes) || [];
+  const pairs = (data && data.stock_pairs) || [];
   const sessLabel = (data && data.session_label) || "—";
   const fallback = data && data.data_fallback;
+
+  const outNames = (det.out?.themes||[]).map(t=>t.name);
+  const inNames  = (det.in?.themes||[]).map(t=>t.name);
 
   const sessColor = sessLabel==="PREMARKET"?"#FFD60A":sessLabel==="LIVE"?POS:T2;
   const asOf = data && data.as_of ? new Date(data.as_of).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
 
   const card = {background:BG,borderRadius:14,overflow:"hidden"};
   const lbl = {fontSize:8,letterSpacing:1,textTransform:"uppercase",color:T3,fontWeight:700};
+  const subtitle = t => <div style={{fontSize:9,color:T3,marginBottom:6,paddingLeft:2,lineHeight:1.4}}>{t}</div>;
+
+  // Plain-language sides for the active banner.
+  const SideLine = ({emoji,label,color,themes}) => (
+    <div style={{marginBottom:6}}>
+      <div style={{fontSize:10.5,fontWeight:700,color,marginBottom:2}}>{emoji} {label}</div>
+      <div style={{fontSize:10,color:T1,...num,paddingLeft:16}}>
+        {(themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.today_pct!=null?t.today_pct:t.avg_pct)}`).join(" · ")} <span style={{color:T3,fontSize:8.5}}>today</span>
+      </div>
+    </div>
+  );
+
+  // [How to read?] — plain explanations + one worked, clearly-fake sample per state.
+  const ExampleBox = ({children}) => (
+    <div style={{background:EXP,border:`1px dashed ${DIV}`,borderRadius:8,padding:"8px 10px",marginTop:6}}>
+      <div style={{...lbl,color:"#FFD60A",marginBottom:4}}>Example · not live data</div>
+      {children}
+    </div>
+  );
 
   return (
     <div style={{background:"#000",borderRadius:14,margin:"8px",padding:"12px 12px 16px",fontFamily:FONT}}>
       {/* 1 — HEADER */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
         <div>
           <div style={{fontWeight:700,fontSize:15,color:T1}}>Pulse — Sector Rotation</div>
           <div style={{fontSize:9.5,color:T2,marginTop:3,display:"flex",alignItems:"center",gap:6}}>
@@ -3256,10 +3283,38 @@ function PulseTab({onDetail}){
             <span style={{color:T3}}>{asOf}</span>
           </div>
         </div>
-        <button onClick={load} disabled={loading} style={{background:HOVER,border:`1px solid ${DIV}`,color:T2,borderRadius:9,padding:"5px 10px",fontSize:9.5,fontWeight:600,cursor:"pointer",fontFamily:FONT}}>
-          {loading?"…":"↻ Refresh"}
-        </button>
+        <div style={{display:"flex",gap:6}}>
+          <button onClick={()=>setShowHelp(!showHelp)} style={{background:showHelp?"#1e2a3a":HOVER,border:`1px solid ${DIV}`,color:showHelp?POS:T2,borderRadius:9,padding:"5px 10px",fontSize:9.5,fontWeight:600,cursor:"pointer",fontFamily:FONT}}>How to read?</button>
+          <button onClick={load} disabled={loading} style={{background:HOVER,border:`1px solid ${DIV}`,color:T2,borderRadius:9,padding:"5px 10px",fontSize:9.5,fontWeight:600,cursor:"pointer",fontFamily:FONT}}>{loading?"…":"↻"}</button>
+        </div>
       </div>
+
+      {/* [How to read?] expandable — 3 labeled examples + section explanations */}
+      {showHelp && (
+        <div style={{...card,padding:"12px 14px",marginBottom:12,border:`1px solid ${DIV}`}}>
+          <div style={{fontSize:11,fontWeight:700,color:T1,marginBottom:8}}>What this tab shows</div>
+
+          <div style={{fontSize:9,color:T3,fontWeight:700,marginTop:2}}>WHEN THERE IS A ROTATION</div>
+          <ExampleBox>
+            <div style={{fontSize:10,color:NEG,fontWeight:700}}>🔴 SELLING: Semiconductors −3.2% today</div>
+            <div style={{fontSize:10,color:POS,fontWeight:700,marginBottom:3}}>🟢 BUYING: Cybersecurity +1.8% today</div>
+            <div style={{fontSize:9,color:T2,...num}}>Going on for: 3 days · gap 6.4% — moderate</div>
+          </ExampleBox>
+          <div style={{fontSize:9.5,color:T2,lineHeight:1.6,marginTop:5}}>Money is moving from one group of stocks to another — here, investors are selling chip stocks and buying cybersecurity stocks. Three days in a row makes it a pattern rather than a one-day wobble. What it does <b>not</b> mean: that chip stocks are bad or cybersecurity stocks are cheap. It only describes where money went.</div>
+
+          <div style={{fontSize:9,color:T3,fontWeight:700,marginTop:12}}>WHEN THERE IS NO ROTATION</div>
+          <ExampleBox><div style={{fontSize:10,color:T1,fontWeight:600}}>"No clear pattern today."</div></ExampleBox>
+          <div style={{fontSize:9.5,color:T2,lineHeight:1.6,marginTop:5}}>Some themes are up, some down, but no consistent flow from one to another. This is normal — most days look like this. Use the heatmap below to see which themes are green and red today.</div>
+
+          <div style={{fontSize:9,color:T3,fontWeight:700,marginTop:12}}>WHEN EVERYTHING FALLS (risk-off)</div>
+          <ExampleBox><div style={{fontSize:10,color:NEG,fontWeight:700}}>🔴 Broad sell-off — 24 of 30 themes red.</div></ExampleBox>
+          <div style={{fontSize:9.5,color:T2,lineHeight:1.6,marginTop:5}}>Almost everything is down together. This is <b>not</b> a rotation — money isn't moving between themes, it's leaving the market. Rotation signals are hidden on days like this because they'd be misleading.</div>
+
+          <div style={{height:1,background:DIV,margin:"12px 0"}}/>
+          <div style={{fontSize:9.5,color:T2,lineHeight:1.6}}><b style={{color:T1}}>Theme heatmap:</b> today's scoreboard. Each row is a theme, showing how its stocks moved on average today and what share of them are up. Green = up, pink = down.</div>
+          <div style={{fontSize:9.5,color:T2,lineHeight:1.6,marginTop:6}}><b style={{color:T1}}>Past rotations:</b> a diary of finished rotations. Useful for spotting which pairs tend to trade off — but past patterns don't repeat on schedule.</div>
+        </div>
+      )}
 
       {fallback && (
         <div style={{background:"rgba(255,214,10,.08)",border:"1px solid rgba(255,214,10,.25)",borderRadius:10,padding:"7px 10px",marginBottom:10,fontSize:9.5,color:"#FFD60A",lineHeight:1.5}}>
@@ -3267,53 +3322,79 @@ function PulseTab({onDetail}){
         </div>
       )}
 
-      {/* 2 — ROTATION BANNER */}
+      {/* 2 — WHERE MONEY IS MOVING (banner) */}
+      {subtitle("Where money is moving")}
       {loading && !data ? (
-        <div style={{...card,padding:"22px 16px",textAlign:"center",color:T2,fontSize:11,marginBottom:12}}>Loading rotation state…</div>
+        <div style={{...card,padding:"22px 16px",textAlign:"center",color:T2,fontSize:11,marginBottom:12}}>Loading…</div>
       ) : state==="insufficient" ? (
         <div style={{...card,padding:"20px 16px",textAlign:"center",marginBottom:12}}>
           <div style={{color:T1,fontSize:12,fontWeight:600,marginBottom:4}}>Building history…</div>
-          <div style={{color:T3,fontSize:9.5,lineHeight:1.5}}>Seeding daily theme history — regime detection needs ≥2 sessions. Check back shortly.</div>
+          <div style={{color:T3,fontSize:9.5,lineHeight:1.5}}>Seeding daily theme history — a rotation needs at least 2 days of data. Check back shortly.</div>
         </div>
       ) : state==="risk_off" ? (
         <div style={{background:"rgba(255,107,157,.10)",border:`1px solid ${NEG}55`,borderRadius:14,padding:"14px 14px",marginBottom:12}}>
-          <div style={{fontSize:12.5,fontWeight:700,color:NEG,marginBottom:4}}>🔴 Broad risk-off</div>
-          <div style={{fontSize:10.5,color:T1,lineHeight:1.55,...num}}>{det.red} of {det.total} themes red this session. Not a rotation — correlated selling. Rotation pairs are suppressed until breadth normalises.</div>
+          <div style={{fontSize:12.5,fontWeight:700,color:NEG,marginBottom:5}}>🔴 Broad sell-off — {det.red} of {det.total} themes red.</div>
+          <div style={{fontSize:10,color:T1,lineHeight:1.55}}>Almost everything is down together. This is <b>not</b> a rotation — money isn't moving between themes, it's leaving the market. Rotation signals are hidden on days like this because they'd be misleading.</div>
         </div>
       ) : state==="active" ? (
         <div style={{background:"linear-gradient(135deg,rgba(79,168,247,.10),rgba(255,107,157,.08))",border:`1px solid ${DIV}`,borderRadius:14,padding:"13px 14px",marginBottom:12}}>
-          <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7}}>
-            <span style={{fontSize:14}}>↔️</span>
-            <span style={{fontSize:13,fontWeight:700,color:T1}}>{det.out?.label} <span style={{color:T3}}>→</span> {det.in?.label}</span>
+          {/* IN ONE SENTENCE */}
+          <div style={{...lbl,color:T3,marginBottom:4}}>In one sentence</div>
+          <div style={{fontSize:11.5,color:T1,lineHeight:1.55,marginBottom:11}}>
+            For the last {det.day_count} day{det.day_count===1?"":"s"}, investors have been selling <b style={{color:NEG}}>{joinNames(outNames)}</b> stocks and buying <b style={{color:POS}}>{joinNames(inNames)}</b> stocks instead.
           </div>
-          <div style={{fontSize:9.5,color:T2,marginBottom:4,...num}}>
-            Day {det.day_count} · started {det.start_date}
+          <SideLine emoji="🔴" label="SELLING (money leaving)" color={NEG} themes={det.out?.themes}/>
+          <SideLine emoji="🟢" label="BUYING (money arriving)" color={POS} themes={det.in?.themes}/>
+          <div style={{height:1,background:DIV,margin:"8px 0"}}/>
+          <div style={{fontSize:10,color:T2,lineHeight:1.7,...num}}>
+            <div><span style={{color:T3}}>How strong:</span> gap of {det.today_gap!=null?Math.abs(det.today_gap).toFixed(1):"—"}% between sides today — <b style={{color:T1}}>{strengthText(det.today_gap)}</b></div>
+            <div><span style={{color:T3}}>Going on for:</span> {det.day_count} day{det.day_count===1?"":"s"} (since {fmtDate(det.start_date)})</div>
+            <div><span style={{color:T3}}>Total since it started:</span> +{det.divergence_cum}%</div>
           </div>
-          <div style={{fontSize:9.5,color:T2,marginBottom:10,...num}}>
-            gap {det.today_gap!=null?Math.abs(det.today_gap).toFixed(1):"—"}% today · total since it started +{det.divergence_cum}%
-          </div>
-          <div style={{display:"flex",flexDirection:"column",gap:6}}>
-            <div style={{display:"flex",alignItems:"baseline",gap:6}}>
-              <span style={{...lbl,color:NEG,width:30}}>OUT</span>
-              <span style={{fontSize:10,color:T1,...num}}>{(det.out?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.today_pct!=null?t.today_pct:t.avg_pct)}`).join(" · ")} <span style={{color:T3,fontSize:8.5}}>today</span></span>
-            </div>
-            <div style={{display:"flex",alignItems:"baseline",gap:6}}>
-              <span style={{...lbl,color:POS,width:30}}>IN</span>
-              <span style={{fontSize:10,color:T1,...num}}>{(det.in?.themes||[]).slice(0,3).map(t=>`${t.name} ${pc(t.today_pct!=null?t.today_pct:t.avg_pct)}`).join(" · ")} <span style={{color:T3,fontSize:8.5}}>today</span></span>
-            </div>
-          </div>
+          <div style={{fontSize:9.5,color:"#FFD60A",marginTop:9,lineHeight:1.5,fontWeight:600}}>⚠️ This can reverse any day. It's a pattern, not a promise.</div>
         </div>
       ) : (
-        <div style={{...card,padding:"18px 16px",textAlign:"center",marginBottom:12}}>
-          <div style={{color:T1,fontSize:12,fontWeight:600}}>No persistent rotation pattern detected.</div>
-          <div style={{color:T3,fontSize:9.5,marginTop:4,lineHeight:1.5}}>Themes aren't diverging with enough persistence and breadth to call a regime.</div>
+        <div style={{...card,padding:"18px 16px",marginBottom:12}}>
+          <div style={{color:T1,fontSize:12,fontWeight:600,marginBottom:4}}>No clear pattern today.</div>
+          <div style={{color:T2,fontSize:9.5,lineHeight:1.6}}>Some themes are up, some down, but no consistent flow from one to another. This is normal — most days look like this. Use the heatmap below to see which themes are green and red today.</div>
         </div>
       )}
 
-      {/* 3 — QUALITY WATCH (active only) */}
+      {/* 3 — SEE IT IN ACTUAL STOCKS (active only; Part 3) */}
       {state==="active" && (
         <div style={{marginBottom:12}}>
-          <div style={{...lbl,color:T2,marginBottom:6,paddingLeft:2}}>Quality watch · receiving side</div>
+          <div style={{fontSize:11,fontWeight:700,color:T1,marginBottom:2}}>🔍 See it in actual stocks</div>
+          {subtitle("Clearest opposite pairs today")}
+          <div style={card}>
+            {pairs.length===0 ? (
+              <div style={{padding:"14px 16px",textAlign:"center",color:T3,fontSize:9.5,lineHeight:1.5}}>No clear stock pairs today — the rotation shows at theme level but individual stocks aren't moving cleanly opposite.</div>
+            ) : pairs.map((p,i)=>(
+              <div key={i} style={{padding:"10px 12px",borderTop:i>0?`1px solid ${DIV}`:"none"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
+                  <span onClick={()=>onDetail&&onDetail({ticker:p.out_ticker,name:p.out_name||p.out_ticker,flag:"",price:0,trust:50,rec:"—"})} style={{cursor:"pointer",textAlign:"right",flex:1}}>
+                    <span style={{fontSize:12,fontWeight:700,color:T1}}>{p.out_ticker}</span>
+                    <span style={{fontSize:10,fontWeight:700,color:NEG,marginLeft:6,...num}}>{pc(p.out_today)}</span>
+                  </span>
+                  <span style={{fontSize:12,color:T3}}>↔</span>
+                  <span onClick={()=>onDetail&&onDetail({ticker:p.in_ticker,name:p.in_name||p.in_ticker,flag:"",price:0,trust:50,rec:"—"})} style={{cursor:"pointer",flex:1}}>
+                    <span style={{fontSize:12,fontWeight:700,color:T1}}>{p.in_ticker}</span>
+                    <span style={{fontSize:10,fontWeight:700,color:POS,marginLeft:6,...num}}>{pc(p.in_today)}</span>
+                  </span>
+                </div>
+                <div style={{textAlign:"center",fontSize:8.5,color:T3,marginTop:4,...num}}>moved opposite on {p.opposite_days} of last 10 days</div>
+              </div>
+            ))}
+            <div style={{padding:"8px 12px",fontSize:8,color:T3,lineHeight:1.55,borderTop:`1px solid ${DIV}`}}>
+              These pairs tend to move in opposite directions — when one falls, the other often rises. Not a rule: on market-wide sell-off days both can fall together.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4 — QUALITY WATCH (active only) */}
+      {state==="active" && (
+        <div style={{marginBottom:12}}>
+          {subtitle("Quality stocks in the themes money is flowing into — research candidates, not buy signals")}
           <div style={card}>
             {wMain.length===0 ? (
               <div style={{padding:"16px",textAlign:"center",color:T3,fontSize:10}}>No names clear the quality gates in the IN theme right now.</div>
@@ -3361,9 +3442,10 @@ function PulseTab({onDetail}){
         </div>
       )}
 
-      {/* 4 — FULL THEME HEATMAP */}
+      {/* 5 — FULL THEME HEATMAP */}
       <div style={{marginBottom:10}}>
-        <div style={{...lbl,color:T2,marginBottom:6,paddingLeft:2}}>Theme heatmap · {sessLabel.toLowerCase()}</div>
+        <div style={{fontSize:11,fontWeight:700,color:T1,marginBottom:2}}>Theme heatmap</div>
+        {subtitle("Today's scoreboard by theme — green is up, pink is down. Tap a theme to see its stocks.")}
         <div style={card}>
           {heatmap.length===0 ? (
             <div style={{padding:"16px",textAlign:"center",color:T3,fontSize:10}}>No theme data this session.</div>
@@ -3399,23 +3481,24 @@ function PulseTab({onDetail}){
         </div>
       </div>
 
-      {/* 5 — REGIME HISTORY (collapsed) */}
+      {/* 6 — PAST ROTATIONS (collapsed, sentences) */}
       <div>
-        <div onClick={()=>setShowHist(!showHist)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 2px",cursor:"pointer"}}>
-          <span style={{...lbl,color:T2}}>Past rotations — context, don't repeat on schedule</span>
-          <span style={{color:T3,fontSize:10}}>{showHist?"▲":"▼"} {ended.length}</span>
+        <div style={{fontSize:11,fontWeight:700,color:T1,marginBottom:2}}>Past rotations</div>
+        {subtitle("Finished rotations, for context — patterns don't repeat on schedule.")}
+        <div onClick={()=>setShowHist(!showHist)} style={{...card,padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:10,color:T2}}>{ended.length} finished rotation{ended.length===1?"":"s"} on record</span>
+          <span style={{color:T3,fontSize:10}}>{showHist?"▲ hide":"▼ show"}</span>
         </div>
         {showHist && (
-          <div style={card}>
+          <div style={{...card,marginTop:6}}>
             {ended.length===0 ? (
-              <div style={{padding:"14px",textAlign:"center",color:T3,fontSize:9.5}}>No completed regimes logged yet.</div>
+              <div style={{padding:"14px",textAlign:"center",color:T3,fontSize:9.5}}>No finished rotations logged yet.</div>
             ) : ended.map((r,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderTop:i>0?`1px solid ${DIV}`:"none"}}>
-                <div>
-                  <div style={{fontSize:10.5,color:T1,fontWeight:600}}>{r.pair}</div>
-                  <div style={{fontSize:8,color:T3,...num}}>{r.start} → {r.end} · {r.days} sessions</div>
+              <div key={i} style={{padding:"9px 12px",borderTop:i>0?`1px solid ${DIV}`:"none"}}>
+                <div style={{fontSize:10,color:T1,lineHeight:1.5}}>
+                  Out of <b style={{color:NEG}}>{joinNames(r.out_themes)||r.pair}</b> → into <b style={{color:POS}}>{joinNames(r.in_themes)}</b>
                 </div>
-                <span style={{fontSize:9.5,color:POS,...num}}>max +{r.max_div}%</span>
+                <div style={{fontSize:8.5,color:T3,marginTop:2,...num}}>{fmtDate(r.start)}–{fmtDate(r.end)} · lasted {r.days} day{r.days===1?"":"s"} · widest gap {r.max_div}%</div>
               </div>
             ))}
           </div>
