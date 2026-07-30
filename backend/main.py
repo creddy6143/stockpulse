@@ -160,7 +160,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "pulse-p1-datafix",   # Investment frameworks system
+        "build": "pulse-p1-datafix2",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -200,6 +200,14 @@ def dip_status():
             "watch_earnings": len(_rotation_result.get("watch_earnings") or []),
             "out": (_rotation_result.get("detection") or {}).get("out", {}).get("label"),
             "in": (_rotation_result.get("detection") or {}).get("in", {}).get("label"),
+            "out_themes": [{"n": t["name"], "today": t.get("today_pct")}
+                           for t in ((_rotation_result.get("detection") or {}).get("out", {}) or {}).get("themes", [])],
+            "in_themes": [{"n": t["name"], "today": t.get("today_pct")}
+                          for t in ((_rotation_result.get("detection") or {}).get("in", {}) or {}).get("themes", [])],
+            "today_gap": (_rotation_result.get("detection") or {}).get("today_gap"),
+            "divergence_cum": (_rotation_result.get("detection") or {}).get("divergence_cum"),
+            "watch_sample": [{"t": w["ticker"], "theme": w.get("theme"), "today": w.get("change_pct")}
+                             for w in (_rotation_result.get("watch_main") or [])[:5]],
             "day_count": (_rotation_result.get("detection") or {}).get("day_count"),
             "reason": (_rotation_result.get("detection") or {}).get("reason"),
             "top3": [{"n": t["name"], "avg": t["avg_pct"], "br": t["breadth"]}
