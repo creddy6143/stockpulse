@@ -940,7 +940,14 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
               <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:13,marginBottom:10}}>📰 Recent News</div>
               {d.news.map((n,i)=>(
                 <div key={i} style={{paddingBottom:9,marginBottom:9,borderBottom:i<d.news.length-1?"1px solid var(--t4)":"none"}}>
-                  <div style={{fontSize:11,color:"var(--t1)",lineHeight:1.45,marginBottom:3}}>{n.headline}</div>
+                  {n.url ? (
+                    <a href={n.url} target="_blank" rel="noopener noreferrer"
+                       style={{display:"block",fontSize:11,color:"var(--sky)",lineHeight:1.45,marginBottom:3,textDecoration:"none",cursor:"pointer"}}>
+                      {n.headline} <span style={{fontSize:9,whiteSpace:"nowrap"}}>↗ Read</span>
+                    </a>
+                  ) : (
+                    <div style={{fontSize:11,color:"var(--t1)",lineHeight:1.45,marginBottom:3}}>{n.headline}</div>
+                  )}
                   <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{n.source}</div>
                 </div>
               ))}
