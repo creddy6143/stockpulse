@@ -153,6 +153,83 @@ Design: Avanza dark tokens (`#000` page, `#111` cards, 14px radius, `#4FA8F7` po
 
 ---
 
+## Copy rules (plain language)
+
+A non-investor should understand the tab without asking. Jargon is replaced everywhere:
+
+| Internal term | Shown as |
+|---|---|
+| OUT | 🔴 SELLING (money leaving) |
+| IN | 🟢 BUYING (money arriving) |
+| divergence | "gap of X% between sides" |
+| Day 2 | "Going on for: 2 days (since Jul 29)" |
+| regime | rotation |
+| breadth 63% | "63% of stocks in this theme are up" |
+| cum. | "total since it started" |
+
+- **Every % states its timeframe** — "today" or "total since it started". Today's %s come
+  from one shared source (the session log); the banner can't contradict the heatmap.
+- **"In one sentence"** summary is generated from live **theme names** (never codenames):
+  *"For the last N days, investors have been selling [OUT themes] stocks and buying
+  [IN themes] stocks instead."* A group label, if shown, lists its member themes.
+- **Strength** from the today gap: `<3%` small — could be noise · `3–8%` moderate — worth
+  watching · `>8%` big, clear rotation.
+- **Section subtitles are always visible** (not hidden behind taps): banner "Where money is
+  moving", heatmap "Today's scoreboard by theme", past rotations "Finished rotations, for
+  context", quality watch "Quality stocks in the themes money is flowing into — research
+  candidates, not buy signals".
+- **Past rotations are sentences**: *"Out of AI Infrastructure & AI Software → into Defence ·
+  Jul 22–24 · lasted 3 days · widest gap 5.2%."*
+- **Reversal warning** is visible in the banner without scrolling: *"This can reverse any
+  day. It's a pattern, not a promise."*
+
+### [How to read?] — three worked examples (all labeled "Example · not live data")
+
+1. **When there IS a rotation** — 🔴 SELLING Semiconductors −3.2% / 🟢 BUYING Cybersecurity
+   +1.8% / going on 3 days · gap 6.4% moderate. "Money is moving from one group to another…
+   what it does NOT mean: that chip stocks are bad or cybersecurity stocks are cheap."
+2. **When there is NO rotation** — "No clear pattern today." "Some themes up, some down, but
+   no consistent flow… this is normal."
+3. **When everything falls (risk-off)** — "Broad sell-off — 24 of 30 themes red." "Not a
+   rotation — money is leaving the market. Rotation signals are hidden on days like this."
+
+Also explains the heatmap ("today's scoreboard") and past rotations ("a diary of finished
+rotations") in the same panel.
+
+---
+
+## Part 3 — "See it in actual stocks" (opposite pairs)
+
+Placed directly under the banner, above Quality Watch. **Active state only** — hidden in
+no-rotation and risk-off. Illustrates the theme rotation with familiar tickers; it is
+**not** a trade and never claims one stock causes the other's move.
+
+**Candidate pool** (`_compute_stock_pairs`):
+- OUT side = members of the OUT themes that are **red today**; IN side = members of the IN
+  themes that are **green today**.
+- Both sides gated: **Trust ≥ 60**, verification passing (not suppressed / not
+  auto-disqualified), **market cap ≥ $1B** (recognisable, liquid names).
+
+**Pair scoring over the last 10 sessions:**
+- `opposite_days` = sessions where one closed up and the other down (primary rank).
+- `today_magnitude` = |OUT today %| + |IN today %| (tiebreak).
+- **Both tickers need ≥10 real sessions of history** — otherwise the pair is excluded, never
+  computed on partial history.
+- **Pairs with `opposite_days < 6` are excluded** — below that it's coincidence, not a seesaw.
+- Show **top 3**; no ticker appears in more than one pair; distinct theme combinations
+  preferred. Empty state: *"No clear stock pairs today…"* — the threshold is never lowered
+  to fill the section.
+
+**Display:** `TICKER −X.X% ↔ TICKER +Y.Y%` (pink falling side, cyan rising side), "moved
+opposite on N of last 10 days", tap either ticker → stock detail. Footer: *"These pairs tend
+to move in opposite directions… Not a rule: on market-wide sell-off days both can fall
+together."*
+
+*Worked check (real closes, Jul 2026): MU ↔ HUBS moved opposite on 7 of the last 10 sessions
+— the memory-vs-software seesaw.*
+
+---
+
 ## Principles
 
 1. Direction is **inferred** from persistent inverse moves — the pattern is displayed,
