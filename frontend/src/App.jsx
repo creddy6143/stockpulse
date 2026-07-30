@@ -3240,6 +3240,12 @@ function PulseTab({onDetail}){
   const fmtDate = s => { if(!s) return ""; const d=new Date(s+"T00:00:00"); return isNaN(d)?s:d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
   const joinNames = names => { const a=(names||[]).slice(0,3); if(a.length<=1) return a[0]||""; if(a.length===2) return `${a[0]} & ${a[1]}`; return `${a.slice(0,-1).join(", ")} & ${a[a.length-1]}`; };
   const strengthText = g => { const x=Math.abs(g||0); return x<3?"small — could be noise":x<=8?"moderate — worth watching":"big, clear rotation"; };
+  const strengthWord = g => { const x=Math.abs(g||0); return x<3?"small":x<=8?"moderate":"big"; };
+  // "23–24 Jul" (same month) or "30 Jul–2 Aug" (spanning months).
+  const rangeStr = (s,e) => { const a=new Date(s+"T00:00:00"), b=new Date(e+"T00:00:00"); if(isNaN(a)||isNaN(b)) return `${s}–${e}`; const am=a.toLocaleDateString(undefined,{month:"short"}), bm=b.toLocaleDateString(undefined,{month:"short"}); return am===bm?`${a.getDate()}–${b.getDate()} ${bm}`:`${a.getDate()} ${am}–${b.getDate()} ${bm}`; };
+  // Concise group noun for the headline sentence: shared lead word → "AI stocks";
+  // single theme → its name; a clean family label; else "First & N more".
+  const shortSide = (label,themes) => { const t=themes||[]; if(t.length===0) return label||"one group"; if(t.length===1) return t[0]; const lead=t.map(x=>x.split(/[ /]/)[0]); const counts={}; lead.forEach(w=>{counts[w]=(counts[w]||0)+1;}); const [top,n]=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]; if(n/t.length>=0.6) return `${top} stocks`; return (label && !label.includes("+"))?label:`${t[0]} & ${t.length-1} more`; };
 
   const det = (data && data.detection) || {};
   const state = data && data.state;
@@ -3247,6 +3253,10 @@ function PulseTab({onDetail}){
   const wMain = (data && data.watch_main) || [];
   const wEarn = (data && data.watch_earnings) || [];
   const ended = (data && data.ended_regimes) || [];
+  // A pair that has come and gone ≥2 times → surface a gentle recurrence note.
+  const _pairGroups = {};
+  ended.forEach(r=>{ const k=`${r.out_label}|${r.in_label}`; (_pairGroups[k]=_pairGroups[k]||[]).push(r); });
+  const recurringPair = Object.values(_pairGroups).find(g=>g.length>=2);
   const pairs = (data && data.stock_pairs) || [];
   const sessLabel = (data && data.session_label) || "—";
   const fallback = data && data.data_fallback;
@@ -3488,26 +3498,42 @@ function PulseTab({onDetail}){
         </div>
       </div>
 
-      {/* 6 — PAST ROTATIONS (collapsed, sentences) */}
+      {/* 6 — PAST ROTATIONS (rich cards + recurrence note) */}
       <div>
         <div style={{fontSize:11,fontWeight:700,color:T1,marginBottom:2}}>Past rotations</div>
-        {subtitle("Finished rotations, for context — patterns don't repeat on schedule.")}
+        {subtitle("What happened before — for context only")}
         <div onClick={()=>setShowHist(!showHist)} style={{...card,padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontSize:10,color:T2}}>{ended.length} finished rotation{ended.length===1?"":"s"} on record</span>
           <span style={{color:T3,fontSize:10}}>{showHist?"▲ hide":"▼ show"}</span>
         </div>
         {showHist && (
-          <div style={{...card,marginTop:6}}>
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6}}>
             {ended.length===0 ? (
-              <div style={{padding:"14px",textAlign:"center",color:T3,fontSize:9.5}}>No finished rotations logged yet.</div>
+              <div style={{...card,padding:"14px",textAlign:"center",color:T3,fontSize:9.5}}>No finished rotations logged yet.</div>
             ) : ended.map((r,i)=>(
-              <div key={i} style={{padding:"9px 12px",borderTop:i>0?`1px solid ${DIV}`:"none"}}>
-                <div style={{fontSize:10,color:T1,lineHeight:1.5}}>
-                  Out of <b style={{color:NEG}}>{joinNames(r.out_themes)||r.pair}</b> → into <b style={{color:POS}}>{joinNames(r.in_themes)}</b>
+              <div key={i} style={{...card,padding:"12px 14px"}}>
+                <div style={{fontSize:9,color:T3,marginBottom:7,...num}}>{rangeStr(r.start,r.end)} · lasted {r.days} day{r.days===1?"":"s"}</div>
+                <div style={{fontSize:12,color:T1,fontWeight:600,lineHeight:1.5,marginBottom:9}}>
+                  <b style={{color:NEG}}>{shortSide(r.out_label,r.out_themes)}</b> fell while <b style={{color:POS}}>{shortSide(r.in_label,r.in_themes)}</b> rose
                 </div>
-                <div style={{fontSize:8.5,color:T3,marginTop:2,...num}}>{fmtDate(r.start)}–{fmtDate(r.end)} · lasted {r.days} day{r.days===1?"":"s"} · widest gap {r.max_div}%</div>
+                <div style={{display:"flex",gap:8,marginBottom:4}}>
+                  <span style={{fontSize:9.5,color:NEG,fontWeight:700,flexShrink:0,width:34}}>🔴 Fell</span>
+                  <span style={{fontSize:9.5,color:T2,lineHeight:1.55}}>{(r.out_themes||[]).join(" · ")}</span>
+                </div>
+                <div style={{display:"flex",gap:8,marginBottom:9}}>
+                  <span style={{fontSize:9.5,color:POS,fontWeight:700,flexShrink:0,width:34}}>🟢 Rose</span>
+                  <span style={{fontSize:9.5,color:T2,lineHeight:1.55}}>{(r.in_themes||[]).join(" · ")}</span>
+                </div>
+                <div style={{fontSize:9.5,color:T3,lineHeight:1.55,...num}}>On the strongest day, the two sides were {r.max_div}% apart — a {strengthWord(r.max_div)} rotation.</div>
               </div>
             ))}
+            {recurringPair && (
+              <div style={{background:"rgba(255,214,10,.06)",border:"1px solid rgba(255,214,10,.18)",borderRadius:12,padding:"10px 12px"}}>
+                <div style={{fontSize:10,color:T1,lineHeight:1.6}}>
+                  💡 This same pair has traded off {recurringPair.length===2?"twice":`${recurringPair.length} times`} ({recurringPair.map(r=>rangeStr(r.start,r.end)).join(" and ")}). Worth noticing — but it doesn't mean it will happen again.
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
