@@ -61,39 +61,80 @@ async def timing_middleware(request: Request, call_next):
     return response
 
 
-def _prewarm_portfolio_cache():
-    """Keep the owner's portfolio + watchlist caches HOT so every load stays fast.
+# ── Assembled portfolio/watchlist SNAPSHOTS ──────────────────────────────────
+# get_portfolio_with_pnl is ~13s COLD for a large portfolio (51 positions × several
+# trust sub-fetches each). Instead of making every load pay that, a background loop
+# computes the whole assembled result per user and caches it here; the endpoints
+# serve the snapshot instantly. Mutations invalidate the user's snapshot.
+_SNAPSHOT_TTL = 780        # 13 min — warm loop refreshes every 10, so always fresh
+_pf_snapshot: dict = {}    # user_id -> (monotonic_ts, data)
+_wl_snapshot: dict = {}
 
-    The external pinger keeps the SERVER awake, but the price cache expires every
-    15 min — so without this the first load after a gap pays ~85 cold per-ticker
-    fetches. This warms price + trust (which transitively warms fundamentals /
-    analyst / insider) once ~5s after startup, then re-warms on a ~10-min loop,
-    just under the 15-min price TTL. Paced ~1 req/s to respect Finnhub's 60/min
-    free limit.
+
+def _snapshot_get(store: dict, user_id: str):
+    row = store.get(user_id)
+    if row and (_time.monotonic() - row[0] < _SNAPSHOT_TTL):
+        return row[1]
+    return None
+
+
+def _snapshot_put(store: dict, user_id: str, data) -> None:
+    store[user_id] = (_time.monotonic(), data)
+
+
+def _snapshot_invalidate(user_id: str) -> None:
+    _pf_snapshot.pop(user_id, None)
+    _wl_snapshot.pop(user_id, None)
+
+
+def _portfolio_for(user_id: str):
+    """Assembled portfolio P&L — snapshot if fresh, else compute + cache."""
+    cached = _snapshot_get(_pf_snapshot, user_id)
+    if cached is not None:
+        return cached
+    data = get_portfolio_with_pnl(user_id=user_id)
+    _snapshot_put(_pf_snapshot, user_id, data)
+    return data
+
+
+def _watchlist_for(user_id: str):
+    cached = _snapshot_get(_wl_snapshot, user_id)
+    if cached is not None:
+        return cached
+    data = get_watchlist_with_signals(user_id=user_id)
+    _snapshot_put(_wl_snapshot, user_id, data)
+    return data
+
+
+def _prewarm_portfolio_cache():
+    """Keep assembled portfolio + watchlist SNAPSHOTS hot so every load is instant.
+
+    The external pinger keeps the server awake but the 15-min price cache still
+    expires between visits, so a cold load pays ~85 per-ticker fetches (~13s for the
+    portfolio alone). This computes the full assembled result per user ~5s after
+    startup, then every ~10 min, and caches it — the endpoints serve the snapshot
+    directly. User loads no longer trigger the heavy fetch at all.
     """
     import time as _t
-    from data.fetcher import get_analyst_data
     _t.sleep(5)
     first = True
     while True:
         try:
-            tickers = list({p["ticker"] for p in db.get_portfolio()}
-                           | {w["ticker"] for w in db.get_watchlist()})
-            if tickers:
-                for ticker in tickers:
-                    try:
-                        pd = get_stock_price(ticker)          # portfolio P&L price
-                        get_trust_score_with_fallback(ticker, pd)  # warms trust deps
-                        get_analyst_data(ticker)              # earnings card
-                    except Exception:
-                        pass
-                    _t.sleep(1.0)                             # pace under 60/min
-                print(f"[prewarm] warmed {len(tickers)} tickers"
-                      f"{' (startup)' if first else ''}", flush=True)
+            uids = {p.get("user_id") for p in db.get_portfolio()} \
+                | {w.get("user_id") for w in db.get_watchlist()}
+            uids = {u for u in uids if u}
+            for uid in uids:
+                try:
+                    _snapshot_put(_pf_snapshot, uid, get_portfolio_with_pnl(user_id=uid))
+                    _snapshot_put(_wl_snapshot, uid, get_watchlist_with_signals(user_id=uid))
+                except Exception as exc:
+                    print(f"[prewarm] {uid} snapshot failed: {exc}", flush=True)
+            print(f"[prewarm] snapshots refreshed for {len(uids)} user(s)"
+                  f"{' (startup)' if first else ''}", flush=True)
             first = False
         except Exception as exc:
             print(f"[prewarm] cycle failed: {exc}", flush=True)
-        _t.sleep(600)   # re-warm every 10 min (< 15-min price TTL)
+        _t.sleep(600)   # refresh every 10 min (< 15-min price TTL)
 
 
 @app.on_event("startup")
@@ -169,7 +210,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "perf-warmloop-v1",   # Investment frameworks system
+        "build": "perf-snapshot-v1",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -274,6 +315,12 @@ def perf_probe():
         }
     except Exception:
         pass
+    # Snapshot state — confirms the warm loop has pre-built the served payloads.
+    out["snapshots"] = {
+        "portfolio_users": len(_pf_snapshot),
+        "watchlist_users": len(_wl_snapshot),
+        "portfolio_age_s": round(min((_time.monotonic() - ts for ts, _ in _pf_snapshot.values()), default=-1), 1),
+    }
     return out
 
 
@@ -375,8 +422,9 @@ class UpdatePositionRequest(BaseModel):
 
 @app.get("/api/portfolio")
 def portfolio(user_id: str = Depends(get_current_user)):
-    """All portfolio positions with live P&L."""
-    return get_portfolio_with_pnl(user_id=user_id)
+    """All portfolio positions with live P&L. Served from the background snapshot
+    (refreshed every ~10 min) so a load never waits on cold per-ticker fetches."""
+    return _portfolio_for(user_id)
 
 
 @app.post("/api/portfolio")
@@ -398,12 +446,14 @@ def add_portfolio(req: AddPositionRequest, user_id: str = Depends(get_current_us
     currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes, user_id=user_id)
+    _snapshot_invalidate(user_id)
     return {"status": "added", "ticker": ticker}
 
 
 @app.put("/api/portfolio/{pos_id}")
 def update_portfolio(pos_id: int, req: UpdatePositionRequest, user_id: str = Depends(get_current_user)):
     db.update_position(pos_id, req.shares, req.buy_price, req.buy_date, req.notes, user_id=user_id)
+    _snapshot_invalidate(user_id)
     return {"status": "updated"}
 
 
@@ -411,12 +461,14 @@ def update_portfolio(pos_id: int, req: UpdatePositionRequest, user_id: str = Dep
 def clear_all_portfolio(user_id: str = Depends(get_current_user)):
     """Remove all portfolio positions and watchlist entries. Must be before /{pos_id}."""
     db.clear_all_data(user_id=user_id)
+    _snapshot_invalidate(user_id)
     return {"status": "cleared"}
 
 
 @app.delete("/api/portfolio/{pos_id}")
 def delete_portfolio(pos_id: int, user_id: str = Depends(get_current_user)):
     db.delete_position(pos_id, user_id=user_id)
+    _snapshot_invalidate(user_id)
     return {"status": "deleted"}
 
 
@@ -441,7 +493,7 @@ class WatchlistRequest(BaseModel):
 
 @app.get("/api/watchlist")
 def watchlist(user_id: str = Depends(get_current_user)):
-    return get_watchlist_with_signals(user_id=user_id)
+    return _watchlist_for(user_id)
 
 
 @app.post("/api/watchlist")
@@ -463,12 +515,14 @@ def add_watchlist(req: WatchlistRequest, user_id: str = Depends(get_current_user
     currency = _detect_currency(ticker) or price_data.get("currency", "USD")
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_to_watchlist(ticker, req.notes, user_id=user_id)
+    _snapshot_invalidate(user_id)
     return {"status": "added", "ticker": ticker}
 
 
 @app.delete("/api/watchlist/{ticker}")
 def remove_watchlist(ticker: str, user_id: str = Depends(get_current_user)):
     db.remove_from_watchlist(ticker.upper(), user_id=user_id)
+    _snapshot_invalidate(user_id)
     return {"status": "removed"}
 
 
@@ -2117,8 +2171,8 @@ def strategy(user_id: str = Depends(get_current_user)):
     This endpoint typically returns in <500ms.
     """
     market_data = get_market_data()
-    portfolio_data = get_portfolio_with_pnl(user_id=user_id)
-    watchlist_data = get_watchlist_with_signals(user_id=user_id)
+    portfolio_data = _portfolio_for(user_id)
+    watchlist_data = _watchlist_for(user_id)
 
     my_stocks = []
     for pos in portfolio_data.get("positions", []):
@@ -2460,8 +2514,8 @@ def get_dips(user_id: str = Depends(get_current_user)):
     Returns full filter_results so the frontend can display evidence per filter.
     """
     market_data = get_market_data()
-    portfolio_data = get_portfolio_with_pnl(user_id=user_id)
-    watchlist_data = get_watchlist_with_signals(user_id=user_id)
+    portfolio_data = _portfolio_for(user_id)
+    watchlist_data = _watchlist_for(user_id)
 
     _picks_cache = db.get_picks_cache()
     _all_picks = _json.loads(_picks_cache["all_picks_json"]) if _picks_cache and _picks_cache.get("all_picks_json") else []
