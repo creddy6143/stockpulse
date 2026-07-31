@@ -62,32 +62,38 @@ async def timing_middleware(request: Request, call_next):
 
 
 def _prewarm_portfolio_cache():
-    """Background thread: warm price + fundamentals cache for all portfolio/watchlist tickers.
+    """Keep the owner's portfolio + watchlist caches HOT so every load stays fast.
 
-    Runs 5 seconds after startup so the server is fully ready first.
-    yfinance calls are already serialised by _YF_LIB_LOCK inside fetcher.py,
-    so we just call get_fundamentals() for each ticker and let the cache layer
-    prevent duplicate yfinance requests for analyst_data / insider_data later.
+    The external pinger keeps the SERVER awake, but the price cache expires every
+    15 min — so without this the first load after a gap pays ~85 cold per-ticker
+    fetches. This warms price + trust (which transitively warms fundamentals /
+    analyst / insider) once ~5s after startup, then re-warms on a ~10-min loop,
+    just under the 15-min price TTL. Paced ~1 req/s to respect Finnhub's 60/min
+    free limit.
     """
     import time as _t
+    from data.fetcher import get_analyst_data
     _t.sleep(5)
-    try:
-        tickers = list({p["ticker"] for p in db.get_portfolio()}
-                       | {w["ticker"] for w in db.get_watchlist()})
-        if not tickers:
-            print("[prewarm] No portfolio/watchlist tickers — skipping.", flush=True)
-            return
-        print(f"[prewarm] Warming cache for {len(tickers)} tickers: {', '.join(tickers)}", flush=True)
-        for i, ticker in enumerate(tickers, 1):
-            try:
-                get_stock_price(ticker)
-                get_fundamentals(ticker)
-                print(f"[prewarm] {i}/{len(tickers)} {ticker} cached", flush=True)
-            except Exception as exc:
-                print(f"[prewarm] {ticker} error: {exc}", flush=True)
-        print("[prewarm] Done — first portfolio load will be fast.", flush=True)
-    except Exception as exc:
-        print(f"[prewarm] Startup warm failed: {exc}", flush=True)
+    first = True
+    while True:
+        try:
+            tickers = list({p["ticker"] for p in db.get_portfolio()}
+                           | {w["ticker"] for w in db.get_watchlist()})
+            if tickers:
+                for ticker in tickers:
+                    try:
+                        pd = get_stock_price(ticker)          # portfolio P&L price
+                        get_trust_score_with_fallback(ticker, pd)  # warms trust deps
+                        get_analyst_data(ticker)              # earnings card
+                    except Exception:
+                        pass
+                    _t.sleep(1.0)                             # pace under 60/min
+                print(f"[prewarm] warmed {len(tickers)} tickers"
+                      f"{' (startup)' if first else ''}", flush=True)
+            first = False
+        except Exception as exc:
+            print(f"[prewarm] cycle failed: {exc}", flush=True)
+        _t.sleep(600)   # re-warm every 10 min (< 15-min price TTL)
 
 
 @app.on_event("startup")
@@ -163,7 +169,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "perf-coldstart-v1",   # Investment frameworks system
+        "build": "perf-warmloop-v1",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -260,6 +266,14 @@ def perf_probe():
         "watchlist": len(wl) if isinstance(wl, list) else None,
         "earnings_tickers": ne,
     }
+    # Payload sizes — rules in/out slow JSON transfer as a cause.
+    try:
+        out["payload_kb"] = {
+            "portfolio": round(len(_json.dumps(pf)) / 1024) if pf else 0,
+            "watchlist": round(len(_json.dumps(wl)) / 1024) if wl else 0,
+        }
+    except Exception:
+        pass
     return out
 
 
