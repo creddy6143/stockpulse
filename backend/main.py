@@ -226,6 +226,43 @@ def dip_status():
     }
 
 
+@app.get("/api/perf-probe")
+def perf_probe():
+    """No-auth timing probe — measures the Home-screen critical-path work on the
+    owner's real data so we can see exactly what's slow. Temporary diagnostic."""
+    from portfolio.tracker import get_portfolio_with_pnl, get_watchlist_with_signals
+    out = {}
+
+    def timeit(name, fn):
+        s = _time.monotonic()
+        ok, res = True, None
+        try:
+            res = fn()
+        except Exception as e:
+            ok, res = False, str(e)[:100]
+        out[name] = {"ms": round((_time.monotonic() - s) * 1000), "ok": ok}
+        return res if ok else None
+
+    pf = timeit("portfolio_pnl", lambda: get_portfolio_with_pnl())
+    wl = timeit("watchlist_signals", lambda: get_watchlist_with_signals())
+    timeit("market", lambda: get_market_data())
+
+    def earnings_cost():
+        tks = list({p["ticker"] for p in db.get_portfolio()}
+                   | {w["ticker"] for w in db.get_watchlist()})
+        for t in tks:
+            get_fundamentals(t); get_analyst_data(t); get_stock_price(t)
+        return len(tks)
+    ne = timeit("earnings_loop", earnings_cost)
+
+    out["counts"] = {
+        "positions": len((pf or {}).get("positions", [])) if isinstance(pf, dict) else None,
+        "watchlist": len(wl) if isinstance(wl, list) else None,
+        "earnings_tickers": ne,
+    }
+    return out
+
+
 @app.get("/api/auth/me")
 def auth_me(user_id: str = Depends(get_current_user)):
     """Called once on login. Triggers owner-data migration. Returns user UID."""
