@@ -1,5 +1,4 @@
 """8 core pattern detectors."""
-import yfinance as yf
 from data.fetcher import get_fundamentals, get_insider_data
 from data.cache import cache_get, cache_set
 
@@ -10,6 +9,7 @@ def _get_price_history(ticker: str, period: str = "3mo") -> list:
     if cached:
         return cached
     try:
+        import yfinance as yf   # lazy — keeps pandas/numpy off the cold-start path
         t = yf.Ticker(ticker)
         hist = t.history(period=period)
         result = [

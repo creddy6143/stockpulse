@@ -872,9 +872,27 @@ def get_market_data() -> dict:
         "dax":       "^GDAXI",
         "nifty":     "^NSEI",
     }
-    for name, sym in yf_map.items():
-        meta = _yf_chart(sym)
-        price = float(meta.get("regularMarketPrice") or 0)
+    # Fetch the 7 index charts concurrently — they're independent I/O, so a small
+    # pool turns ~3s of sequential calls into ~1s (bounded workers to respect
+    # Railway's thread cap). Falls back to sequential if threads are unavailable.
+    def _one(item):
+        name, sym = item
+        try:
+            return name, _yf_chart(sym)
+        except Exception:
+            return name, {}
+    metas = {}
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for name, meta in ex.map(_one, list(yf_map.items())):
+                metas[name] = meta
+    except Exception:
+        for item in yf_map.items():
+            n, m = _one(item)
+            metas[n] = m
+    for name, meta in metas.items():
+        price = float((meta or {}).get("regularMarketPrice") or 0)
         if price > 0:
             prev = float(meta.get("chartPreviousClose") or meta.get("previousClose") or price)
             chg = ((price - prev) / prev * 100) if prev else 0

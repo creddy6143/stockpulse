@@ -96,6 +96,9 @@ def startup():
     # Auto-trigger picks scan on startup if cache is empty or older than 23 hours.
     # Runs in background so the server starts instantly.
     _maybe_auto_scan()
+    # Pre-warm market indices immediately — /api/market is on the Home critical path
+    # and is ~3s on a cold cache, so warm it before the first request lands.
+    threading.Thread(target=lambda: get_market_data(), daemon=True).start()
     # Pre-warm price + fundamentals cache so the first /api/portfolio request is fast.
     threading.Thread(target=_prewarm_portfolio_cache, daemon=True).start()
     # Pre-warm dip scan cache so first /api/strategy request returns instantly.
@@ -160,7 +163,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "pulse-p3-pairs",   # Investment frameworks system
+        "build": "perf-coldstart-v1",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
