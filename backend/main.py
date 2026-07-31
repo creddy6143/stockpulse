@@ -210,7 +210,7 @@ def dip_status():
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
     return {
-        "build": "perf-snapshot-v1",   # Investment frameworks system
+        "build": "perf-snapshot-v2",   # Investment frameworks system
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -271,57 +271,6 @@ def dip_status():
         },
         "top_15_by_week_change": top_week_changes,
     }
-
-
-@app.get("/api/perf-probe")
-def perf_probe():
-    """No-auth timing probe — measures the Home-screen critical-path work on the
-    owner's real data so we can see exactly what's slow. Temporary diagnostic."""
-    from portfolio.tracker import get_portfolio_with_pnl, get_watchlist_with_signals
-    out = {}
-
-    def timeit(name, fn):
-        s = _time.monotonic()
-        ok, res = True, None
-        try:
-            res = fn()
-        except Exception as e:
-            ok, res = False, str(e)[:100]
-        out[name] = {"ms": round((_time.monotonic() - s) * 1000), "ok": ok}
-        return res if ok else None
-
-    pf = timeit("portfolio_pnl", lambda: get_portfolio_with_pnl())
-    wl = timeit("watchlist_signals", lambda: get_watchlist_with_signals())
-    timeit("market", lambda: get_market_data())
-
-    def earnings_cost():
-        tks = list({p["ticker"] for p in db.get_portfolio()}
-                   | {w["ticker"] for w in db.get_watchlist()})
-        for t in tks:
-            get_fundamentals(t); get_analyst_data(t); get_stock_price(t)
-        return len(tks)
-    ne = timeit("earnings_loop", earnings_cost)
-
-    out["counts"] = {
-        "positions": len((pf or {}).get("positions", [])) if isinstance(pf, dict) else None,
-        "watchlist": len(wl) if isinstance(wl, list) else None,
-        "earnings_tickers": ne,
-    }
-    # Payload sizes — rules in/out slow JSON transfer as a cause.
-    try:
-        out["payload_kb"] = {
-            "portfolio": round(len(_json.dumps(pf)) / 1024) if pf else 0,
-            "watchlist": round(len(_json.dumps(wl)) / 1024) if wl else 0,
-        }
-    except Exception:
-        pass
-    # Snapshot state — confirms the warm loop has pre-built the served payloads.
-    out["snapshots"] = {
-        "portfolio_users": len(_pf_snapshot),
-        "watchlist_users": len(_wl_snapshot),
-        "portfolio_age_s": round(min((_time.monotonic() - ts for ts, _ in _pf_snapshot.values()), default=-1), 1),
-    }
-    return out
 
 
 @app.get("/api/auth/me")
