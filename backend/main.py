@@ -2801,16 +2801,26 @@ def _detect_wl_situation(item: dict, market_data: dict) -> dict:
     # Still watching — always show. Derive the wording from the RECONCILED signal so
     # this compact list and the detail table (which renders `signal`) always agree.
     upside_str = f" Analysts see +{upside:.0f}% upside." if upside and upside > 0 else ""
+    # Closeness-to-threshold nuance so a 73 (one tick away) reads differently from a 45.
+    if raw_trust is None:
+        near = ""
+    else:
+        gap = 75 - trust
+        if gap <= 5:
+            near = f" Close — only {gap} point{'s' if gap != 1 else ''} below 75."
+        elif gap <= 15:
+            near = " Below the 75 threshold — keep monitoring."
+        else:
+            near = " Well below the 75 threshold."
     sig = (item.get("signal") or "").lower()
     # Match ONLY the reconciled in-zone phrasing — NOT "no clear entry zone", which also
     # contains the words "entry zone".
     if "price in zone" in sig or "in entry zone now" in sig:
         # Price is in the entry band but the score is below the 75 threshold.
-        summary = (f"Price is in the entry zone, but Trust {trust_str} is below the "
-                   f"75 threshold — wait.{upside_str}")
+        summary = (f"Price is in the entry zone, but Trust {trust_str} is below 75 — "
+                   f"wait.{near}{upside_str}")
     else:
-        summary = (f"Trust {trust_str} — not yet at entry threshold.{upside_str} "
-                   f"Wait for ≥75 score.")
+        summary = f"Trust {trust_str} — not yet at entry threshold.{near}{upside_str}"
     return {
         "situation_type": "watching", "label": "Watching", "icon": "👁",
         "action": "WAIT", "color": "var(--indigo)", "priority": 3,
