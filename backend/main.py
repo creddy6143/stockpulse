@@ -283,9 +283,20 @@ def consistency_scan():
     for it in wl:
         sig = it.get("signal") or ""
         grp = it.get("wl_group")
-        if grp != "ready" and "entry zone now" in sig.lower():
+        try:
+            compact = _detect_wl_situation(it, {})["summary"]
+        except Exception:
+            compact = ""
+        detail_in_zone = ("price in zone" in sig.lower()
+                          or "in entry zone now" in sig.lower())
+        compact_in_zone = "in the entry zone" in compact.lower()
+        go_signal = grp != "ready" and "entry zone now" in sig.lower()
+        # Contradiction if the two renderers disagree on the in-zone claim, or a GO
+        # signal survives on a non-ready group.
+        if go_signal or (compact_in_zone != detail_in_zone):
             contradictions.append({"ticker": it["ticker"], "signal": sig,
-                                   "wl_group": grp, "trust": it.get("trust_score")})
+                                   "compact": compact, "wl_group": grp,
+                                   "trust": it.get("trust_score")})
         if it["ticker"] in ("CLSK", "EQIX", "HUT.TO", "SHAZ"):
             try:
                 situ = _detect_wl_situation(it, {})
@@ -299,7 +310,7 @@ def consistency_scan():
                 "upside": it.get("analyst_upside_str"),
                 "entry": it.get("analyst_entry"),
             }
-    return {"build": "wl-consistency-v1", "watchlist_count": len(wl),
+    return {"build": "wl-consistency-v2", "watchlist_count": len(wl),
             "contradictions": contradictions, "samples": samples}
 
 
@@ -2831,7 +2842,9 @@ def _detect_wl_situation(item: dict, market_data: dict) -> dict:
     # this compact list and the detail table (which renders `signal`) always agree.
     upside_str = f" Analysts see +{upside:.0f}% upside." if upside and upside > 0 else ""
     sig = (item.get("signal") or "").lower()
-    if "in zone" in sig or "entry zone" in sig:
+    # Match ONLY the reconciled in-zone phrasing — NOT "no clear entry zone", which also
+    # contains the words "entry zone".
+    if "price in zone" in sig or "in entry zone now" in sig:
         # Price is in the entry band but the score is below the 75 threshold.
         summary = (f"Price is in the entry zone, but Trust {trust_str} is below the "
                    f"75 threshold — wait.{upside_str}")
