@@ -2251,13 +2251,17 @@ def strategy(user_id: str = Depends(get_current_user)):
             priority = 2
 
         else:
-            # trust 70-74: good stock, not yet at entry threshold
+            # trust 70-74: good stock, close to but not yet at the entry threshold.
+            # Surface HOW close (gap to 75) so 74 reads differently from 70.
+            gap = 75 - score
             situation_type = "watching"
             label = "Still Watching"
             icon = "👁"
             action = "WAIT"
             color = "var(--indigo)"
-            summary = f"{grade} · {score}/100 — not yet at ≥75 entry threshold. Continue monitoring."
+            summary = (f"{grade} · {score}/100 — close, only {gap} point"
+                       f"{'s' if gap != 1 else ''} below the 75 entry threshold. "
+                       "Continue monitoring.")
             priority = 3
 
         smart_picks_strat.append({
