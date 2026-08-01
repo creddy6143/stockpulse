@@ -71,6 +71,47 @@ Two invariants enforced by construction:
 
 ---
 
+## Entry zone (price fact) vs Recommendation (score threshold)
+
+These are **different things** and must never be shown as contradictory verdicts:
+
+| | What it is | Source |
+|---|---|---|
+| **Entry zone status** (`signal`) | A **price-level fact**: is the current price inside the computed entry band? True/false regardless of score. | `portfolio/entry_zone.py` → `zone_status_label` |
+| **Recommendation** (`wl_group`) | A **full verdict**: "Ready to Buy" = price in zone **AND** score ≥ 75 **AND** not blocked. | `tracker.py` + `verify_watchlist_signal()` |
+
+A stock can legitimately be **in the price zone but score < 75** → it is *not* "ready". In
+that case the two must speak the same language, never "✓ In entry zone now" beside "wait":
+
+- The **single choke point** is `verify_watchlist_signal()` (every watchlist item passes
+  through it). Invariant it enforces (rule **W5**): *an "in entry zone now" GO signal may
+  appear ONLY with a `wl_group == "ready"`.* Otherwise the signal is reconciled to the
+  combined truth: **`"Price in zone · score X below 75 — wait"`**.
+- `main.py _detect_wl_situation()` (the Strategy compact-list summary) **derives its wording
+  from the reconciled `signal`**, so the compact list and the detail table always agree.
+- `intelligence/verification.py assert_watchlist_consistent()` + `test_watchlist_consistency.py`
+  fail CI if any path emits a GO signal with a non-ready group.
+
+> **Regression history:** this contradiction has bitten twice (RKLB/LMT holdings → Item 13;
+> then CLSK/EQIX/HUT.TO watchlist). Root cause both times: a component rendered a verdict from
+> a *parallel* field instead of the shared reconciled state. Any new surface that shows a
+> buy/wait/ready verdict MUST consume the reconciled `signal`/`wl_group` (watchlist) or
+> `get_recommendation_state()` (holdings) — never recompute its own.
+
+### Components that render a watchlist verdict (all consume the shared state)
+
+| Component | Field consumed | Path |
+|---|---|---|
+| Stocks → Watchlist detail (`CompactWatchRow`) | `signal` (reconciled) | `verify_watchlist_signal()` |
+| Strategy → Watchlist compact list (`_detect_wl_situation`) | derived from `signal` + `wl_group` | `verify_watchlist_signal()` |
+| Expanded watchlist row (`WatchRow`) | `signal`, `zone_reason` | `verify_watchlist_signal()` |
+
+Verdict systems in the app: **holdings** → `get_recommendation_state()`; **watchlist** →
+`verify_watchlist_signal()`; **dip buys** → `dip_rec` (separate, dip-candidate context).
+Frameworks and Pulse are **research lenses only** — they emit no buy/sell/ready verdict.
+
+---
+
 ## The One Threshold
 
 ```
