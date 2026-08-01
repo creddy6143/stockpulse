@@ -696,12 +696,19 @@ def verify_watchlist_signal(
 
     W1  data_quality=unavailable → neutral signal, "watching" group.
     W2  auto_disqualified        → "Auto-disqualified — do not buy", "avoid" group.
-    W3  "ready" group + score<70 → corrected to "watching" (entry not confirmed).
+    W3  "ready" group + score<75 → corrected to "watching" (entry not confirmed).
     W4  "avoid" group + score≥70 + no auto_disq → corrected to "watching".
+    W5  price in zone but group≠"ready" → signal states the COMBINED truth, never a
+        bare "in entry zone now" GO (the cross-screen contradiction bug). This is the
+        single choke point: "in entry zone now" may appear ONLY with a "ready" group.
     """
     score    = trust.get("total_score")
     dq       = trust.get("data_quality", "full")
     auto_disq = trust.get("auto_disqualified", False)
+
+    def _below_threshold_msg(sc):
+        # Combined-truth wording so the price-fact and the recommendation agree.
+        return f"Price in zone · score {sc if sc is not None else '—'} below 75 — wait"
 
     if dq == "unavailable" or score is None:
         return "No fundamental data — monitor manually", "watching", None
@@ -714,7 +721,7 @@ def verify_watchlist_signal(
         _write_log({"ts": time.time(), "ticker": ticker, "output_type": "watchlist_signal",
                     "confidence": "MEDIUM", "score": score,
                     "suppression_reason": None, "warnings": [note]})
-        return "Not yet at ≥75 entry threshold", "watching", note
+        return _below_threshold_msg(score), "watching", note
 
     if wl_group == "avoid" and score >= 70 and not auto_disq:
         note = f"W4_avoid_corrected: score={score} (≥70, no disq) — moved to watching"
@@ -723,4 +730,25 @@ def verify_watchlist_signal(
                     "suppression_reason": None, "warnings": [note]})
         return "Score improved — reassess entry", "watching", note
 
+    # W5 — an "in entry zone now" signal is a GO; it may only stand when the group is
+    # "ready". If the group isn't ready (price in zone but score < 75), reconcile the
+    # signal to the combined truth so the two renderers can never contradict.
+    if wl_group != "ready" and "entry zone now" in (signal or "").lower():
+        note = f"W5_in_zone_below_threshold: score={score} group={wl_group} — signal reconciled"
+        _write_log({"ts": time.time(), "ticker": ticker, "output_type": "watchlist_signal",
+                    "confidence": "MEDIUM", "score": score,
+                    "suppression_reason": None, "warnings": [note]})
+        return _below_threshold_msg(score), wl_group, note
+
     return signal, wl_group, None
+
+
+def assert_watchlist_consistent(signal: str, wl_group: str) -> None:
+    """Invariant guard (used by tests + callers): an 'in entry zone now' GO signal may
+    ONLY appear with a 'ready' group. Raises if a verdict path violates it — this is
+    what fails CI if a new component emits a watchlist verdict off the shared path."""
+    if wl_group != "ready" and "entry zone now" in (signal or "").lower():
+        raise AssertionError(
+            f"Contradictory watchlist verdict: signal={signal!r} with group={wl_group!r}"
+            " — route it through verify_watchlist_signal()."
+        )

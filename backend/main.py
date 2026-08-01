@@ -273,6 +273,36 @@ def dip_status():
     }
 
 
+@app.get("/api/consistency-scan")
+def consistency_scan():
+    """Temporary diagnostic: scan the watchlist for signal↔wl_group contradictions and
+    confirm the compact-list summary agrees with the detail-table signal."""
+    from portfolio.tracker import get_watchlist_with_signals
+    wl = get_watchlist_with_signals()
+    contradictions, samples = [], {}
+    for it in wl:
+        sig = it.get("signal") or ""
+        grp = it.get("wl_group")
+        if grp != "ready" and "entry zone now" in sig.lower():
+            contradictions.append({"ticker": it["ticker"], "signal": sig,
+                                   "wl_group": grp, "trust": it.get("trust_score")})
+        if it["ticker"] in ("CLSK", "EQIX", "HUT.TO", "SHAZ"):
+            try:
+                situ = _detect_wl_situation(it, {})
+            except Exception as e:
+                situ = {"summary": f"err: {e}"}
+            samples[it["ticker"]] = {
+                "trust": it.get("trust_score"),
+                "detail_signal": sig,               # detail-table SIGNAL·ENTRY column
+                "compact_summary": situ["summary"],  # Strategy compact-list summary
+                "wl_group": grp,
+                "upside": it.get("analyst_upside_str"),
+                "entry": it.get("analyst_entry"),
+            }
+    return {"build": "wl-consistency-v1", "watchlist_count": len(wl),
+            "contradictions": contradictions, "samples": samples}
+
+
 @app.get("/api/auth/me")
 def auth_me(user_id: str = Depends(get_current_user)):
     """Called once on login. Triggers owner-data migration. Returns user UID."""
@@ -2797,12 +2827,21 @@ def _detect_wl_situation(item: dict, market_data: dict) -> dict:
             "action": "WAIT", "color": "var(--rose)", "priority": 2,
             "summary": f"Trust {trust_str}. Red flags present — wait for conditions to improve.",
         }
-    # Still watching — always show
+    # Still watching — always show. Derive the wording from the RECONCILED signal so
+    # this compact list and the detail table (which renders `signal`) always agree.
     upside_str = f" Analysts see +{upside:.0f}% upside." if upside and upside > 0 else ""
+    sig = (item.get("signal") or "").lower()
+    if "in zone" in sig or "entry zone" in sig:
+        # Price is in the entry band but the score is below the 75 threshold.
+        summary = (f"Price is in the entry zone, but Trust {trust_str} is below the "
+                   f"75 threshold — wait.{upside_str}")
+    else:
+        summary = (f"Trust {trust_str} — not yet at entry threshold.{upside_str} "
+                   f"Wait for ≥75 score.")
     return {
         "situation_type": "watching", "label": "Watching", "icon": "👁",
         "action": "WAIT", "color": "var(--indigo)", "priority": 3,
-        "summary": f"Trust {trust_str} — not yet at entry threshold.{upside_str} Wait for ≥75 score.",
+        "summary": summary,
     }
 
 
