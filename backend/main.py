@@ -213,12 +213,13 @@ def dip_status():
         threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
     _rpo = _rpo_scan_result
     return {
-        "build": "rpo-screen-v1",
+        "build": "rpo-screen-v2",
         "rpo_screen": {
             "ranked": len(_rpo.get("ranked") or []),
             "unavailable": len(_rpo.get("unavailable") or []),
             "na_count": _rpo.get("na_count"),
             "universe": _rpo.get("universe"),
+            "diag": _rpo_diag,
             "top5": [{"t": r["ticker"], "ratio": r.get("ratio"), "variant": r.get("variant"),
                       "rpo_bn": round((r.get("rpo") or 0) / 1e9, 1), "ccy": r.get("rpo_ccy"),
                       "as_of": r.get("rpo_as_of"), "stale": r.get("stale")}
@@ -1072,6 +1073,7 @@ def _refresh_elite_scan() -> None:
 _rpo_scan_result: dict = {"ranked": [], "unavailable": [], "na_count": 0,
                           "as_of": None, "universe": 0}
 _rpo_scan_ts: float = 0.0
+_rpo_diag: dict = {"running": False, "done": 0, "universe": 0, "error": None}
 _RPO_SCAN_TTL = 6 * 3600   # 6h — RPO is filed quarterly, so it barely moves intraday
 _rpo_lock = threading.Lock()
 
@@ -1079,10 +1081,15 @@ _rpo_lock = threading.Lock()
 def _refresh_rpo_scan() -> None:
     """Screen the curated universe for contracted future revenue (RPO from SEC EDGAR)
     relative to market cap. US + SEC-filing ADRs only; Indian/ARR reported as
-    unavailable. Trust + shared recommendation state attached, unchanged. ~6h TTL."""
-    global _rpo_scan_result, _rpo_scan_ts
+    unavailable. Trust + shared recommendation state attached, unchanged. ~6h TTL.
+
+    EDGAR-first so it's cheap: skip Indian outright, probe EDGAR RPO for the rest, and
+    only pull get_fundamentals (market cap) for tickers that actually have an RPO figure.
+    Non-RPO tickers are classified from the pick's own sector — no extra fetch."""
+    global _rpo_scan_result, _rpo_scan_ts, _rpo_diag
     if not _rpo_lock.acquire(blocking=False):
         return
+    _rpo_diag = {"running": True, "done": 0, "universe": 0, "error": None}
     try:
         from intelligence.elite import contracted_revenue as cr
         from intelligence.recommendation import get_recommendation_state
@@ -1091,61 +1098,82 @@ def _refresh_rpo_scan() -> None:
 
         _pc = db.get_picks_cache()
         picks = _json.loads(_pc["all_picks_json"]) if _pc and _pc.get("all_picks_json") else []
-        # De-dupe by ticker, keep the trust dict from the pick.
         seen, universe = set(), []
         for p in picks:
             t = p.get("ticker")
             if t and t not in seen:
                 seen.add(t)
                 universe.append(p)
+        _rpo_diag["universe"] = len(universe)
 
-        ranked, unavailable, na_count = [], [], 0
-        for p in universe:
-            t = p["ticker"]
+        def _rec_of(trust):
             try:
-                fund = get_fundamentals(t)
-                row = cr.build_row(t, fund, rates, is_indian=is_indian_stock(t))
-            except Exception:
-                continue
-            row["name"] = p.get("name") or (fund.get("name") if isinstance(fund, dict) else None) or t
-            # Shared Trust + recommendation state (unchanged engine) — informational only.
-            trust = p.get("trust") or {}
-            row["trust"] = trust.get("total_score")
-            row["grade"] = trust.get("grade")
-            try:
-                rec = get_recommendation_state({
+                r = get_recommendation_state({
                     "auto_disqualified": trust.get("auto_disqualified"),
                     "trust_score": trust.get("total_score"),
                     "grade": trust.get("grade"),
                     "verification": trust.get("verification"),
                     "display_score": trust.get("display_score", trust.get("total_score")),
-                    "group": None,
-                })
-                row["rec"] = rec.get("rec")
-                row["health_label"] = rec.get("health_label")
+                    "group": None})
+                return r.get("rec"), r.get("health_label")
             except Exception:
-                row["rec"] = None
+                return None, None
 
-            if row["status"] == "ok" and row.get("ratio") is not None:
+        ranked, unavailable, na_count = [], [], 0
+        for i, p in enumerate(universe):
+            t = p["ticker"]
+            trust = p.get("trust") or {}
+            name = p.get("name") or t
+            sector = p.get("sector")
+            try:
+                if is_indian_stock(t):
+                    rpo = None
+                else:
+                    rpo = cr.fetch_rpo(t)   # EDGAR — the cheap probe
+
+                if rpo:
+                    # Only now spend a fundamentals fetch (need market cap + real sector),
+                    # and reuse the RPO we already fetched.
+                    fund = get_fundamentals(t) or {}
+                    row = cr.build_row(t, {"market_cap": fund.get("market_cap"),
+                                           "currency": fund.get("currency"),
+                                           "sector": fund.get("sector") or sector,
+                                           "industry": fund.get("industry")},
+                                       rates, rpo=rpo)
+                else:
+                    variant, status, reason = cr.variant_and_applicability(
+                        sector, "", False, is_indian_stock(t))
+                    row = {"ticker": t, "sector": sector, "variant": variant,
+                           "status": status, "reason": reason}
+            except Exception:
+                continue
+            finally:
+                _rpo_diag["done"] = i + 1
+
+            row["name"] = name
+            row["trust"] = trust.get("total_score")
+            row["grade"] = trust.get("grade")
+            row["rec"], row["health_label"] = _rec_of(trust)
+
+            if row.get("status") == "ok" and row.get("ratio") is not None:
                 ranked.append(row)
-            elif row["status"] == "na":
+            elif row.get("status") == "na":
                 na_count += 1
-            else:  # unavailable (Indian, or applicable-sector with no structured RPO)
+            else:
                 unavailable.append(row)
 
         ranked.sort(key=lambda r: r["ratio"], reverse=True)
         unavailable.sort(key=lambda r: (r.get("trust") or 0), reverse=True)
         _rpo_scan_result = {
-            "ranked": ranked,
-            "unavailable": unavailable[:20],
-            "na_count": na_count,
-            "universe": len(universe),
-            "as_of": datetime.utcnow().isoformat() + "Z",
+            "ranked": ranked, "unavailable": unavailable[:20], "na_count": na_count,
+            "universe": len(universe), "as_of": datetime.utcnow().isoformat() + "Z",
         }
         _rpo_scan_ts = _time.monotonic()
+        _rpo_diag.update({"running": False})
         print(f"[RPO] {len(ranked)} ranked, {len(unavailable)} unavailable, "
               f"{na_count} N/A from {len(universe)} universe", flush=True)
     except Exception as exc:
+        _rpo_diag.update({"running": False, "error": str(exc)[:160]})
         print(f"[RPO] refresh failed: {exc}", flush=True)
     finally:
         _rpo_lock.release()

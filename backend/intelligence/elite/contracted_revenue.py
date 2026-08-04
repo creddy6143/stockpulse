@@ -117,14 +117,20 @@ def _days_since(iso_date):
         return None
 
 
-def build_row(ticker: str, fundamentals: dict, rates: dict, is_indian: bool = False) -> dict:
-    """One screen row for a ticker — never raises, never estimates."""
+_FETCH = object()   # sentinel: fetch RPO ourselves unless the caller passes it
+
+
+def build_row(ticker: str, fundamentals: dict, rates: dict, is_indian: bool = False,
+              rpo=_FETCH) -> dict:
+    """One screen row for a ticker — never raises, never estimates. Pass ``rpo`` to reuse
+    an already-fetched EDGAR result (avoids a second call)."""
     mcap = fundamentals.get("market_cap") or 0
     mcap_ccy = (fundamentals.get("currency") or "USD").upper()
     sector = fundamentals.get("sector")
     industry = fundamentals.get("industry")
 
-    rpo = None if is_indian else fetch_rpo(ticker)
+    if rpo is _FETCH:
+        rpo = None if is_indian else fetch_rpo(ticker)
     variant, status, reason = variant_and_applicability(
         sector, industry, rpo is not None, is_indian)
 
