@@ -129,6 +129,7 @@ export const getFrameworks = () => request('/api/frameworks');
 export const getFrameworksFor = (t) => request(`/api/frameworks/${encodeURIComponent(t)}`);
 export const getAnalogs = () => request('/api/analogs');
 export const getRotation = () => request('/api/rotation');
+export const getContractedRevenue = () => request('/api/contracted-revenue');
 
 // ── PRICE ALERTS ─────────────────────────────────────────────────────────────
 

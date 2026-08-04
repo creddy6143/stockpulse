@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite, getFrameworks, getFrameworksFor, getRotation } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite, getFrameworks, getFrameworksFor, getRotation, getContractedRevenue } from "./api/client";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import AuthScreen from "./screens/AuthScreen";
@@ -3541,19 +3541,119 @@ function PulseTab({onDetail}){
   );
 }
 
+// ── STRATEGY → CONTRACTED (RPO ÷ market cap) sub-tab ────────────────────
+function ContractedTab({onDetail}){
+  const [data,setData] = useState(null);
+  const [showHelp,setShowHelp] = useState(false);
+  const [showNA,setShowNA] = useState(false);
+  useEffect(()=>{ getContractedRevenue().then(setData).catch(()=>{}); },[]);
+
+  const ranked = (data&&data.ranked)||[];
+  const unavail = (data&&data.unavailable)||[];
+  const na = (data&&data.na_count)||0;
+  const sym = c => c==="USD"?"$":c==="EUR"?"€":c==="GBP"?"£":"";
+  const bn = (v,c)=> v!=null ? `${sym(c)}${(v/1e9).toFixed(1)}B${c&&!["USD","EUR","GBP"].includes(c)?" "+c:""}` : "—";
+  const mmm = s => { if(!s) return "—"; const d=new Date(s+"T00:00:00"); return isNaN(d)?s:d.toLocaleDateString(undefined,{month:"short",year:"numeric"}); };
+  const chip = {fontFamily:"var(--mono)",fontSize:7.5,fontWeight:700,padding:"1px 5px",borderRadius:3,background:"#eef2ff",color:"var(--indigo)",border:"1px solid #c7d2fe"};
+
+  return (
+    <div style={{padding:"10px 12px 14px"}}>
+      {/* Plain-language explainer — required */}
+      <div style={{fontSize:9.5,color:"var(--t2)",lineHeight:1.6,background:"var(--card2)",borderRadius:8,padding:"9px 11px",marginBottom:8}}>
+        <b>Contracted future revenue ÷ market cap.</b> A screening metric — <b>not</b> a return forecast.
+        It's already-won work (order book / backlog / software RPO) that will be recognised as revenue over
+        several years — <b>not profit</b>. A high ratio can also reflect low margins, execution delays, or
+        client payment risk — often exactly why the market values the company low.
+        <span onClick={()=>setShowHelp(!showHelp)} style={{color:"var(--indigo)",cursor:"pointer",fontWeight:700}}> {showHelp?"Less":"How to read?"}</span>
+      </div>
+      {showHelp && (
+        <div style={{fontSize:9,color:"var(--t2)",lineHeight:1.6,padding:"0 2px 8px"}}>
+          <b>Metric variants</b> (all sourced from the one GAAP figure, RPO): <b>Backlog</b> — defence/aerospace ·
+          <b> Order book</b> — engineering/construction · <b>RPO</b> — SaaS/software. The underlying number is the
+          same disclosure; the label reflects the business model.<br/>
+          <b>Source:</b> SEC EDGAR filings (US companies + foreign issuers that file a 20-F). <b>Order book for
+          Indian companies, and ARR, are not published in free structured filings</b> — those are listed as not
+          available, never estimated. Every figure shows its "as of" date; anything older than 6 months is flagged <b>stale</b>.
+          Trust and recommendation state come from the shared engine, unchanged — no buy signals here.
+        </div>
+      )}
+
+      {/* Ranked list */}
+      <div style={{display:"grid",gridTemplateColumns:"1.5fr .6fr .9fr",fontFamily:"var(--mono)",fontSize:7,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5,padding:"0 12px 4px"}}>
+        <span>Stock</span><span style={{textAlign:"center"}}>Ratio</span><span style={{textAlign:"right"}}>Contracted rev · as of</span>
+      </div>
+      <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadowsm)",overflow:"hidden"}}>
+        {!data ? <div style={{padding:"26px 20px",textAlign:"center",color:"var(--t3)",fontSize:11}}>Screening filings… (first load reads SEC EDGAR — can take a minute)</div>
+        : ranked.length===0 ? <div style={{padding:"26px 20px",textAlign:"center",color:"var(--t3)",fontSize:11}}>No companies with structured contracted-revenue data in this universe yet.</div>
+        : ranked.map((r,i)=>(
+          <div key={r.ticker} onClick={()=>onDetail&&onDetail({ticker:r.ticker,name:r.name,flag:"",price:0,trust:r.trust||50,rec:r.grade||"—"})}
+            style={{display:"grid",gridTemplateColumns:"1.5fr .6fr .9fr",alignItems:"center",gap:6,padding:"9px 12px",borderTop:i>0?"1px solid rgba(15,23,42,.04)":"none",cursor:"pointer"}}>
+            <div style={{minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:5}}>
+                <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:12}}>{r.ticker}</span>
+                <span style={chip}>{r.variant}</span>
+              </div>
+              <div style={{fontSize:8,color:"var(--t3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.name}{r.trust!=null?` · Trust ${r.trust}`:""}{r.health_label?` · ${r.health_label}`:""}</div>
+            </div>
+            <div style={{textAlign:"center"}}>
+              <span style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--indigo)"}}>{r.ratio!=null?`${r.ratio}×`:"—"}</span>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:600,color:"var(--t1)"}}>{bn(r.rpo,r.rpo_ccy)}</div>
+              <div style={{fontSize:7.5,color:"var(--t3)"}}>
+                as of {mmm(r.rpo_as_of)}{r.stale && <span style={{color:"var(--amber)",fontWeight:700}}> · STALE</span>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Not-available / N/A section */}
+      <div style={{marginTop:10}}>
+        <div onClick={()=>setShowNA(!showNA)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 4px",cursor:"pointer"}}>
+          <span style={{fontFamily:"var(--mono)",fontSize:8.5,color:"var(--t3)",textTransform:"uppercase",letterSpacing:.5}}>Not available / not applicable</span>
+          <span style={{color:"var(--t3)",fontSize:10}}>{showNA?"▲":"▼"} {unavail.length}+{na}</span>
+        </div>
+        {showNA && (
+          <div style={{background:"var(--white)",borderRadius:12,boxShadow:"var(--shadowsm)",overflow:"hidden"}}>
+            <div style={{padding:"8px 12px",fontSize:9,color:"var(--t2)",lineHeight:1.5,borderBottom:"1px solid rgba(15,23,42,.04)"}}>
+              <b>{na}</b> stocks show <b>N/A</b> — business models with no contracted forward revenue (banks, retail, consumer, most pharma). The rows below have a model that <i>could</i> have contracted revenue, but it isn't in free structured filings:
+            </div>
+            {unavail.length===0 ? <div style={{padding:"12px",textAlign:"center",color:"var(--t3)",fontSize:9.5}}>None.</div>
+            : unavail.map((r,i)=>(
+              <div key={r.ticker} style={{padding:"7px 12px",borderTop:i>0?"1px solid rgba(15,23,42,.04)":"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:5}}>
+                  <span style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:11}}>{r.ticker}</span>
+                  <span style={{fontSize:8,color:"var(--t3)"}}>{r.name}</span>
+                </div>
+                <div style={{fontSize:8.5,color:"var(--t3)",lineHeight:1.4,marginTop:1}}>{r.reason}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{textAlign:"center",padding:"9px 16px 2px",fontFamily:"var(--mono)",fontSize:7.5,color:"var(--t3)",lineHeight:1.5}}>
+        Source: SEC EDGAR (RPO, ASC 606 / IFRS 15). Screening metric, not a forecast. Figures go stale — always check the "as of" date.
+      </div>
+    </div>
+  );
+}
+
 function StrategyScreen({strategyData, onDetail}) {
   const [tab,setTab] = useState(0);
   const [exp,setExp] = useState(null);
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
   const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[], unwindThemes:[], sectorShocks:[]};
-  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs","Frameworks","Pulse"];
+  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs","Frameworks","Pulse","Contracted"];
   const _tierOrder = {"A":0,"B":1,"C":2};
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
     (SD.dipBuys||[]).map(mapStrategy).sort((a,b)=>(_tierOrder[a.dip_tier]||1)-(_tierOrder[b.dip_tier]||1)||(b.quality_score||0)-(a.quality_score||0)),
     [],  // Analogs tab — data managed internally by AnalogsTab component
     [],  // Frameworks tab — data managed internally by FrameworksTab component
-    []   // Pulse tab — data managed internally by PulseTab component
+    [],  // Pulse tab — data managed internally by PulseTab component
+    []   // Contracted tab — data managed internally by ContractedTab component
   ];
   const items = (tab>=4) ? [] : lists[tab];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
@@ -3625,7 +3725,7 @@ function StrategyScreen({strategyData, onDetail}) {
           {tabs.map((t,i)=>(
             <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:"0 0 auto",minWidth:i>=4?"58px":"0",padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:i>=4?9:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
               {t}
-              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":i===5?"🧮":i===6?"↔️":lists[i].length}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":i===5?"🧮":i===6?"↔️":i===7?"📑":lists[i].length}</span>
             </button>
           ))}
         </div>
@@ -3637,6 +3737,9 @@ function StrategyScreen({strategyData, onDetail}) {
         )}
         {tab===6&&(
           <PulseTab onDetail={onDetail}/>
+        )}
+        {tab===7&&(
+          <ContractedTab onDetail={onDetail}/>
         )}
         {/* Tier 4b — Unwind banners at the top of the Dip Buys tab. Affected
             stocks are grouped here under one banner per theme, forced to WATCH,
