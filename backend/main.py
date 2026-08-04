@@ -209,8 +209,21 @@ def dip_status():
 
     candidates = list(_dip_scan_result)
     age_s = round(_time.monotonic() - _dip_scan_ts, 1) if _dip_scan_ts else None
+    if _time.monotonic() - _rpo_scan_ts > _RPO_SCAN_TTL:
+        threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
+    _rpo = _rpo_scan_result
     return {
-        "build": "perf-snapshot-v2",   # Investment frameworks system
+        "build": "rpo-screen-v1",
+        "rpo_screen": {
+            "ranked": len(_rpo.get("ranked") or []),
+            "unavailable": len(_rpo.get("unavailable") or []),
+            "na_count": _rpo.get("na_count"),
+            "universe": _rpo.get("universe"),
+            "top5": [{"t": r["ticker"], "ratio": r.get("ratio"), "variant": r.get("variant"),
+                      "rpo_bn": round((r.get("rpo") or 0) / 1e9, 1), "ccy": r.get("rpo_ccy"),
+                      "as_of": r.get("rpo_as_of"), "stale": r.get("stale")}
+                     for r in (_rpo.get("ranked") or [])[:5]],
+        },
         "cf_worker_configured": bool(os.getenv("CF_WORKER_URL", "").strip()),
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
@@ -1053,6 +1066,89 @@ def _refresh_elite_scan() -> None:
     except Exception as exc:
         _elite_diag.update({"running": False, "error": str(exc)[:160]})
         print(f"[ELITE] refresh failed: {exc}", flush=True)
+
+
+# ── Contracted-revenue (RPO ÷ market cap) screen ─────────────────────────────
+_rpo_scan_result: dict = {"ranked": [], "unavailable": [], "na_count": 0,
+                          "as_of": None, "universe": 0}
+_rpo_scan_ts: float = 0.0
+_RPO_SCAN_TTL = 6 * 3600   # 6h — RPO is filed quarterly, so it barely moves intraday
+_rpo_lock = threading.Lock()
+
+
+def _refresh_rpo_scan() -> None:
+    """Screen the curated universe for contracted future revenue (RPO from SEC EDGAR)
+    relative to market cap. US + SEC-filing ADRs only; Indian/ARR reported as
+    unavailable. Trust + shared recommendation state attached, unchanged. ~6h TTL."""
+    global _rpo_scan_result, _rpo_scan_ts
+    if not _rpo_lock.acquire(blocking=False):
+        return
+    try:
+        from intelligence.elite import contracted_revenue as cr
+        from intelligence.recommendation import get_recommendation_state
+        from data.fetcher import get_exchange_rates
+        rates = get_exchange_rates()
+
+        _pc = db.get_picks_cache()
+        picks = _json.loads(_pc["all_picks_json"]) if _pc and _pc.get("all_picks_json") else []
+        # De-dupe by ticker, keep the trust dict from the pick.
+        seen, universe = set(), []
+        for p in picks:
+            t = p.get("ticker")
+            if t and t not in seen:
+                seen.add(t)
+                universe.append(p)
+
+        ranked, unavailable, na_count = [], [], 0
+        for p in universe:
+            t = p["ticker"]
+            try:
+                fund = get_fundamentals(t)
+                row = cr.build_row(t, fund, rates, is_indian=is_indian_stock(t))
+            except Exception:
+                continue
+            row["name"] = p.get("name") or (fund.get("name") if isinstance(fund, dict) else None) or t
+            # Shared Trust + recommendation state (unchanged engine) — informational only.
+            trust = p.get("trust") or {}
+            row["trust"] = trust.get("total_score")
+            row["grade"] = trust.get("grade")
+            try:
+                rec = get_recommendation_state({
+                    "auto_disqualified": trust.get("auto_disqualified"),
+                    "trust_score": trust.get("total_score"),
+                    "grade": trust.get("grade"),
+                    "verification": trust.get("verification"),
+                    "display_score": trust.get("display_score", trust.get("total_score")),
+                    "group": None,
+                })
+                row["rec"] = rec.get("rec")
+                row["health_label"] = rec.get("health_label")
+            except Exception:
+                row["rec"] = None
+
+            if row["status"] == "ok" and row.get("ratio") is not None:
+                ranked.append(row)
+            elif row["status"] == "na":
+                na_count += 1
+            else:  # unavailable (Indian, or applicable-sector with no structured RPO)
+                unavailable.append(row)
+
+        ranked.sort(key=lambda r: r["ratio"], reverse=True)
+        unavailable.sort(key=lambda r: (r.get("trust") or 0), reverse=True)
+        _rpo_scan_result = {
+            "ranked": ranked,
+            "unavailable": unavailable[:20],
+            "na_count": na_count,
+            "universe": len(universe),
+            "as_of": datetime.utcnow().isoformat() + "Z",
+        }
+        _rpo_scan_ts = _time.monotonic()
+        print(f"[RPO] {len(ranked)} ranked, {len(unavailable)} unavailable, "
+              f"{na_count} N/A from {len(universe)} universe", flush=True)
+    except Exception as exc:
+        print(f"[RPO] refresh failed: {exc}", flush=True)
+    finally:
+        _rpo_lock.release()
 
 
 def _enrich_shock_ticker_data(base_td: dict, membership: dict) -> dict:
@@ -2517,6 +2613,16 @@ def get_elite(user_id: str = Depends(get_current_user)):
         "scanned_at": _elite_scan_result[0]["stocks"][0].get("scanned_at", "")
                        if sectors and sectors[0].get("stocks") else "",
     }
+
+
+@app.get("/api/contracted-revenue")
+def contracted_revenue(user_id: str = Depends(get_current_user)):
+    """Screen: contracted future revenue (RPO from SEC EDGAR) ÷ market cap, ranked
+    descending. A screening metric — NOT a return forecast. US + SEC-filing ADRs only;
+    Indian order book / ARR shown as not-available. Served from a ~6h background cache."""
+    if _time.monotonic() - _rpo_scan_ts > _RPO_SCAN_TTL:
+        threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
+    return dict(_rpo_scan_result)
 
 
 # ── INVESTMENT FRAMEWORKS (GARP · F-Score · Rule of 40 · Altman Z) ────────────
