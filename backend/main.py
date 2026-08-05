@@ -213,7 +213,7 @@ def dip_status():
         threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
     _rpo = _rpo_scan_result
     return {
-        "build": "rpo-screen-v2",
+        "build": "rpo-screen-v3",
         "rpo_screen": {
             "ranked": len(_rpo.get("ranked") or []),
             "unavailable": len(_rpo.get("unavailable") or []),
@@ -1078,6 +1078,23 @@ _RPO_SCAN_TTL = 6 * 3600   # 6h — RPO is filed quarterly, so it barely moves i
 _rpo_lock = threading.Lock()
 
 
+def _worker_marketcap(ticker: str):
+    """Lightweight market cap + currency from the Yahoo price module (worker-routed) —
+    far faster than get_fundamentals' full chain. Returns (mcap|None, currency|None)."""
+    import requests
+    from data.fetcher import _CF_WORKER_URL, _HEADERS
+    url = (f"{_CF_WORKER_URL}/yahoo-qs/{ticker}?modules=price" if _CF_WORKER_URL
+           else f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=price")
+    try:
+        r = requests.get(url, headers=_HEADERS, timeout=10)
+        p = r.json()["quoteSummary"]["result"][0]["price"]
+        mc = p.get("marketCap")
+        mc = mc.get("raw") if isinstance(mc, dict) else mc
+        return (float(mc) if mc else None, p.get("currency"))
+    except Exception:
+        return None, None
+
+
 def _refresh_rpo_scan() -> None:
     """Screen the curated universe for contracted future revenue (RPO from SEC EDGAR)
     relative to market cap. US + SEC-filing ADRs only; Indian/ARR reported as
@@ -1132,13 +1149,14 @@ def _refresh_rpo_scan() -> None:
                     rpo = cr.fetch_rpo(t)   # EDGAR — the cheap probe
 
                 if rpo:
-                    # Only now spend a fundamentals fetch (need market cap + real sector),
-                    # and reuse the RPO we already fetched.
-                    fund = get_fundamentals(t) or {}
-                    row = cr.build_row(t, {"market_cap": fund.get("market_cap"),
-                                           "currency": fund.get("currency"),
-                                           "sector": fund.get("sector") or sector,
-                                           "industry": fund.get("industry")},
+                    # Only now spend the light lookups: authoritative sector/industry (for
+                    # the correct variant label) + a fast market-cap fetch. Reuse the RPO.
+                    from data.fetcher import get_asset_profile
+                    ap = get_asset_profile(t) or {}
+                    mc, ccy = _worker_marketcap(t)
+                    row = cr.build_row(t, {"market_cap": mc, "currency": ccy or "USD",
+                                           "sector": ap.get("sector") or sector,
+                                           "industry": ap.get("industry")},
                                        rates, rpo=rpo)
                 else:
                     variant, status, reason = cr.variant_and_applicability(
