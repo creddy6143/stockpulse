@@ -216,7 +216,7 @@ def dip_status():
         threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
     _rpo = _rpo_scan_result
     return {
-        "build": "rpo-persist-v1",
+        "build": "rpo-persist-v2",
         "rpo_screen": {
             "ranked": len(_rpo.get("ranked") or []),
             "unavailable": len(_rpo.get("unavailable") or []),
