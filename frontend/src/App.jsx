@@ -3646,20 +3646,15 @@ function StrategyScreen({strategyData, onDetail}) {
   const [playbookCache,setPlaybookCache] = useState({});
   const [loadingKey,setLoadingKey] = useState(null);
   const SD = strategyData || {myStocks:[], watchlist:[], smartPicks:[], dipBuys:[], unwindThemes:[], sectorShocks:[]};
-  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys","Analogs","Frameworks","Pulse","Contracted"];
+  // The 4 "what to do with stocks" tabs. The analytical screeners (Analogs,
+  // Frameworks, Pulse, Contracted) now live under the Elite screen.
+  const tabs = ["My Stocks","Watchlist","Smart Picks","Dip Buys"];
   const _tierOrder = {"A":0,"B":1,"C":2};
   const lists = [(SD.myStocks||[]).map(mapStrategy), (SD.watchlist||[]).map(mapStrategy), (SD.smartPicks||[]).map(mapStrategy),
     (SD.dipBuys||[]).map(mapStrategy).sort((a,b)=>(_tierOrder[a.dip_tier]||1)-(_tierOrder[b.dip_tier]||1)||(b.quality_score||0)-(a.quality_score||0)),
-    [],  // Analogs tab — data managed internally by AnalogsTab component
-    [],  // Frameworks tab — data managed internally by FrameworksTab component
-    [],  // Pulse tab — data managed internally by PulseTab component
-    []   // Contracted tab — data managed internally by ContractedTab component
   ];
-  const items = (tab>=4) ? [] : lists[tab];
+  const items = lists[tab] || [];
   const total = (SD.myStocks||[]).length+(SD.watchlist||[]).length+(SD.smartPicks||[]).length+(SD.dipBuys||[]).length;
-  // Portfolio/watchlist ticker sets for AnalogsTab badge detection
-  const portfolioTickers = new Set((SD.myStocks||[]).map(s=>s.ticker));
-  const watchlistTickers = new Set((SD.watchlist||[]).map(s=>s.ticker));
 
   // For Dip Buys tab: always show all 3 grade sections even when empty.
   // Build a displayItems array that injects grade-header and empty-grade
@@ -3721,35 +3716,23 @@ function StrategyScreen({strategyData, onDetail}) {
         <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#eef2ff",color:"var(--indigo)",border:"1px solid #c7d2fe",padding:"3px 10px",borderRadius:10,fontWeight:700}}>{total} active</span>
       </div>
       <div style={{background:"var(--white)",borderRadius:"var(--r)",boxShadow:"var(--shadow)",overflow:"hidden"}}>
-        <div style={{display:"flex",borderBottom:"1px solid var(--t4)",overflowX:"auto",scrollbarWidth:"none"}}>
+        <div style={{display:"flex",borderBottom:"1px solid var(--t4)"}}>
           {tabs.map((t,i)=>(
-            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:"0 0 auto",minWidth:i>=4?"58px":"0",padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:i>=4?9:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
+            <button key={i} onClick={()=>{setTab(i);setExp(null);}} style={{flex:1,padding:"10px 4px",border:"none",background:"transparent",fontFamily:"var(--dm)",fontSize:10,fontWeight:700,cursor:"pointer",color:tab===i?"var(--indigo)":"var(--t3)",borderBottom:tab===i?"2.5px solid var(--indigo)":"2.5px solid transparent",transition:"all .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
               {t}
-              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{i===4?"🔍":i===5?"🧮":i===6?"↔️":i===7?"📑":lists[i].length}</span>
+              <span style={{fontFamily:"var(--mono)",fontSize:9,background:tab===i?"#eef2ff":"transparent",color:tab===i?"var(--indigo)":"var(--t3)",padding:"1px 5px",borderRadius:8,fontWeight:700}}>{lists[i].length}</span>
             </button>
           ))}
         </div>
-        {tab===4&&(
-          <AnalogsTab onDetail={onDetail} portfolioTickers={portfolioTickers} watchlistTickers={watchlistTickers}/>
-        )}
-        {tab===5&&(
-          <FrameworksTab onDetail={onDetail}/>
-        )}
-        {tab===6&&(
-          <PulseTab onDetail={onDetail}/>
-        )}
-        {tab===7&&(
-          <ContractedTab onDetail={onDetail}/>
-        )}
         {/* Tier 4b — Unwind banners at the top of the Dip Buys tab. Affected
             stocks are grouped here under one banner per theme, forced to WATCH,
             with a live stabilization tracker and per-stock reclaim levels. */}
         {tab===3&&(SD.unwindThemes||[]).map(u=><UnwindBanner key={u.theme_key} u={u}/>)}
         {tab===3&&(SD.sectorShocks||[]).map(s2=><ShockBanner key={s2.theme_key} s={s2}/>)}
-        {tab<4&&tab!==3&&items.length===0&&(
+        {tab!==3&&items.length===0&&(
           <div style={{padding:"30px 20px",textAlign:"center",color:"var(--t3)",fontSize:12}}>No situations detected</div>
         )}
-        {tab<4&&displayItems.map((s,i)=>{
+        {displayItems.map((s,i)=>{
           // ── Grade header sentinel ──────────────────────────────────────────
           if(s._isGradeHeader){
             const tier=s.tier;
@@ -3929,38 +3912,41 @@ function StrategyScreen({strategyData, onDetail}) {
 }
 
 // ── ELITE / MUST-OWN SCREEN ──────────────────────────
-function EliteScreen({eliteData, onDetail}){
+function EliteScreen({eliteData, strategyData, onDetail}){
   const [exp,setExp] = useState(null);
   const [sectF,setSectF] = useState("All");
+  const [eTab,setETab] = useState(0);
+  const ETABS = ["Must-Own","Analogs","Frameworks","Pulse","Contracted"];
+  const _sd = strategyData || {myStocks:[], watchlist:[]};
+  const portfolioTickers = new Set((_sd.myStocks||[]).map(s=>s.ticker));
+  const watchlistTickers = new Set((_sd.watchlist||[]).map(s=>s.ticker));
   const sectors = (eliteData && eliteData.sectors) || [];
   const total = (eliteData && eliteData.total) || 0;
   const allStocks = sectors.flatMap(s=>s.stocks||[]);
   const currentStocks = sectF==="All" ? allStocks : ((sectors.find(s=>s.sector===sectF)||{}).stocks || []);
   const pill = (active) => ({padding:"3px 9px",borderRadius:14,border:"1.5px solid",cursor:"pointer",fontFamily:"var(--dm)",fontSize:9,fontWeight:600,whiteSpace:"nowrap",flexShrink:0,transition:"all .15s",borderColor:active?"var(--indigo)":"var(--t4)",background:active?"linear-gradient(135deg,var(--indigo),var(--sky))":"var(--white)",color:active?"#fff":"var(--t3)"});
 
-  const Header = (
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-      <div>
-        <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15}}>⭐ Elite · Must-Own</div>
-        <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Excellent across every dimension</div>
-      </div>
-      {total>0 && <span style={{fontFamily:"var(--mono)",fontSize:9,background:"#fffbeb",color:"var(--gold)",border:"1px solid #fde68a",padding:"3px 10px",borderRadius:10,fontWeight:700}}>{total} stocks</span>}
-    </div>
-  );
-
-  if(!sectors.length) return (
-    <div className="pad" style={{paddingTop:14}}>
-      {Header}
-      <div style={{textAlign:"center",padding:"50px 20px",color:"var(--t3)",fontSize:12,lineHeight:1.6}}>
-        Scanning the universe for must-own stocks…<br/>
-        <span style={{fontSize:10}}>Come back in a moment — this runs in the background.</span>
-      </div>
-    </div>
-  );
-
   return (
     <div className="pad" style={{paddingTop:14}}>
-      {Header}
+      <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15,marginBottom:10}}>⭐ Elite</div>
+      {/* Sub-tabs: Must-Own screener + the analysis lenses (moved from Strategy). */}
+      <div style={{display:"flex",gap:5,marginBottom:12,overflowX:"auto",scrollbarWidth:"none",paddingBottom:2}}>
+        {ETABS.map((t,i)=>(
+          <button key={i} onClick={()=>{setETab(i);setExp(null);}} style={pill(eTab===i)}>{t}</button>
+        ))}
+      </div>
+      {eTab===1 && <AnalogsTab onDetail={onDetail} portfolioTickers={portfolioTickers} watchlistTickers={watchlistTickers}/>}
+      {eTab===2 && <FrameworksTab onDetail={onDetail}/>}
+      {eTab===3 && <PulseTab onDetail={onDetail}/>}
+      {eTab===4 && <ContractedTab onDetail={onDetail}/>}
+      {eTab===0 && !sectors.length && (
+        <div style={{textAlign:"center",padding:"50px 20px",color:"var(--t3)",fontSize:12,lineHeight:1.6}}>
+          Scanning the universe for must-own stocks…<br/>
+          <span style={{fontSize:10}}>Come back in a moment — this runs in the background.</span>
+        </div>
+      )}
+      {eTab===0 && sectors.length>0 && (<>
+      <div style={{fontSize:11,color:"var(--t2)",marginBottom:8}}>Excellent across every dimension{total>0?` · ${total} stocks`:""}</div>
       {/* Sector filter pills — side by side, horizontal scroll (like Smart Picks) */}
       <div style={{display:"flex",gap:5,marginBottom:10,overflowX:"auto",scrollbarWidth:"none",paddingBottom:2}}>
         <button onClick={()=>{setSectF("All");setExp(null);}} style={pill(sectF==="All")}>All ({total})</button>
@@ -4022,6 +4008,7 @@ function EliteScreen({eliteData, onDetail}){
         Must-own = strong across fundamentals, smart money, balance sheet, sentiment &amp; growth.<br/>
         Institutional signal is directional (free-tier data). Research, not advice.
       </div>
+      </>)}
     </div>
   );
 }
@@ -4218,7 +4205,7 @@ export default function App() {
       },15000);
     }}/>,
     <StrategyScreen strategyData={strategyData} onDetail={setSel}/>,
-    <EliteScreen eliteData={eliteData} onDetail={setSel}/>,
+    <EliteScreen eliteData={eliteData} strategyData={strategyData} onDetail={setSel}/>,
   ];
   const tabDefs = [
     {icon:"🏠",label:"Home",badge:urgentCount},
