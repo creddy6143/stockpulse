@@ -155,6 +155,10 @@ def startup():
     # Load the persisted RPO screen so the Contracted tab is populated instantly after a
     # restart (only re-scans in the background if the saved snapshot is >6h old).
     _load_rpo_snapshot()
+    # Same for the Frameworks tab; if nothing persisted yet, kick off a scan so it fills.
+    _load_frameworks_snapshot()
+    if not _frameworks_scan:
+        threading.Thread(target=_refresh_frameworks_scan, daemon=True).start()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
@@ -216,7 +220,7 @@ def dip_status():
         threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
     _rpo = _rpo_scan_result
     return {
-        "build": "rpo-persist-v2",
+        "build": "frameworks-persist-v1",
         "rpo_screen": {
             "ranked": len(_rpo.get("ranked") or []),
             "unavailable": len(_rpo.get("unavailable") or []),
@@ -232,6 +236,9 @@ def dip_status():
         "elite_count": sum(len(s.get("stocks", [])) for s in _elite_scan_result),
         "elite_sectors": len(_elite_scan_result),
         "frameworks_diag": _frameworks_probe(),
+        "frameworks_scan": {"counts": _frameworks_scan.get("counts"),
+                            "as_of": _frameworks_scan.get("as_of"),
+                            "ready": bool(_frameworks_scan)},
         "dip_candidates_in_cache": len(candidates),
         "scan_age_seconds": age_s,
         "picks_in_db": picks_count,
@@ -2759,12 +2766,42 @@ def _refresh_frameworks_scan() -> None:
             "garp": garp, "f_score": fscore, "rule_of_40": r40, "altman_distress": distress,
             "counts": {"garp": len(garp), "f_score": len(fscore),
                        "rule_of_40": len(r40), "altman_distress": len(distress)},
+            "as_of": datetime.utcnow().isoformat() + "Z",
         }
         _frameworks_ts = _time.monotonic()
+        try:
+            db.set_config("frameworks_scan", _json.dumps(_frameworks_scan))
+        except Exception as exc:
+            print(f"[FRAMEWORKS] persist failed: {exc}", flush=True)
         print(f"[FRAMEWORKS] garp={len(garp)} fscore={len(fscore)} r40={len(r40)} "
               f"distress={len(distress)}", flush=True)
     except Exception as exc:
         print(f"[FRAMEWORKS] refresh failed: {exc}", flush=True)
+
+
+def _load_frameworks_snapshot() -> None:
+    """Load the persisted frameworks scan on startup so the tab is populated instantly
+    after a restart; anchor the 6h TTL to the stored 'as_of' age."""
+    global _frameworks_scan, _frameworks_ts
+    try:
+        raw = db.get_config("frameworks_scan")
+        if not raw:
+            return
+        res = _json.loads(raw)
+        if not res.get("counts"):
+            return
+        age = 0.0
+        try:
+            dt = datetime.fromisoformat((res.get("as_of") or "").replace("Z", ""))
+            age = max(0.0, (datetime.utcnow() - dt).total_seconds())
+        except Exception:
+            age = 0.0
+        _frameworks_scan = res
+        _frameworks_ts = _time.monotonic() - age
+        print(f"[FRAMEWORKS] loaded persisted snapshot — counts={res.get('counts')}, "
+              f"age {age/3600:.1f}h", flush=True)
+    except Exception as exc:
+        print(f"[FRAMEWORKS] snapshot load failed: {exc}", flush=True)
 
 
 @app.get("/api/frameworks")
