@@ -865,3 +865,21 @@ def count_theme_history_dates():
     ).fetchone()["n"]
     conn.close()
     return n
+
+
+# ── APP CONFIG (generic key/value; used for cross-restart caches) ─────────────
+
+def set_config(key, value):
+    """Store a string value under a key (JSON blobs welcome). Survives restarts."""
+    conn = get_connection()
+    conn.execute("INSERT OR REPLACE INTO app_config(key, value) VALUES(?, ?)",
+                 (key, value))
+    conn.commit()
+    conn.close()
+
+
+def get_config(key):
+    conn = get_connection()
+    row = conn.execute("SELECT value FROM app_config WHERE key=?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else None

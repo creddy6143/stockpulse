@@ -152,6 +152,9 @@ def startup():
     threading.Thread(target=_refresh_dip_scan, daemon=True).start()
     # Pre-warm Elite / Must-Own scan so the first /api/elite request is instant.
     threading.Thread(target=_refresh_elite_scan, daemon=True).start()
+    # Load the persisted RPO screen so the Contracted tab is populated instantly after a
+    # restart (only re-scans in the background if the saved snapshot is >6h old).
+    _load_rpo_snapshot()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
@@ -213,7 +216,7 @@ def dip_status():
         threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
     _rpo = _rpo_scan_result
     return {
-        "build": "rpo-screen-v3",
+        "build": "rpo-persist-v1",
         "rpo_screen": {
             "ranked": len(_rpo.get("ranked") or []),
             "unavailable": len(_rpo.get("unavailable") or []),
@@ -1188,6 +1191,12 @@ def _refresh_rpo_scan() -> None:
         }
         _rpo_scan_ts = _time.monotonic()
         _rpo_diag.update({"running": False})
+        # Persist so the list survives restarts (loaded on startup) — no more blank
+        # window after a deploy; only genuinely refreshes on the 6h schedule.
+        try:
+            db.set_config("rpo_scan", _json.dumps(_rpo_scan_result))
+        except Exception as exc:
+            print(f"[RPO] persist failed: {exc}", flush=True)
         print(f"[RPO] {len(ranked)} ranked, {len(unavailable)} unavailable, "
               f"{na_count} N/A from {len(universe)} universe", flush=True)
     except Exception as exc:
@@ -1195,6 +1204,31 @@ def _refresh_rpo_scan() -> None:
         print(f"[RPO] refresh failed: {exc}", flush=True)
     finally:
         _rpo_lock.release()
+
+
+def _load_rpo_snapshot() -> None:
+    """Load the persisted RPO scan on startup so the tab is populated instantly after a
+    restart. Sets the TTL anchor from the stored 'as_of' so it only re-scans when >6h old."""
+    global _rpo_scan_result, _rpo_scan_ts
+    try:
+        raw = db.get_config("rpo_scan")
+        if not raw:
+            return
+        res = _json.loads(raw)
+        if not (res.get("ranked") or res.get("unavailable")):
+            return
+        age = 0.0
+        try:
+            dt = datetime.fromisoformat((res.get("as_of") or "").replace("Z", ""))
+            age = max(0.0, (datetime.utcnow() - dt).total_seconds())
+        except Exception:
+            age = 0.0
+        _rpo_scan_result = res
+        _rpo_scan_ts = _time.monotonic() - age   # so the 6h TTL reflects real age
+        print(f"[RPO] loaded persisted snapshot — {len(res.get('ranked') or [])} ranked, "
+              f"age {age/3600:.1f}h", flush=True)
+    except Exception as exc:
+        print(f"[RPO] snapshot load failed: {exc}", flush=True)
 
 
 def _enrich_shock_ticker_data(base_td: dict, membership: dict) -> dict:
