@@ -153,6 +153,17 @@ def startup():
     threading.Thread(target=_refresh_elite_scan, daemon=True).start()
     if not _frameworks_scan:
         threading.Thread(target=_refresh_frameworks_scan, daemon=True).start()
+    # Rebuild the RPO screen from the current picks if the persisted snapshot scanned a
+    # much smaller universe (i.e. was saved during a degraded run). EDGAR-based, so it's
+    # unaffected by any Yahoo/Finnhub throttling.
+    try:
+        _pc = db.get_picks_cache()
+        _np = len(_json.loads(_pc["all_picks_json"])) if _pc and _pc.get("all_picks_json") else 0
+        if _np >= 100 and (_rpo_scan_result.get("universe") or 0) < 0.6 * _np:
+            print(f"[RPO] persisted universe {_rpo_scan_result.get('universe')} << picks {_np} — rebuilding", flush=True)
+            threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
+    except Exception:
+        pass
     # 4) LAST — the heavy 468-ticker picks scan, and only if stale. It's delayed 2m
     #    inside _maybe_auto_scan so the warms above finish before it loads the backend.
     _maybe_auto_scan()
@@ -217,7 +228,7 @@ def dip_status():
         threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
     _rpo = _rpo_scan_result
     return {
-        "build": "restart-resilience-v1",
+        "build": "restart-resilience-v2",
         "rpo_screen": {
             "ranked": len(_rpo.get("ranked") or []),
             "unavailable": len(_rpo.get("unavailable") or []),
@@ -1900,6 +1911,21 @@ def _run_picks_scan_background():
             if len(sector_data[sector]) < 10:
                 sector_data[sector].append(pick)
 
+        # GUARD: a data-source throttle can cause mass fetch failures, yielding a tiny
+        # universe. Never let such a degraded run overwrite a healthy cache — keep the
+        # good one and just clear the 'running' flag. (Only guards when the OLD cache was
+        # healthy, so a first/legitimately-small scan still saves.)
+        try:
+            _ex = db.get_picks_cache()
+            _old_n = len(_json.loads(_ex["all_picks_json"])) if _ex and _ex.get("all_picks_json") else 0
+        except Exception:
+            _old_n = 0
+        if _old_n >= 100 and len(all_picks) < 0.5 * _old_n:
+            print(f"[PICKS BG] GUARD: new={len(all_picks)} << existing={_old_n} — likely a "
+                  f"throttled run; keeping the existing cache, NOT overwriting.", flush=True)
+            db.set_scan_status("complete")
+            return
+
         db.save_picks_cache(
             all_picks_json=_json.dumps(all_picks),
             sector_json=_json.dumps(sector_data),
@@ -1907,9 +1933,11 @@ def _run_picks_scan_background():
             tickers_ok=len(result),
         )
         print(f"[PICKS BG] Done — {len(all_picks)} picks saved to DB", flush=True)
-        # Immediately refresh dip scan with fresh picks data so the Strategy
-        # screen shows candidates as soon as the picks scan completes.
-        threading.Thread(target=_refresh_dip_scan, daemon=True).start()
+        # Refresh every dependent scan with the fresh universe so Strategy, Elite,
+        # Contracted (RPO) and Frameworks all reflect the new picks immediately.
+        for _fn in (_refresh_dip_scan, _refresh_elite_scan, _refresh_rpo_scan,
+                    _refresh_frameworks_scan):
+            threading.Thread(target=_fn, daemon=True).start()
 
     except Exception as e:
         print(f"[PICKS BG] Error: {e}", flush=True)
