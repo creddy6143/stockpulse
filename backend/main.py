@@ -140,25 +140,22 @@ def _prewarm_portfolio_cache():
 @app.on_event("startup")
 def startup():
     init_db()
-    # Auto-trigger picks scan on startup if cache is empty or older than 23 hours.
-    # Runs in background so the server starts instantly.
-    _maybe_auto_scan()
-    # Pre-warm market indices immediately — /api/market is on the Home critical path
-    # and is ~3s on a cold cache, so warm it before the first request lands.
-    threading.Thread(target=lambda: get_market_data(), daemon=True).start()
-    # Pre-warm price + fundamentals cache so the first /api/portfolio request is fast.
-    threading.Thread(target=_prewarm_portfolio_cache, daemon=True).start()
-    # Pre-warm dip scan cache so first /api/strategy request returns instantly.
-    threading.Thread(target=_refresh_dip_scan, daemon=True).start()
-    # Pre-warm Elite / Must-Own scan so the first /api/elite request is instant.
-    threading.Thread(target=_refresh_elite_scan, daemon=True).start()
-    # Load the persisted RPO screen so the Contracted tab is populated instantly after a
-    # restart (only re-scans in the background if the saved snapshot is >6h old).
+    # 1) Load all persisted scans FIRST so every tab shows instantly after a restart
+    #    (dip, elite, RPO, frameworks). They refresh in the background on their TTLs.
+    _load_dip_elite_snapshots()
     _load_rpo_snapshot()
-    # Same for the Frameworks tab; if nothing persisted yet, kick off a scan so it fills.
     _load_frameworks_snapshot()
+    # 2) Warm the light, request-critical caches (market + portfolio/watchlist snapshot).
+    threading.Thread(target=lambda: get_market_data(), daemon=True).start()
+    threading.Thread(target=_prewarm_portfolio_cache, daemon=True).start()
+    # 3) Refresh the light scans in the background (fast — they read the picks cache).
+    threading.Thread(target=_refresh_dip_scan, daemon=True).start()
+    threading.Thread(target=_refresh_elite_scan, daemon=True).start()
     if not _frameworks_scan:
         threading.Thread(target=_refresh_frameworks_scan, daemon=True).start()
+    # 4) LAST — the heavy 468-ticker picks scan, and only if stale. It's delayed 2m
+    #    inside _maybe_auto_scan so the warms above finish before it loads the backend.
+    _maybe_auto_scan()
 
 
 # ── HEALTH ───────────────────────────────────────────────────────────────────
@@ -220,7 +217,7 @@ def dip_status():
         threading.Thread(target=_refresh_rpo_scan, daemon=True).start()
     _rpo = _rpo_scan_result
     return {
-        "build": "frameworks-persist-v1",
+        "build": "restart-resilience-v1",
         "rpo_screen": {
             "ranked": len(_rpo.get("ranked") or []),
             "unavailable": len(_rpo.get("unavailable") or []),
@@ -1069,6 +1066,7 @@ def _refresh_elite_scan() -> None:
 
         _elite_scan_result = group_by_sector(entries)
         _elite_scan_ts = _time.monotonic()
+        _persist_scan("elite_scan", _elite_scan_result)
         _fresh_scores.sort(key=lambda x: -(x[1] or 0))
         _elite_diag.update({"running": False, "qualified": len(entries),
                             "top_fresh_scores": _fresh_scores[:8]})
@@ -1211,6 +1209,49 @@ def _refresh_rpo_scan() -> None:
         print(f"[RPO] refresh failed: {exc}", flush=True)
     finally:
         _rpo_lock.release()
+
+
+def _persist_scan(key: str, data) -> None:
+    """Save a scan result (any JSON-able value) to the DB so it survives restarts."""
+    try:
+        db.set_config(key, _json.dumps({"data": data,
+                                        "as_of": datetime.utcnow().isoformat() + "Z"}))
+    except Exception as exc:
+        print(f"[persist] {key} failed: {exc}", flush=True)
+
+
+def _load_scan(key: str):
+    """Return (data, age_seconds) for a persisted scan, or (None, None)."""
+    try:
+        raw = db.get_config(key)
+        if not raw:
+            return None, None
+        obj = _json.loads(raw)
+        age = 0.0
+        try:
+            dt = datetime.fromisoformat((obj.get("as_of") or "").replace("Z", ""))
+            age = max(0.0, (datetime.utcnow() - dt).total_seconds())
+        except Exception:
+            age = 0.0
+        return obj.get("data"), age
+    except Exception:
+        return None, None
+
+
+def _load_dip_elite_snapshots() -> None:
+    """Load persisted dip + elite scans on startup so Dip Buys and Elite Must-Own show
+    instantly after a restart (they still refresh on their normal TTLs in the background)."""
+    global _dip_scan_result, _dip_scan_ts, _elite_scan_result, _elite_scan_ts
+    dip, dage = _load_scan("dip_scan")
+    if isinstance(dip, list):
+        _dip_scan_result = dip
+        _dip_scan_ts = _time.monotonic() - dage
+        print(f"[DIP] loaded persisted snapshot — {len(dip)} candidates, age {dage/60:.0f}m", flush=True)
+    elite, eage = _load_scan("elite_scan")
+    if isinstance(elite, list):
+        _elite_scan_result = elite
+        _elite_scan_ts = _time.monotonic() - eage
+        print(f"[ELITE] loaded persisted snapshot — {len(elite)} sectors, age {eage/60:.0f}m", flush=True)
 
 
 def _load_rpo_snapshot() -> None:
@@ -1369,6 +1410,7 @@ def _refresh_dip_scan() -> None:
 
         _dip_scan_result = candidates
         _dip_scan_ts = _time.monotonic()
+        _persist_scan("dip_scan", _dip_scan_result)
         print(f"[DIP] Cache refreshed: {len(candidates)} candidates", flush=True)
     except Exception as exc:
         print(f"[DIP] Refresh failed: {exc}", flush=True)
@@ -1908,8 +1950,16 @@ def _maybe_auto_scan():
             except Exception:
                 stale = True
         if stale and not _scan_running:
-            print("[PICKS] Cache stale/empty — triggering background scan", flush=True)
-            threading.Thread(target=_run_picks_scan_background, daemon=True).start()
+            # DELAY the heavy 468-ticker scan so the light warms (portfolio snapshot,
+            # dip, elite, market) finish first and the app is usable within seconds —
+            # otherwise this scan saturates the single backend and every request slows.
+            print("[PICKS] Cache stale/empty — scheduling background scan (delayed 2m so the app warms first)", flush=True)
+
+            def _delayed_picks_scan():
+                import time as _t
+                _t.sleep(120)
+                _run_picks_scan_background()
+            threading.Thread(target=_delayed_picks_scan, daemon=True).start()
     except Exception as e:
         print(f"[PICKS] Auto-scan trigger failed: {e}", flush=True)
 
