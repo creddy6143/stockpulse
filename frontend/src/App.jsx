@@ -497,6 +497,8 @@ const buildDetailData = resp => {
   if (f.next_earnings_date) metrics.push({l:"Next Earnings", v:fmtEarnDate(f.next_earnings_date), s:"Upcoming"});
   while (metrics.length < 4) metrics.push({l:"—", v:"—", s:"—"});
   return {
+    price,
+    change: (resp.price_data || {}).change_pct || 0,
     perf: resp.history || {"1W":0,"1M":0,"3M":0,"6M":0,"1Y":0},
     chartPrices: (resp.history || {}).prices || [],
     w52Lo: f.w52_low || price*0.7, w52Hi: f.w52_high || price*1.3,
@@ -685,7 +687,7 @@ function FrameworksSection({fw}){
   );
 }
 
-function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
+function StockDetail({ticker,name,flag,price:price0,trust,rec,onClose}) {
   const [tf,setTf] = useState("3M");
   const [d, setD] = useState(null);
   const [dLoading, setDLoading] = useState(true);
@@ -711,6 +713,9 @@ function StockDetail({ticker,name,flag,price,trust,rec,onClose}) {
     getFrameworksFor(ticker).then(setFw).catch(()=>{});
   }, [ticker]);
 
+  // Prefer the price passed in; fall back to the fetched detail when the caller had none
+  // (e.g. the Analogs/Frameworks/Pulse/Contracted lists pass price:0).
+  const price = (typeof price0 === "number" && price0 > 0) ? price0 : ((d && d.price) || 0);
   const c = tc(trust);
   const curr = cu(ticker);
   const perf = d ? (d.perf[tf] || 0) : 0;
