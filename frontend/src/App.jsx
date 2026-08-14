@@ -1761,7 +1761,14 @@ function CompactWatchRow({s, dot, onRemove, onSetAlert}) {
 
 function PivotSection({title, accentColor, slices, dark}) {
   const ac = accentColor||"var(--indigo)";
-  const [active, setActive] = useState(0);
+  // Open on the first slice that HAS stocks. Defaulting to index 0 showed
+  // "No stocks" whenever the first category was empty (e.g. Urgent 0 · Monitor 2
+  // · Stable 3) while the rows sat one tap away — it read as data loss.
+  // A slice the user taps stays selected even when empty: an explicit choice is
+  // answered honestly ("No stocks in Urgent"), never silently redirected.
+  const [picked, setPicked] = useState(null);
+  const firstFilled = slices.findIndex(sl => sl.items.length > 0);
+  const active = (picked != null && slices[picked]) ? picked : Math.max(firstFilled, 0);
   const slice = slices[active];
   const total = slices.reduce((s,sl)=>s+sl.items.length,0);
 
@@ -1785,7 +1792,7 @@ function PivotSection({title, accentColor, slices, dark}) {
         {slices.map((s,i)=>{
           const isAct=active===i;
           return (
-            <button key={i} onClick={()=>setActive(i)}
+            <button key={i} onClick={()=>setPicked(i)}
               style={{display:"flex",alignItems:"center",gap:4,padding:"3px 8px",borderRadius:20,border:"none",cursor:"pointer",transition:"all .15s",
                 background:isAct?`${s.color}18`:DK_PILL_BG,flexShrink:0}}>
               <span style={{fontFamily:"var(--dm)",fontSize:9,fontWeight:isAct?700:500,color:isAct?s.color:DK_T3}}>{s.label}</span>
@@ -1805,7 +1812,11 @@ function PivotSection({title, accentColor, slices, dark}) {
       )}
       {/* Rows */}
       {slice.items.length===0
-        ? <div style={{padding:"16px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:DK_T3}}>No stocks in this category</div>
+        ? <div style={{padding:"16px",textAlign:"center",fontFamily:"var(--dm)",fontSize:11,color:DK_T3}}>
+            {total>0
+              ? <>No stocks in {slice.label} — {total} in this section</>
+              : <>No stocks in {slice.label}</>}
+          </div>
         : slice.items.map(s=>slice.isWatch
             ?<CompactWatchRow key={s.ticker} s={s} dot={slice.color} onRemove={slice.onRemove} onSetAlert={slice.onSetAlert}/>
             :<CompactRow key={s.ticker} s={s} dot={slice.color} onDetail={slice.onDetail} onRemove={slice.onRemove} onEdit={slice.onEdit} onSetAlert={slice.onSetAlert} onAddLot={slice.onAddLot} onEditLot={slice.onEditLot} onDeleteLot={slice.onDeleteLot}/>
