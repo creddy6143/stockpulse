@@ -200,10 +200,27 @@ body{background:var(--bg);color:var(--t1);font-family:var(--dm);overscroll-behav
 `;
 
 // ── UTILITIES ────────────────────────────────────────
+// Exchange suffix → native currency + market. Mirrors backend/data/markets.py —
+// keep the two in sync. Each Nordic exchange has its OWN krona/krone.
+const SUFFIX_MAP = {
+  ".NS":["INR","IN"], ".BO":["INR","IN"],
+  ".ST":["SEK","EU"], ".CO":["DKK","EU"], ".OL":["NOK","EU"], ".HE":["EUR","EU"], ".IC":["ISK","EU"],
+  ".AS":["EUR","EU"], ".DE":["EUR","EU"], ".F":["EUR","EU"], ".PA":["EUR","EU"], ".MI":["EUR","EU"],
+  ".MC":["EUR","EU"], ".BR":["EUR","EU"], ".LS":["EUR","EU"], ".VI":["EUR","EU"], ".IR":["EUR","EU"],
+  ".AT":["EUR","EU"], ".L":["GBP","EU"], ".SW":["CHF","EU"], ".VX":["CHF","EU"],
+  ".WA":["PLN","EU"], ".PR":["CZK","EU"],
+};
+const suffixOf = t => {
+  const s = (t || "").toUpperCase();
+  const i = s.lastIndexOf(".");
+  const sfx = i > 0 ? s.slice(i) : "";
+  return SUFFIX_MAP[sfx] ? sfx : null;
+};
 const getFlag = (market, ticker) => {
-  const t = ticker || "";
-  if (market === "IN" || t.endsWith(".NS") || t.endsWith(".BO")) return "🇮🇳";
-  if (market === "EU" || t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".ST") || t.endsWith(".L") || t.endsWith(".F") || t.endsWith(".MI")) return "🇪🇺";
+  const sfx = suffixOf(ticker);
+  const m = sfx ? SUFFIX_MAP[sfx][1] : market;
+  if (m === "IN") return "🇮🇳";
+  if (m === "EU") return "🇪🇺";
   return "🇺🇸";
 };
 const tc = (s, grade) => {
@@ -218,10 +235,20 @@ const tg = (s, grade) => {
   if (s == null) return "No Data";
   return s>=75?"Strong":s>=60?"Moderate":s>=40?"Weak":"Blocked";
 };
-const isINR = t => t && (t.endsWith(".NS") || t.endsWith(".BO"));
-const isEUR = t => t && (t.endsWith(".AS") || t.endsWith(".DE") || t.endsWith(".PA") || t.endsWith(".MI") || t.endsWith(".F"));
-const isSEK = t => t && (t.endsWith(".ST") || t.endsWith(".HE") || t.endsWith(".CO") || t.endsWith(".OL"));
-const cu = t => isINR(t) ? "₹" : isEUR(t) ? "€" : isSEK(t) ? "kr\u00a0" : "$";
+// Native currency of a ticker. An explicit code from the backend always wins —
+// it comes from the live price feed and knows what a suffix cannot.
+const ccyOf = (t, currency) => {
+  const c = (currency || "").toUpperCase();
+  if (c) return c;
+  const sfx = suffixOf(t);
+  return sfx ? SUFFIX_MAP[sfx][0] : "USD";
+};
+// "kr" alone is ambiguous across SEK/DKK/NOK — only the base currency gets it.
+const CCY_SYMBOL = { USD:"$", EUR:"€", GBP:"£", INR:"₹", SEK:"kr\u00a0" };
+const cu = (t, currency) => {
+  const c = ccyOf(t, currency);
+  return CCY_SYMBOL[c] || c + "\u00a0";
+};
 const actionColor = a => a==="EXIT"||a==="WAIT"?"var(--rose)":a==="TRIM"||a==="WATCH"||a==="DECIDE"?"var(--amber)":a==="BUY"||a==="STRONG BUY"?"var(--emerald)":"var(--indigo)";
 const situationColor = lbl => {
   if (!lbl) return {c:"var(--indigo)",bg:"#eef2ff"};
@@ -1387,12 +1414,12 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
 
   // Column values
   const col1a = `${dailyPos ? "+" : ""}${(s.change || 0).toFixed(2)}%`;
-  const col1b = `${dailyPos ? "+" : "−"}${cu(s.ticker)}${dailyAbs.toFixed(2)}`;
-  const col2a = `${cu(s.ticker)}${typeof s.price === "number" ? s.price.toFixed(2) : s.price}`;
-  const col2b = s.buy ? `${cu(s.ticker)}${(+s.buy).toFixed(2)}` : "—";
+  const col1b = `${dailyPos ? "+" : "−"}${cu(s.ticker, s.currency)}${dailyAbs.toFixed(2)}`;
+  const col2a = `${cu(s.ticker, s.currency)}${typeof s.price === "number" ? s.price.toFixed(2) : s.price}`;
+  const col2b = s.buy ? `${cu(s.ticker, s.currency)}${(+s.buy).toFixed(2)}` : "—";
   const col3a = `${pnlPos ? "+" : ""}${pnlPct.toFixed(2)}%`;
   const col3b = `${pnlPos ? "+" : "−"}${fmtSEK(Math.abs(pnlSEK))}`;
-  const col4a = valueSEK > 0 ? fmtSEK(valueSEK) : s.price && s.shares ? `${cu(s.ticker)}${(s.price * s.shares).toFixed(0)}` : "—";
+  const col4a = valueSEK > 0 ? fmtSEK(valueSEK) : s.price && s.shares ? `${cu(s.ticker, s.currency)}${(s.price * s.shares).toFixed(0)}` : "—";
   const col4b = `${s.shares} sh`;
 
   // Urgency from dot CSS var
@@ -1511,9 +1538,10 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap",marginTop:isDataUnavailable&&s.fmpProfile?8:0}}>
             <span style={{fontFamily:DK_FONT,fontSize:9,color:DK_T3}}>Earnings <span style={{color:DK_T1,fontWeight:600}}>{s.earn}</span></span>
             <span style={{fontFamily:DK_FONT,fontSize:9,color:DK_T3}}>Grade <span style={{color:trustColor,fontWeight:700}}>{tg(s.trust,s.grade)}</span></span>
-            <span style={{fontFamily:DK_FONT,fontSize:9,color:DK_T3}}>Bought <span style={{color:DK_T2,fontWeight:600}}>{cu(s.ticker)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
+            <span style={{fontFamily:DK_FONT,fontSize:9,color:DK_T3}}>Bought <span style={{color:DK_T2,fontWeight:600}}>{cu(s.ticker, s.currency)}{s.buy} × {s.shares} = {fmtSEK(investedSEK)}</span></span>
             {s.sek_rate>0&&s.currency!=="SEK"&&(
-              s.buy_rate_sek&&Math.abs(s.buy_rate_sek-s.sek_rate)>0.05
+              /* relative, not absolute — 0.05 kr is 0.5% of a dollar but 50% of a rupee */
+              s.buy_rate_sek&&Math.abs(s.buy_rate_sek-s.sek_rate)/s.buy_rate_sek>0.005
                 ?<span style={{fontFamily:DK_FONT,fontSize:8,color:DK_T3}}>
                     Bought <span style={{color:DK_T2,fontWeight:600}}>1 {s.currency} = {s.buy_rate_sek.toFixed(2)} kr</span>
                     {" · "}Today <span style={{color:s.sek_rate<s.buy_rate_sek?DK_NEG:"#4ade80",fontWeight:600}}>{s.sek_rate.toFixed(2)} kr</span>
@@ -1540,7 +1568,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
               {s.lots.map((lot,i)=>(
                 <div key={lot.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 0",borderBottom:i<s.lots.length-1?`1px solid ${DK_DIV}`:"none"}}>
                   <span style={{flex:1,fontFamily:DK_FONT,fontSize:10,color:DK_T1}}>
-                    {lot.shares} sh @ {cu(s.ticker)}{lot.buy_price}
+                    {lot.shares} sh @ {cu(s.ticker, s.currency)}{lot.buy_price}
                     {lot.buy_date&&<span style={{color:DK_T3}}> · {lot.buy_date}</span>}
                   </span>
                   <span style={{fontFamily:DK_FONT,fontSize:10,fontWeight:600,color:lot.pnl_sek>=0?DK_POS:DK_NEG}}>{fmtSEK(lot.pnl_sek)}</span>
@@ -1553,7 +1581,7 @@ function CompactRow({s, dot, onDetail, onRemove, onEdit, onSetAlert, onAddLot, o
               ))}
               {s.lots.length>1&&(
                 <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0 0",marginTop:2}}>
-                  <span style={{fontFamily:DK_FONT,fontSize:9,color:DK_T3}}>Total {s.shares} sh · Avg {cu(s.ticker)}{(+s.buy).toFixed(2)}</span>
+                  <span style={{fontFamily:DK_FONT,fontSize:9,color:DK_T3}}>Total {s.shares} sh · Avg {cu(s.ticker, s.currency)}{(+s.buy).toFixed(2)}</span>
                   <span style={{fontFamily:DK_FONT,fontSize:10,fontWeight:700,color:pnlSEK>=0?DK_POS:DK_NEG}}>{fmtSEK(pnlSEK)}</span>
                 </div>
               )}

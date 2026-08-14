@@ -323,9 +323,8 @@ def calculate_trust_score(ticker: str, price_data: dict = None) -> dict:
     # Fix: mark data_quality "limited" so the hysteresis classifier routes them
     # to Watch (not Urgent) and the verification layer suppresses the SELL rec.
     _analyst_count = buy_n + hold_n + sell_n
-    _international_suffixes = (".NS", ".BO", ".PA", ".AS", ".DE", ".MC", ".L",
-                               ".MI", ".BR", ".ST", ".F")
-    _is_international = any(ticker.endswith(s) for s in _international_suffixes)
+    from data.markets import is_international as _is_intl
+    _is_international = _is_intl(ticker)
     _base_quality = "limited" if not _has_real_data(fundamentals) else "full"
     if _analyst_count == 0 and _is_international and _base_quality == "full":
         _base_quality = "limited"

@@ -964,9 +964,5 @@ def run_dip_scan(
 
 
 def _detect_flag(ticker: str) -> str:
-    t = ticker.upper()
-    if t.endswith((".NS", ".BO")):
-        return "🇮🇳"
-    if any(t.endswith(s) for s in (".AS", ".DE", ".PA", ".ST", ".L", ".MI", ".MC", ".F", ".BR")):
-        return "🇪🇺"
-    return "🇺🇸"
+    from data.markets import detect_flag
+    return detect_flag(ticker)

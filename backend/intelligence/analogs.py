@@ -38,12 +38,8 @@ def _load_themes() -> dict:
 # ── Country / flag helper ─────────────────────────────────────────────────────
 
 def _flag(ticker: str) -> str:
-    t = ticker or ""
-    if t.endswith(".NS") or t.endswith(".BO"):
-        return "🇮🇳"
-    if any(t.endswith(sfx) for sfx in (".AS", ".DE", ".PA", ".ST", ".L", ".F", ".MI", ".SW")):
-        return "🇪🇺"
-    return "🇺🇸"
+    from data.markets import detect_flag
+    return detect_flag(ticker or "")
 
 
 # ── Analog Score ──────────────────────────────────────────────────────────────

@@ -22,6 +22,8 @@ import threading
 import requests
 import finnhub
 from datetime import datetime, timedelta, timezone
+from .markets import (KNOWN_CURRENCIES, detect_currency as _markets_currency,
+                      is_international, normalize_quote, strip_suffix)
 from .cache import (cache_get, cache_set,
                      TTL_PRICE, TTL_MARKET, TTL_RATES, TTL_FUNDAMENTALS,
                      TTL_ANALYST, TTL_INSIDER, TTL_HISTORY, TTL_NEWS,
@@ -487,11 +489,18 @@ def _finnhub_symbol(ticker: str) -> str | None:
         return "NSE:" + ticker[:-3]
     if ticker.endswith(".BO"):
         return "BSE:" + ticker[:-3]
-    # European stocks — strip suffix and try (works for many)
-    return ticker.rsplit(".", 1)[0]
+    # European stocks: stripping the suffix is NOT safe — "SAP.DE" becomes "SAP",
+    # a US ADR quoted in dollars, and the quote would be labelled as euros.
+    # Yahoo carries the real exchange + currency, so let the fallback handle these.
+    return None
 
 
 # ── EXCHANGE RATES ────────────────────────────────────────────────────────────
+
+# Currencies we quote against SEK — the ECB reference set, so Frankfurter
+# serves both live and historical rates for all of them.
+_RATE_CCYS = tuple(sorted(KNOWN_CURRENCIES - {"USD"}))  # USD is the request base
+
 
 def get_exchange_rates() -> dict:
     """Live SEK per 1 unit of each currency.
@@ -505,29 +514,30 @@ def get_exchange_rates() -> dict:
         return cached
 
     # Fallback rates — approximate as of May 2026 (used only if API fails)
-    rates = {"USDSEK": 9.30, "EURSEK": 10.82, "INRSEK": 0.0972, "GBPSEK": 12.53}
+    rates = {
+        "USDSEK": 9.30, "EURSEK": 10.82, "INRSEK": 0.0972, "GBPSEK": 12.53,
+        "DKKSEK": 1.45, "NOKSEK": 0.93, "CHFSEK": 11.60,
+    }
 
     try:
         # api.frankfurter.app moved to api.frankfurter.dev/v1 in 2026
         r = requests.get(
-            "https://api.frankfurter.dev/v1/latest?from=USD&to=SEK,EUR,GBP,INR",
+            "https://api.frankfurter.dev/v1/latest?from=USD&to=" + ",".join(_RATE_CCYS),
             timeout=8,
             allow_redirects=True,
         )
         if r.status_code == 200:
             data = r.json().get("rates", {})
             usd_to_sek = float(data.get("SEK", rates["USDSEK"]))
-            usd_to_inr = float(data.get("INR", 0))
-            usd_to_eur = float(data.get("EUR", 0))
-            usd_to_gbp = float(data.get("GBP", 0))
-
             rates["USDSEK"] = round(usd_to_sek, 4)
-            if usd_to_inr > 0:
-                rates["INRSEK"] = round(usd_to_sek / usd_to_inr, 6)
-            if usd_to_eur > 0:
-                rates["EURSEK"] = round(usd_to_sek / usd_to_eur, 4)
-            if usd_to_gbp > 0:
-                rates["GBPSEK"] = round(usd_to_sek / usd_to_gbp, 4)
+
+            # Cross rate: SEK per 1 unit of ccy = (SEK per USD) / (ccy per USD)
+            for ccy in _RATE_CCYS:
+                if ccy == "SEK":
+                    continue
+                usd_to_ccy = float(data.get(ccy, 0) or 0)
+                if usd_to_ccy > 0:
+                    rates[f"{ccy}SEK"] = round(usd_to_sek / usd_to_ccy, 6)
     except Exception:
         pass  # Fall back to approximate defaults above
 
@@ -565,7 +575,7 @@ def get_historical_sek_rate(buy_date: str, currency: str) -> float | None:
 
         # Frankfurter returns rates relative to USD base
         r = requests.get(
-            f"https://api.frankfurter.dev/v1/{buy_date}?from=USD&to=SEK,EUR,GBP,INR",
+            f"https://api.frankfurter.dev/v1/{buy_date}?from=USD&to=" + ",".join(_RATE_CCYS),
             timeout=8,
         )
         if r.status_code != 200:
@@ -578,17 +588,9 @@ def get_historical_sek_rate(buy_date: str, currency: str) -> float | None:
 
         if currency == "USD":
             rate = usd_to_sek
-        elif currency == "EUR":
-            usd_to_eur = float(data.get("EUR", 0))
-            rate = usd_to_sek / usd_to_eur if usd_to_eur > 0 else None
-        elif currency == "GBP":
-            usd_to_gbp = float(data.get("GBP", 0))
-            rate = usd_to_sek / usd_to_gbp if usd_to_gbp > 0 else None
-        elif currency == "INR":
-            usd_to_inr = float(data.get("INR", 0))
-            rate = usd_to_sek / usd_to_inr if usd_to_inr > 0 else None
         else:
-            rate = None
+            usd_to_ccy = float(data.get(currency, 0) or 0)
+            rate = usd_to_sek / usd_to_ccy if usd_to_ccy > 0 else None
 
         if rate:
             rate = round(rate, 6)
@@ -645,6 +647,10 @@ def get_stock_price(ticker: str) -> dict:
             price = float(meta.get("regularMarketPrice") or 0)
             prev = float(meta.get("chartPreviousClose") or meta.get("previousClose") or price)
             change_pct = ((price - prev) / prev * 100) if prev else 0
+            # London quotes arrive in pence ("GBp") — convert to pounds, or the
+            # holding reads 100x its real value.
+            ccy, price, prev = normalize_quote(
+                meta.get("currency") or _detect_currency(ticker), price, prev)
             if price > 0:
                 result = {
                     "ticker": ticker,
@@ -652,7 +658,7 @@ def get_stock_price(ticker: str) -> dict:
                     "change_pct": round(change_pct, 2),
                     "volume": int(meta.get("regularMarketVolume") or 0),
                     "prev_close": round(prev, 4),
-                    "currency": meta.get("currency") or _detect_currency(ticker),
+                    "currency": ccy,
                     "name": meta.get("shortName") or meta.get("longName") or ticker,
                     "market_cap": None,
                     "sector": None,
@@ -667,15 +673,8 @@ def get_stock_price(ticker: str) -> dict:
 
 
 def _detect_currency(ticker: str) -> str:
-    if ticker.endswith(".NS") or ticker.endswith(".BO"):
-        return "INR"
-    if ticker.endswith(".ST"):
-        return "SEK"
-    if any(ticker.endswith(s) for s in (".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR")):
-        return "EUR"
-    if ticker.endswith(".L"):
-        return "GBP"
-    return "USD"
+    """Native trading currency from the ticker suffix. See data/markets.py."""
+    return _markets_currency(ticker)
 
 
 def _market_holidays(year: int) -> dict:
@@ -1632,9 +1631,7 @@ def get_fundamentals(ticker: str) -> dict:
     fh = _finnhub()
 
     # Strip exchange suffix for Finnhub
-    clean = ticker
-    for suffix in (".NS", ".BO", ".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
-        clean = clean.replace(suffix, "")
+    clean = strip_suffix(ticker)
 
     if fh:
         try:
@@ -1766,10 +1763,7 @@ def get_fundamentals(ticker: str) -> dict:
     # net for any stock where Finnhub + Yahoo v10/v8 returned no core metrics.
     # This prevents US stocks from showing "?" when Finnhub rate-limits a request:
     # without this, an empty result gets cached for 24 hours.
-    is_intl = any(ticker.endswith(s) for s in [
-        ".ST", ".AS", ".L", ".DE", ".PA", ".MI", ".MC",
-        ".BR", ".HE", ".CO", ".OL", ".F",  # Brussels, Helsinki, Copenhagen, Oslo, Frankfurt secondary
-    ])
+    is_intl = is_international(ticker)
     _needs_yf = is_intl or (
         (result.get("market_cap") or 0) == 0
         or abs(result.get("revenue_growth") or 0) < 0.001
@@ -1952,9 +1946,7 @@ def get_insider_data(ticker: str) -> dict:
     # Route through ADR map for Indian/European stocks so we use the US-listed ticker
     from data.adr_map import get_adr_ticker
     adr = get_adr_ticker(ticker)
-    clean = adr if adr else ticker
-    for suffix in (".NS", ".BO", ".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
-        clean = clean.replace(suffix, "")
+    clean = strip_suffix(adr if adr else ticker)
 
     try:
         cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
@@ -2021,9 +2013,7 @@ def get_insider_data(ticker: str) -> dict:
     # quoteSummary is BLOCKED (that block is why short_interest AND analyst_target
     # come back empty for every stock on prod). Nasdaq returns shares short; we
     # convert to % of shares outstanding via market_cap / price. US stocks only.
-    _is_us = not any(ticker.upper().endswith(s) for s in
-                     (".NS", ".BO", ".AS", ".DE", ".ST", ".PA", ".L",
-                      ".F", ".MI", ".MC", ".BR"))
+    _is_us = not is_international(ticker)
     if result["short_interest_pct"] == 0 and _is_us:
         try:
             nu = f"https://api.nasdaq.com/api/quote/{clean}/short-interest?assetClass=stocks"
@@ -2049,9 +2039,7 @@ def get_insider_data(ticker: str) -> dict:
     # FMP short interest — last fallback when Finnhub + yfinance both return 0.
     # FINRA publishes bi-weekly; 48h cache matches the publication cadence.
     # Only for US stocks (FMP free tier doesn't cover .NS/.BO/.AS etc.)
-    _is_us_ticker = not any(ticker.upper().endswith(s) for s in
-                            (".NS", ".BO", ".AS", ".DE", ".ST", ".PA", ".L",
-                             ".F", ".MI", ".MC", ".BR"))
+    _is_us_ticker = not is_international(ticker)
     if result["short_interest_pct"] == 0 and FMP_KEY and _is_us_ticker:
         try:
             fmp_si_url = (
@@ -2344,9 +2332,7 @@ def get_analyst_data(ticker: str) -> dict:
     # Route through ADR map for Indian/European stocks
     from data.adr_map import get_adr_ticker
     adr = get_adr_ticker(ticker)
-    clean = adr if adr else ticker
-    for suffix in (".NS", ".BO", ".ST", ".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR", ".L"):
-        clean = clean.replace(suffix, "")
+    clean = strip_suffix(adr if adr else ticker)
 
     try:
         pt = _fh_call(fh.price_target, clean)

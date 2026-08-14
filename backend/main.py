@@ -140,6 +140,14 @@ def _prewarm_portfolio_cache():
 @app.on_event("startup")
 def startup():
     init_db()
+    # Repair any stock row saved with a wrong market/currency for its exchange
+    # suffix (e.g. Copenhagen .CO rows stored as US/USD → 6.6x SEK values).
+    try:
+        _fixed = db.normalize_stock_markets()
+        if _fixed:
+            print(f"[startup] normalized market/currency on {_fixed} stock rows", flush=True)
+    except Exception as e:
+        print(f"[startup] market normalization skipped: {e}", flush=True)
     # 1) Load all persisted scans FIRST so every tab shows instantly after a restart
     #    (dip, elite, RPO, frameworks). They refresh in the background on their TTLs.
     _load_dip_elite_snapshots()
@@ -418,14 +426,16 @@ def add_portfolio(req: AddPositionRequest, user_id: str = Depends(get_current_us
     market = _detect_market(ticker)
     # For tickers without exchange suffix, use price currency to infer market.
     # e.g. user types "INFY" (NYSE ADR, USD) vs "INFY.NS" (NSE India, INR).
+    from data.markets import EU_CURRENCIES, KNOWN_CURRENCIES, detect_currency
+    _price_ccy = (price_data.get("currency") or "").upper()
     if "." not in ticker:
-        pc = (price_data.get("currency") or "").upper()
-        if pc == "INR":
+        if _price_ccy == "INR":
             market = "IN"
-        elif pc in ("EUR", "SEK"):
+        elif _price_ccy in EU_CURRENCIES:
             market = "EU"
-    from portfolio.tracker import _detect_currency
-    currency = _detect_currency(ticker) or price_data.get("currency", "USD")
+    # Live price currency is authoritative; the suffix is the fallback.
+    # (A Copenhagen ticker trades in DKK, not the SEK its neighbour .ST uses.)
+    currency = _price_ccy if _price_ccy in KNOWN_CURRENCIES else detect_currency(ticker)
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_position(ticker, req.shares, req.buy_price, req.buy_date, req.notes, user_id=user_id)
     _snapshot_invalidate(user_id)
@@ -487,14 +497,16 @@ def add_watchlist(req: WatchlistRequest, user_id: str = Depends(get_current_user
         raise HTTPException(status_code=409, detail=f"{ticker} is already on your watchlist")
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
+    from data.markets import EU_CURRENCIES, KNOWN_CURRENCIES, detect_currency
+    _price_ccy = (price_data.get("currency") or "").upper()
     if "." not in ticker:
-        pc = (price_data.get("currency") or "").upper()
-        if pc == "INR":
+        if _price_ccy == "INR":
             market = "IN"
-        elif pc in ("EUR", "SEK"):
+        elif _price_ccy in EU_CURRENCIES:
             market = "EU"
-    from portfolio.tracker import _detect_currency
-    currency = _detect_currency(ticker) or price_data.get("currency", "USD")
+    # Live price currency is authoritative; the suffix is the fallback.
+    # (A Copenhagen ticker trades in DKK, not the SEK its neighbour .ST uses.)
+    currency = _price_ccy if _price_ccy in KNOWN_CURRENCIES else detect_currency(ticker)
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_to_watchlist(ticker, req.notes, user_id=user_id)
     _snapshot_invalidate(user_id)
@@ -2214,8 +2226,9 @@ def add_picks_universe(req: PicksUniverseRequest):
     ticker = req.ticker.upper()
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
-    from portfolio.tracker import _detect_currency
-    currency = _detect_currency(ticker)
+    from data.markets import KNOWN_CURRENCIES, detect_currency
+    _price_ccy = (price_data.get("currency") or "").upper()
+    currency = _price_ccy if _price_ccy in KNOWN_CURRENCIES else detect_currency(ticker)
     db.upsert_stock(ticker, name=price_data.get("name"), market=market, currency=currency)
     db.add_picks_universe(ticker)
     from data.cache import cache_set as cs
@@ -2991,15 +3004,14 @@ def earnings(user_id: str = Depends(get_current_user)):
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
 def _detect_market(ticker: str) -> str:
-    if ticker.endswith(".NS") or ticker.endswith(".BO"):
-        return "IN"
-    if any(ticker.endswith(s) for s in [".DE", ".AS", ".PA", ".ST", ".F", ".MI", ".L", ".MC", ".BR"]):
-        return "EU"
-    return "US"
+    """Market bucket from the ticker suffix. See data/markets.py."""
+    from data.markets import detect_market
+    return detect_market(ticker)
 
 
 def _get_flag(market: str) -> str:
-    return {"US": "🇺🇸", "EU": "🇪🇺", "IN": "🇮🇳"}.get(market, "🇺🇸")
+    from data.markets import MARKET_FLAGS
+    return MARKET_FLAGS.get(market, "🇺🇸")
 
 
 def _detect_situation(pos: dict, market_data: dict) -> dict:

@@ -169,7 +169,8 @@ def get_verdict(
     analyst_data: dict = None,
 ) -> dict:
     """Returns AI verdict for a stock. Falls back to blocked-stock text or generic verdict if all AI providers fail."""
-    clean = ticker.replace(".NS", "").replace(".BO", "").replace(".ST", "")
+    from data.markets import strip_suffix
+    clean = strip_suffix(ticker)
 
     live_chg = float(price_data.get("change_pct") or 0)
 

@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import db as _db
 from database.db import get_portfolio, get_watchlist
 from data.fetcher import get_stock_price, get_exchange_rates, get_historical_sek_rate, get_analyst_data, get_fundamentals, get_fmp_profile
+from data.markets import detect_currency, detect_market, is_international, KNOWN_CURRENCIES
 from intelligence.trust_score import get_trust_score_with_fallback
 from intelligence.verification import verify_watchlist_signal
 from portfolio.entry_zone import compute_entry_zone
@@ -11,28 +12,33 @@ from portfolio.classification import classify_with_hysteresis
 
 
 def _detect_currency(ticker: str) -> str:
-    """Infer native currency from ticker suffix."""
-    if ticker.endswith(".NS") or ticker.endswith(".BO"):
-        return "INR"
-    if ticker.endswith(".ST"):           # Stockholm — Swedish kronor
-        return "SEK"
-    if any(ticker.endswith(s) for s in [".AS", ".DE", ".PA", ".F", ".MI", ".MC", ".BR"]):
-        return "EUR"
-    if ticker.endswith(".L"):
-        return "GBP"
-    return "USD"
+    """Infer native currency from ticker suffix. See data/markets.py."""
+    return detect_currency(ticker)
+
+
+def _market_for(ticker: str, stored: str | None) -> str:
+    """Market bucket for a row. A recognised exchange suffix always wins — stored
+    values can predate the suffix being supported (Copenhagen rows saved as 'US')."""
+    if is_international(ticker):
+        return detect_market(ticker)
+    return stored or "US"
 
 
 def _sek_rate(currency: str, rates: dict) -> float:
     """How many SEK per 1 unit of the given currency."""
-    mapping = {
-        "USD": rates.get("USDSEK", 10.4),
-        "EUR": rates.get("EURSEK", 11.2),
-        "INR": rates.get("INRSEK", 0.124),
-        "SEK": 1.0,
-        "GBP": rates.get("GBPSEK", 13.2),
-    }
-    return mapping.get((currency or "USD").upper(), rates.get("USDSEK", 10.4))
+    ccy = (currency or "USD").upper()
+    if ccy == "SEK":
+        return 1.0
+    rate = rates.get(f"{ccy}SEK")
+    if rate and rate > 0:
+        return rate
+    if ccy == "USD":
+        return rates.get("USDSEK", 10.4)
+    # No rate for this currency — never silently price it as dollars; that is
+    # what inflated Danish kroner holdings ~6.6x. 0 shows an obviously missing
+    # value instead of a plausible wrong one.
+    print(f"[fx] no SEK rate for {ccy} — SEK values suppressed", flush=True)
+    return 0.0
 
 
 def _extract_fmp_profile(fundamentals: dict) -> dict | None:
@@ -67,9 +73,8 @@ def _build_position(pos: dict, rates: dict, user_id: str = "OWNER") -> dict:
 
     # Currency priority: live price API (always accurate) > ticker suffix > DB stored value.
     # The DB value can be stale or wrong from old code paths — never trust it over live data.
-    _known = {"USD", "EUR", "GBP", "INR", "SEK"}
     _price_ccy = (price_data.get("currency") or "").upper()
-    if _price_ccy in _known:
+    if _price_ccy in KNOWN_CURRENCIES:
         currency = _price_ccy
     else:
         _detected = _detect_currency(ticker)
@@ -131,7 +136,9 @@ def _build_position(pos: dict, rates: dict, user_id: str = "OWNER") -> dict:
         "pnl_sek": round(pnl_sek, 0),
         "sek_rate": rate,
         "buy_rate_sek": buy_rate_sek,   # historical rate on buy date (None if no date)
-        "market": pos.get("market", "US"),
+        # Suffix wins over the stored value — rows added before a suffix was
+        # recognised (e.g. Copenhagen .CO) carry a stale "US" market and flag.
+        "market": _market_for(ticker, pos.get("market")),
         "currency": currency,
         "trust_score": trust["total_score"],
         # display_score is None when verification suppressed the result.
@@ -448,7 +455,7 @@ def _build_watchlist_item(item: dict) -> dict:
         "wl_group": wl_group,
         "signal": signal,
         "added_at": item.get("added_at"),
-        "market": item.get("market", "US"),
+        "market": _market_for(ticker, item.get("market")),
         # Analyst data for display
         "analyst_target": target_price,
         "analyst_upside_pct": upside_pct,

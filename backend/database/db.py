@@ -20,6 +20,32 @@ def upsert_stock(ticker, name=None, market=None, exchange=None, currency=None):
     conn.close()
 
 
+def normalize_stock_markets() -> int:
+    """Repair rows whose market/currency predate a suffix being supported.
+    A Copenhagen ticker saved as US/USD priced its holding at the dollar rate —
+    ~6.6x its real SEK value. Idempotent; safe to run on every startup."""
+    from data.markets import SUFFIX_MAP, detect_currency, detect_market
+
+    conn = get_connection()
+    rows = conn.execute("SELECT ticker, market, currency FROM stocks").fetchall()
+    fixed = 0
+    for row in rows:
+        ticker = row["ticker"]
+        want_market   = detect_market(ticker)
+        want_currency = detect_currency(ticker)
+        if not any(ticker.upper().endswith(sfx) for sfx in SUFFIX_MAP):
+            continue  # no recognised suffix — leave the stored values alone
+        if row["market"] == want_market and row["currency"] == want_currency:
+            continue
+        conn.execute("UPDATE stocks SET market=?, currency=? WHERE ticker=?",
+                     (want_market, want_currency, ticker))
+        fixed += 1
+    if fixed:
+        conn.commit()
+    conn.close()
+    return fixed
+
+
 def get_stock(ticker):
     conn = get_connection()
     row = conn.execute("SELECT * FROM stocks WHERE ticker=?", (ticker,)).fetchone()
