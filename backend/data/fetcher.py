@@ -24,7 +24,7 @@ import finnhub
 from datetime import datetime, timedelta, timezone
 from .markets import (KNOWN_CURRENCIES, detect_currency as _markets_currency,
                       is_international, normalize_quote, strip_suffix)
-from .cache import (cache_get, cache_set,
+from .cache import (cache_get, cache_get_stale, cache_set,
                      TTL_PRICE, TTL_MARKET, TTL_RATES, TTL_FUNDAMENTALS,
                      TTL_ANALYST, TTL_INSIDER, TTL_HISTORY, TTL_NEWS,
                      TTL_SEARCH, TTL_TRUST, TTL_STRATEGY)
@@ -501,47 +501,126 @@ def _finnhub_symbol(ticker: str) -> str | None:
 # serves both live and historical rates for all of them.
 _RATE_CCYS = tuple(sorted(KNOWN_CURRENCIES - {"USD"}))  # USD is the request base
 
+# Railway's free tier is slow and its egress is less reliable than a laptop's
+# (Yahoo quoteSummary is blocked from it outright), so allow more than the 8s
+# that was timing out there.
+_RATE_TIMEOUT   = 20
+_RATE_RETRY_TTL = 5 * 60    # re-attempt 5 min after a failure, not 15
+
+# Approximate rates, May 2026. Genuinely last resort — see get_exchange_rates.
+_RATE_FALLBACK = {
+    "USDSEK": 9.30, "EURSEK": 10.82, "INRSEK": 0.0972, "GBPSEK": 12.53,
+    "DKKSEK": 1.45, "NOKSEK": 0.93, "CHFSEK": 11.60,
+}
+
+
+def _rates_from_frankfurter() -> dict | None:
+    """SEK cross-rates from Frankfurter (ECB data, free, no key). None on failure."""
+    r = requests.get(
+        "https://api.frankfurter.dev/v1/latest?from=USD&to=" + ",".join(_RATE_CCYS),
+        timeout=_RATE_TIMEOUT,
+        allow_redirects=True,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}")
+    data = r.json().get("rates", {})
+    usd_to_sek = float(data.get("SEK") or 0)
+    if usd_to_sek <= 0:
+        raise RuntimeError("no SEK rate in response")
+
+    rates = {"USDSEK": round(usd_to_sek, 4)}
+    # Cross rate: SEK per 1 unit of ccy = (SEK per USD) / (ccy per USD)
+    for ccy in _RATE_CCYS:
+        if ccy == "SEK":
+            continue
+        usd_to_ccy = float(data.get(ccy, 0) or 0)
+        if usd_to_ccy > 0:
+            rates[f"{ccy}SEK"] = round(usd_to_sek / usd_to_ccy, 6)
+    return rates
+
+
+def _rates_from_ecb_xml() -> dict | None:
+    """SEK cross-rates straight from the ECB daily reference feed (EUR base).
+
+    Second source because Frankfurter is a third-party mirror — when it is
+    unreachable from our host, this usually is not. Same underlying ECB data,
+    so the numbers agree to 4 decimal places.
+    """
+    import xml.etree.ElementTree as ET
+
+    r = requests.get(
+        "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
+        timeout=_RATE_TIMEOUT,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}")
+
+    per_eur = {}
+    for node in ET.fromstring(r.text).iter():
+        ccy = node.get("currency")
+        if ccy:
+            per_eur[ccy] = float(node.get("rate"))
+
+    eur_to_sek = float(per_eur.get("SEK") or 0)
+    if eur_to_sek <= 0:
+        raise RuntimeError("no SEK rate in feed")
+
+    # SEK per 1 unit of ccy = (SEK per EUR) / (ccy per EUR)
+    rates = {"EURSEK": round(eur_to_sek, 4)}
+    for ccy in _RATE_CCYS:
+        if ccy in ("SEK", "EUR"):
+            continue
+        eur_to_ccy = float(per_eur.get(ccy, 0) or 0)
+        if eur_to_ccy > 0:
+            rates[f"{ccy}SEK"] = round(eur_to_sek / eur_to_ccy, 6)
+    usd_per_eur = float(per_eur.get("USD") or 0)
+    if usd_per_eur > 0:
+        rates["USDSEK"] = round(eur_to_sek / usd_per_eur, 4)
+    return rates
+
 
 def get_exchange_rates() -> dict:
     """Live SEK per 1 unit of each currency.
-    Primary: Frankfurter.dev/v1 (ECB-based, free, no key).
-    Fallback: hardcoded approximate rates (updated May 2026).
-    Cached 15 minutes.
+
+    Primary: Frankfurter.dev/v1. Secondary: the ECB daily XML feed directly.
+    Last resort: approximate constants — but only after both sources fail AND
+    no previously-fetched rates are available.
+
+    A failed fetch is cached for 5 minutes, not 15, so an outage does not pin
+    stale numbers for a full TTL. The payload carries `_source` and
+    `_fetched_at` so /api/rates says plainly which of the three you are seeing.
     """
     key = "exchange_rates"
     cached = cache_get(key, TTL_RATES)
     if cached:
         return cached
 
-    # Fallback rates — approximate as of May 2026 (used only if API fails)
-    rates = {
-        "USDSEK": 9.30, "EURSEK": 10.82, "INRSEK": 0.0972, "GBPSEK": 12.53,
-        "DKKSEK": 1.45, "NOKSEK": 0.93, "CHFSEK": 11.60,
-    }
+    for name, fetch in (("frankfurter", _rates_from_frankfurter),
+                        ("ecb_xml", _rates_from_ecb_xml)):
+        try:
+            rates = fetch()
+            if rates and rates.get("USDSEK"):
+                rates = {**_RATE_FALLBACK, **rates}   # fill any gap in the feed
+                rates["_source"] = name
+                rates["_fetched_at"] = datetime.now(timezone.utc).isoformat()
+                cache_set(key, rates)
+                return rates
+        except Exception as e:
+            print(f"[fx] {name} failed: {type(e).__name__}: {e}", flush=True)
 
-    try:
-        # api.frankfurter.app moved to api.frankfurter.dev/v1 in 2026
-        r = requests.get(
-            "https://api.frankfurter.dev/v1/latest?from=USD&to=" + ",".join(_RATE_CCYS),
-            timeout=8,
-            allow_redirects=True,
-        )
-        if r.status_code == 200:
-            data = r.json().get("rates", {})
-            usd_to_sek = float(data.get("SEK", rates["USDSEK"]))
-            rates["USDSEK"] = round(usd_to_sek, 4)
+    # Both sources failed. Prefer the last rates we actually fetched over the
+    # constants — hours-old real rates beat months-old approximations.
+    stale = cache_get_stale(key)
+    if stale and stale.get("USDSEK"):
+        rates = {**stale, "_source": "stale:" + str(stale.get("_source", "?"))}
+        print("[fx] both sources failed — serving last known rates", flush=True)
+    else:
+        rates = {**_RATE_FALLBACK,
+                 "_source": "hardcoded_fallback",
+                 "_fetched_at": None}
+        print("[fx] both sources failed and no cached rates — using constants", flush=True)
 
-            # Cross rate: SEK per 1 unit of ccy = (SEK per USD) / (ccy per USD)
-            for ccy in _RATE_CCYS:
-                if ccy == "SEK":
-                    continue
-                usd_to_ccy = float(data.get(ccy, 0) or 0)
-                if usd_to_ccy > 0:
-                    rates[f"{ccy}SEK"] = round(usd_to_sek / usd_to_ccy, 6)
-    except Exception:
-        pass  # Fall back to approximate defaults above
-
-    cache_set(key, rates)
+    cache_set(key, rates, ttl=_RATE_RETRY_TTL)   # retry in 5 min, not 15
     return rates
 
 
@@ -576,7 +655,7 @@ def get_historical_sek_rate(buy_date: str, currency: str) -> float | None:
         # Frankfurter returns rates relative to USD base
         r = requests.get(
             f"https://api.frankfurter.dev/v1/{buy_date}?from=USD&to=" + ",".join(_RATE_CCYS),
-            timeout=8,
+            timeout=_RATE_TIMEOUT,
         )
         if r.status_code != 200:
             return None
