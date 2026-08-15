@@ -877,10 +877,21 @@ first success. Each provider swallows its own errors and returns None, so a
 dead provider degrades the chain silently rather than breaking the app.
 
 ```
-1. Groq       openai/gpt-oss-120b     primary — fastest, free tier
-2. Gemini     gemini-2.0-flash        fallback
-3. Anthropic  claude-sonnet-4-6       last resort
+1. Groq       qwen/qwen3.6-27b        primary
+2. Groq       openai/gpt-oss-120b     second Groq model
+3. Gemini     gemini-2.0-flash        fallback
+4. Anthropic  claude-sonnet-4-6       last resort
 ```
+
+The Groq free tier meters tokens PER MODEL (200k/day), so the second Groq
+model is a second daily budget, not just a second opinion — when the primary
+is rate-limited the chain stays on Groq instead of falling through to Gemini.
+
+Both Groq models are reasoning models, and reasoning tokens are drawn from the
+same budget as the answer. Each therefore carries an explicit effort setting in
+`_GROQ_MODELS` — without it they spend the whole cap thinking and return empty
+content. `qwen3.6-27b` accepts only `none` or `default` for `reasoning_effort`
+(`low` is a 400); at `none` it returns clean JSON in ~287 completion tokens.
 
 All three must return JSON that `_parse_json()` can read. Validate before
 showing anything to the user.
@@ -898,12 +909,24 @@ verdict vs ~84 before, so expect roughly double the output tokens and a little
 more latency). Passing `reasoning_effort="low"` cuts that to ~144 and still
 returns valid JSON, if throughput ever matters more than depth.
 
-**Do not substitute `qwen/qwen3.6-27b` without raising max_tokens.** It writes
-its `<think>` reasoning into `content` and exhausts a 750-token budget before
-reaching the answer. `_parse_json()` then splits on the ``` fences and silently
-parses a *draft* JSON block out of the model's own reasoning — a plausible-
-looking verdict that was never the model's conclusion. It needs ~2,000 tokens
-(~1,648 used) to complete properly.
+`qwen/qwen3.6-27b` was added as the primary on the same date. It writes its
+`<think>` reasoning into `content` at default effort and exhausts a 750-token
+budget before reaching the answer, so it runs at `reasoning_effort="none"` with
+the 1,200-token floor — clean JSON, ~287 completion tokens, no truncation.
+
+Two guards came out of that behaviour and must stay:
+
+- `_GROQ_MIN_TOKENS = 1200` floors every Groq call. Callers asking for 350 or
+  750 would otherwise have their whole budget consumed by reasoning.
+- `_parse_json()` strips `<think>` blocks and prefers the LAST complete JSON
+  object. Reasoning models draft, revise, then commit; the old version took the
+  FIRST fenced block, which on a truncated response was a draft from inside the
+  model's own reasoning — a plausible verdict it never stood by.
+
+Measured over six tickers (NVDA, GRRR, TSLA, MAERSK-A.CO, AMZN, TCS.NS) through
+the real `_call_groq` → `_parse_json` → `verify_ai_text` path: 6/6 parse, 6/6
+verify, 6/6 required keys, 6/6 jargon-free. Baseline for comparison: the retired
+llama scored 5/6 on verify, and gpt-oss-120b scored 2/6 before the prompt fix.
 
 ---
 

@@ -6,6 +6,7 @@ boilerplate — part of the Real Money Test verification layer.
 """
 import os
 import json
+import re
 from datetime import datetime
 from .prompts import SYSTEM_PROMPT, STRATEGY_SYSTEM_PROMPT, build_strategy_user_prompt
 from .verification import verify_ai_text
@@ -75,38 +76,59 @@ def _get_anthropic():
 
 # ── PROVIDER CALL FUNCTIONS ───────────────────────────────────────────────────
 
+# Groq slot. Tried in order — the free tier meters tokens PER MODEL (200k/day),
+# so a second model is a second daily budget, not just a second opinion.
+#
+# Both are reasoning models, and reasoning tokens are drawn from the same budget
+# as the answer. Left unmanaged they spend the whole cap thinking and return
+# empty content, which is why each carries an explicit effort setting:
+#   gpt-oss-120b  reasoning goes to a separate `reasoning` field; "low" effort
+#                 costs ~144 completion tokens per verdict (vs ~207 default).
+#   qwen3.6-27b   writes <think> INTO content unless effort is "none"; with
+#                 "none" it returns clean JSON in ~287 tokens. It only accepts
+#                 "none" or "default" — "low" is a 400. Left at default it needs
+#                 3000+ tokens and still truncates on the fuller prompts.
+_GROQ_MODELS = (
+    ("qwen/qwen3.6-27b",    {"reasoning_effort": "none"}),   # primary
+    ("openai/gpt-oss-120b", {"reasoning_effort": "low"}),    # fallback
+)
+
+# Floor for the answer budget. A truncated response wastes every token it spent,
+# and headroom costs nothing when unused — max_tokens is a ceiling, not a spend.
+_GROQ_MIN_TOKENS = 1200
+
+
 def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str | None:
+    """Try each Groq model in turn. Returns the first non-empty response.
+
+    Groq decommissioned llama-3.3-70b-versatile on 2026-08-16; see the
+    migration note in CLAUDE.md.
+    """
     client = _get_groq()
     if not client:
         return None
-    try:
-        response = client.chat.completions.create(
-            # Groq decommissioned llama-3.3-70b-versatile on 2026-08-16.
-            # gpt-oss-120b is a reasoning model: it returns its thinking in a
-            # separate `reasoning` field and leaves `content` as clean JSON, so
-            # _parse_json() works unchanged. Do NOT swap in qwen3.6-27b without
-            # raising max_tokens — it writes <think> into content, exhausts a
-            # 750-token budget mid-thought, and _parse_json() then silently
-            # parses a draft JSON block out of its own reasoning.
-            model="openai/gpt-oss-120b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            # Reasoning tokens come out of the same budget as the answer, so a
-            # 750-token cap can be spent thinking and return empty content.
-            # Headroom costs nothing when unused — max_tokens is a ceiling, and
-            # a truncated response wastes every token it did spend.
-            max_tokens=max(max_tokens, 1200),
-            # Groq free tier allows 200k tokens/day per model. Low effort cut a
-            # verdict from ~207 to ~144 completion tokens in testing with no
-            # loss of JSON validity — roughly 30% more verdicts per day.
-            reasoning_effort="low",
-            temperature=0.3,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception:
-        return None
+    for model, params in _GROQ_MODELS:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=max(max_tokens, _GROQ_MIN_TOKENS),
+                temperature=0.3,
+                **params,
+            )
+            text = (response.choices[0].message.content or "").strip()
+            if text:
+                return text
+            # Empty content means the budget went entirely to reasoning — worth
+            # seeing in the logs rather than silently falling through.
+            print(f"[ai] groq {model}: empty content "
+                  f"(finish={response.choices[0].finish_reason})", flush=True)
+        except Exception as e:
+            print(f"[ai] groq {model} failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
+    return None
 
 
 def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str | None:
@@ -158,18 +180,52 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str
     return _call_anthropic(system_prompt, user_prompt, max_tokens)
 
 
+def _strip_reasoning(text: str) -> str:
+    """Remove <think> blocks a reasoning model may write into its content.
+
+    Handles the unterminated case too: a model cut off mid-thought leaves an
+    opening tag with no closing one, and everything after it is reasoning.
+    """
+    if "<think>" not in text:
+        return text
+    closed = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    return closed.split("<think>")[0] if "<think>" in closed else closed
+
+
 def _parse_json(text: str | None) -> dict | None:
+    """Extract the model's JSON answer.
+
+    Reasoning models draft, revise, then commit — so when several JSON objects
+    are present the LAST complete one is the conclusion. The previous version
+    took the first fenced block, which on a truncated qwen response was a draft
+    from inside its own reasoning: a plausible verdict the model never stood by.
+    """
     if not text:
         return None
-    try:
-        # Strip markdown code fences if present
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        return json.loads(text.strip())
-    except (json.JSONDecodeError, IndexError):
-        return None
+
+    text = _strip_reasoning(text).strip()
+
+    # Prefer fenced blocks, last first — that is the model's final answer.
+    candidates = []
+    if "```" in text:
+        for block in re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL):
+            candidates.append(block)
+        candidates.reverse()
+    candidates.append(text)
+
+    # Last resort: the outermost {...} span, for prose wrapped around the JSON.
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start:end + 1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate.strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 # ── PUBLIC FUNCTIONS ──────────────────────────────────────────────────────────
