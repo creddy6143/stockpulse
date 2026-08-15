@@ -195,18 +195,21 @@ def health():
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
         "commit": sha[:7] or "unknown",
-        "ai_chain": [m for m, _ in _groq_models()] + ["gemini-2.0-flash", "claude-sonnet-4-6"],
+        "ai_chain": _ai_chain(),
     }
 
 
-def _groq_models():
-    """Groq model list, for the health payload. Imported lazily so a missing
-    optional dependency can never break the health check."""
+def _ai_chain() -> list:
+    """The live provider order, read from the modules that own it — never
+    a hardcoded copy. A health check that misreports the chain is worse than
+    no health check: it is a wrong answer that looks authoritative."""
     try:
-        from intelligence.claude_ai import _GROQ_MODELS
-        return _GROQ_MODELS
+        from intelligence.claude_ai import _GROQ_MODELS, _GEMINI_MODELS
+        return ([m for m, _ in _GROQ_MODELS]
+                + list(_GEMINI_MODELS)
+                + ["claude-sonnet-4-6"])
     except Exception:
-        return ()
+        return []
 
 
 def _frameworks_probe() -> dict:
