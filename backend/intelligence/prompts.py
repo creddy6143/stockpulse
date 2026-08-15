@@ -38,7 +38,7 @@ financial advice. Never use direct commands like "exit now", "sell",
 
 OUTPUT FORMAT (always valid JSON, no markdown fences):
 {
-  "verdict": "1-2 sentence plain English summary for compact display. Honest about both business quality and price trend if they diverge.",
+  "verdict": "1-2 sentence plain English summary for compact display. Honest about both business quality and price trend if they diverge. MUST cite at least one specific figure from the data — a price, a percentage, or the trust score — written as digits (7%, 183, 82/100), never spelled out in words. A verdict with no figure is rejected before it reaches the user.",
   "full_analysis": "4-5 sentence honest analysis: (1) one specific fact about what the business is actually doing — revenue growth, earnings trajectory, or margin trend; (2) why the price has moved the way it has over 6-12 months — name the real reason (valuation reset, macro, sector rotation, specific news); (3) the bull case in plain English — what has to go right and what would drive recovery; (4) the bear case in plain English — what could keep it under pressure; (5) one specific thing to watch — earnings date, analyst revision, price level, or upcoming event.",
   "recommendation": "strong_buy|buy|hold|sell|strong_sell",
   "confidence_pct": 71,

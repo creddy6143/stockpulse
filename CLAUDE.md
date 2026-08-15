@@ -24,7 +24,8 @@ Backend:   FastAPI (Python 3.11+)
 Frontend:  React 18 + CSS (no Tailwind — all custom CSS)
 Database:  SQLite (file: stockpulse.db)
 Data:      yfinance + Finnhub free tier + NSE India free
-AI:        Claude API (claude-sonnet-4-5) via Anthropic SDK
+AI:        Groq (primary) → Gemini (fallback) → Anthropic (last resort)
+           See AI PROVIDER CHAIN below for current model IDs
 Port:      Backend 8000 | Frontend 3000
 ```
 
@@ -860,15 +861,49 @@ Fundamentals: {fundamentals}
 
 Give a plain English verdict following the system rules.
 """
-    # Call Claude API
-    response = anthropic_client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=500,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}]
-    )
-    return json.loads(response.content[0].text)
+    # Calls go through _call_ai() — see AI PROVIDER CHAIN below.
+    # It tries Groq, then Gemini, then Anthropic, returning the first success.
+    text = _call_ai(SYSTEM_PROMPT, user_prompt, max_tokens=750)
+    return _parse_json(text)
 ```
+
+---
+
+## AI PROVIDER CHAIN
+
+Implemented in `backend/intelligence/claude_ai.py`. Every verdict and playbook
+goes through `_call_ai()`, which tries each provider in order and returns the
+first success. Each provider swallows its own errors and returns None, so a
+dead provider degrades the chain silently rather than breaking the app.
+
+```
+1. Groq       openai/gpt-oss-120b     primary — fastest, free tier
+2. Gemini     gemini-2.0-flash        fallback
+3. Anthropic  claude-sonnet-4-6       last resort
+```
+
+All three must return JSON that `_parse_json()` can read. Validate before
+showing anything to the user.
+
+### Migration: llama-3.3-70b-versatile → openai/gpt-oss-120b (2026-08-16)
+
+Groq decommissioned `llama-3.3-70b-versatile` on 2026-08-16. The Groq slot now
+uses `openai/gpt-oss-120b` (context 131,072; max_completion_tokens 65,536 —
+identical context to the retired model, so request-size limits are unchanged).
+
+`gpt-oss-120b` is a reasoning model but returns its thinking in a separate
+`reasoning` field, leaving `content` as clean JSON — `_parse_json()` needed no
+change, and the existing 750-token cap is enough (~207 completion tokens per
+verdict vs ~84 before, so expect roughly double the output tokens and a little
+more latency). Passing `reasoning_effort="low"` cuts that to ~144 and still
+returns valid JSON, if throughput ever matters more than depth.
+
+**Do not substitute `qwen/qwen3.6-27b` without raising max_tokens.** It writes
+its `<think>` reasoning into `content` and exhausts a 750-token budget before
+reaching the answer. `_parse_json()` then splits on the ``` fences and silently
+parses a *draft* JSON block out of the model's own reasoning — a plausible-
+looking verdict that was never the model's conclusion. It needs ~2,000 tokens
+(~1,648 used) to complete properly.
 
 ---
 

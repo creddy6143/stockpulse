@@ -81,12 +81,27 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> s
         return None
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            # Groq decommissioned llama-3.3-70b-versatile on 2026-08-16.
+            # gpt-oss-120b is a reasoning model: it returns its thinking in a
+            # separate `reasoning` field and leaves `content` as clean JSON, so
+            # _parse_json() works unchanged. Do NOT swap in qwen3.6-27b without
+            # raising max_tokens — it writes <think> into content, exhausts a
+            # 750-token budget mid-thought, and _parse_json() then silently
+            # parses a draft JSON block out of its own reasoning.
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=max_tokens,
+            # Reasoning tokens come out of the same budget as the answer, so a
+            # 750-token cap can be spent thinking and return empty content.
+            # Headroom costs nothing when unused — max_tokens is a ceiling, and
+            # a truncated response wastes every token it did spend.
+            max_tokens=max(max_tokens, 1200),
+            # Groq free tier allows 200k tokens/day per model. Low effort cut a
+            # verdict from ~207 to ~144 completion tokens in testing with no
+            # loss of JSON validity — roughly 30% more verdicts per day.
+            reasoning_effort="low",
             temperature=0.3,
         )
         return response.choices[0].message.content.strip()
