@@ -879,8 +879,25 @@ dead provider degrades the chain silently rather than breaking the app.
 ```
 1. Groq       qwen/qwen3.6-27b        primary
 2. Groq       openai/gpt-oss-120b     second Groq model
-3. Gemini     gemini-2.0-flash        fallback
-4. Anthropic  claude-sonnet-4-6       last resort
+3. Gemini     gemini-3.7-flash        fallback
+4. Gemini     gemini-flash-latest     rolling alias — self-heals a retirement
+5. Anthropic  claude-sonnet-4-6       last resort
+```
+
+Every provider swallows its own errors, which is exactly how the chain went
+dark unnoticed: on 2026-08-16 `gemini-2.0-flash` was found to be RETIRED
+(404 "no longer available") and the Anthropic key out of credit, so the app
+had been running on Groq alone with two dead fallbacks behind it. Whenever
+Groq hit its daily token cap, users silently got the generic default verdict.
+Every provider now logs `[ai] <provider> <model> failed: …` — check those logs
+before concluding the AI is "just being generic".
+
+Verify the whole chain is alive after any provider change:
+
+```bash
+curl -s $BACKEND/api/health          # reports commit + the live ai_chain list
+curl -s $BACKEND/api/stock/AMZN      # public; _generated_at set = AI answered,
+                                     # null = every provider failed
 ```
 
 The Groq free tier meters tokens PER MODEL (200k/day), so the second Groq

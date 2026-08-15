@@ -3,7 +3,7 @@ uvicorn[standard]==0.29.0
 yfinance==0.2.40
 finnhub-python==2.4.20
 anthropic>=0.40.0
-groq>=0.9.0
+groq>=1.6.0        # reasoning_effort param — required by the Groq models in claude_ai.py
 google-genai>=0.8.0
 python-dotenv==1.0.1
 requests==2.32.3

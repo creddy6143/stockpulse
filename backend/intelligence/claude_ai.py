@@ -109,7 +109,7 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> s
         return None
     for model, params in _GROQ_MODELS:
         try:
-            response = client.chat.completions.create(
+            kwargs = dict(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -119,6 +119,17 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> s
                 temperature=0.3,
                 **params,
             )
+            try:
+                response = client.chat.completions.create(**kwargs)
+            except TypeError:
+                # SDK too old to know `reasoning_effort` (requirements pins
+                # groq>=1.6.0, but a stale deploy image can lag). Retry without
+                # it: qwen will spend tokens thinking and may return nothing,
+                # which is still better than the whole Groq slot going dark.
+                print(f"[ai] groq {model}: SDK rejected {list(params)} — retrying without", flush=True)
+                for k in params:
+                    kwargs.pop(k, None)
+                response = client.chat.completions.create(**kwargs)
             text = (response.choices[0].message.content or "").strip()
             if text:
                 return text
@@ -131,6 +142,13 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> s
     return None
 
 
+# Gemini slot. gemini-2.0-flash was RETIRED and had been 404ing silently — the
+# whole fallback was dead and nobody knew, because this function swallowed the
+# error. Pinned current model first, then the rolling alias so a future
+# retirement self-heals instead of going dark again.
+_GEMINI_MODELS = ("gemini-3.7-flash", "gemini-flash-latest")
+
+
 def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str | None:
     key = os.getenv("GEMINI_API_KEY", "")
     if not key:
@@ -138,19 +156,29 @@ def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 500) ->
     try:
         from google import genai
         from google.genai import types
-        client = genai.Client(api_key=key)
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=max_tokens,
-                temperature=0.3,
-            ),
-        )
-        return response.text.strip()
-    except Exception:
+    except ImportError:
+        print("[ai] gemini: google-genai not installed", flush=True)
         return None
+
+    client = genai.Client(api_key=key)
+    for model in _GEMINI_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    max_output_tokens=max(max_tokens, _GROQ_MIN_TOKENS),
+                    temperature=0.3,
+                ),
+            )
+            text = (response.text or "").strip()
+            if text:
+                return text
+            print(f"[ai] gemini {model}: empty response", flush=True)
+        except Exception as e:
+            print(f"[ai] gemini {model} failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
+    return None
 
 
 def _call_anthropic(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str | None:
@@ -165,7 +193,9 @@ def _call_anthropic(system_prompt: str, user_prompt: str, max_tokens: int = 500)
             messages=[{"role": "user", "content": user_prompt}],
         )
         return msg.content[0].text.strip()
-    except Exception:
+    except Exception as e:
+        # Silent failure here is how the whole chain went dark unnoticed.
+        print(f"[ai] anthropic failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
         return None
 
 

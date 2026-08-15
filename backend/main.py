@@ -181,7 +181,32 @@ def startup():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    """Health + which build is actually serving.
+
+    Railway injects RAILWAY_GIT_COMMIT_SHA at deploy time. Without it there is
+    no way to tell from outside whether a push has landed — every AI or
+    provider-chain change is invisible over HTTP, so "is it deployed?" was
+    unanswerable without dashboard access.
+    """
+    sha = (os.getenv("RAILWAY_GIT_COMMIT_SHA")
+           or os.getenv("SOURCE_COMMIT")
+           or os.getenv("GIT_COMMIT_SHA") or "")
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "commit": sha[:7] or "unknown",
+        "ai_chain": [m for m, _ in _groq_models()] + ["gemini-2.0-flash", "claude-sonnet-4-6"],
+    }
+
+
+def _groq_models():
+    """Groq model list, for the health payload. Imported lazily so a missing
+    optional dependency can never break the health check."""
+    try:
+        from intelligence.claude_ai import _GROQ_MODELS
+        return _GROQ_MODELS
+    except Exception:
+        return ()
 
 
 def _frameworks_probe() -> dict:
