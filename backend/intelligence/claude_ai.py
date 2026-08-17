@@ -332,15 +332,43 @@ def get_verdict(
     profit_margin = float(fundamentals.get("profit_margins") or 0)
     profit_str = f"{profit_margin * 100:.0f}%" if profit_margin else "N/A"
 
+    # Absent data must never be rendered as a definite value. MEASURED 2026-08-17:
+    # a missing `revenue_growth` printed as "0% YoY" and a missing `gaap_profitable`
+    # as "False", and the model then argued bearishly FROM those defaults — "the 0%
+    # revenue growth and lack of GAAP profitability" for NVDA, which is neither. It
+    # passes verification because T2 only asks for a digit, so the fabrication reaches
+    # the user wearing a cited figure.
+    #
+    # Fetch failures are the normal case here, not the exotic one: CLAUDE.md records
+    # Finnhub and Yahoo rate-limiting, and every one of those fields comes from them.
+    #
+    # Note the rest of this prompt already got this right — the price-trend and
+    # analyst sections are OMITTED when empty and profit margin says "N/A". These
+    # three were the gap, not a different philosophy.
+    #
+    # ZERO IS A REAL MEASUREMENT. Only None/absent becomes "not reported", so a
+    # company genuinely at 0% growth still reads as 0%.
+    def _opt_pct(value, scale=1.0, suffix=""):
+        if value is None:
+            return "not reported"
+        return f"{float(value) * scale:.0f}%{suffix}"
+
+    gaap = fundamentals.get("gaap_profitable")
+    gaap_str = "not reported" if gaap is None else str(bool(gaap))
+    # `.get(k, 0)` returns None when the key EXISTS holding None, which then raised
+    # TypeError on the format spec. Absent and null now behave the same.
+    change_pct_val = price_data.get("change_pct")
+    change_str = "not reported" if change_pct_val is None else f"{float(change_pct_val):+.1f}%"
+
     user_prompt = f"""Stock: {ticker}
 Trust Score: {trust_score}/100
 Patterns Detected: {patterns_text}
 Current Price: {price_data.get('price', 'N/A')}
-Change Today: {price_data.get('change_pct', 0):.1f}%
-Revenue Growth: {(fundamentals.get('revenue_growth', 0) or 0) * 100:.0f}% YoY
-GAAP Profitable: {fundamentals.get('gaap_profitable', False)}
+Change Today: {change_str}
+Revenue Growth: {_opt_pct(fundamentals.get('revenue_growth'), 100, ' YoY')}
+GAAP Profitable: {gaap_str}
 Profit Margin: {profit_str}
-Earnings Surprise: {fundamentals.get('earnings_surprise_pct', 0) or 0:.0f}%{trend_section}{analyst_section}
+Earnings Surprise: {_opt_pct(fundamentals.get('earnings_surprise_pct'))}{trend_section}{analyst_section}
 
 Write the verdict and full_analysis following the system rules."""
 
