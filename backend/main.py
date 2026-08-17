@@ -2420,12 +2420,21 @@ def verification_summary():
 
 
 def _by_reason(log: list) -> dict:
+    """Counts grouped by reason CODE, not by message.
+
+    Reasons embed specifics ("P2_score_below_threshold: score=56 (need >=60)"),
+    so keying on the raw string yields one bucket per stock and aggregates
+    nothing. Split on the first colon to recover the code. Full messages remain
+    available on /api/verification/log.
+    """
     out: dict = {}
     for e in log:
         r = e.get("suppression_reason")
-        if r:
-            out[r] = out.get(r, 0) + 1
-    return out
+        if not r:
+            continue
+        code = str(r).split(":", 1)[0].strip()
+        out[code] = out.get(code, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
 
 def _ai_text_pass_rate(log: list) -> dict:
