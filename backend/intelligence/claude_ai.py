@@ -222,6 +222,42 @@ def _strip_reasoning(text: str) -> str:
     return closed.split("<think>")[0] if "<think>" in closed else closed
 
 
+def _json_object_spans(text: str) -> list[str]:
+    """Every top-level balanced {...} span, in the order they appear.
+
+    Brace counting has to know about strings, or a brace inside a verdict ("use {
+    carefully") ends the object early and the span is garbage. Escapes matter for
+    the same reason: "\\" must not swallow the following quote.
+    """
+    spans: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    spans.append(text[start:i + 1])
+                    start = -1
+    return spans
+
+
 def _parse_json(text: str | None) -> dict | None:
     """Extract the model's JSON answer.
 
@@ -243,7 +279,15 @@ def _parse_json(text: str | None) -> dict | None:
         candidates.reverse()
     candidates.append(text)
 
-    # Last resort: the outermost {...} span, for prose wrapped around the JSON.
+    # Then every balanced {...} span, last first. Fences are not guaranteed: a model
+    # that drafts and revises in PROSE emits two bare objects, and the outermost-span
+    # fallback below cannot read either of them because the span runs from the first
+    # "{" to the last "}" and swallows the text between. Measured 2026-08-17:
+    # '{"verdict":"FIRST"} then {"verdict":"SECOND"}' parsed to None, discarding an
+    # answer the model had committed to and sending the caller to the next provider.
+    candidates.extend(reversed(_json_object_spans(text)))
+
+    # Last resort: the outermost {...} span, for prose wrapped around a single object.
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end > start:
         candidates.append(text[start:end + 1])
@@ -375,13 +419,29 @@ Write the verdict and full_analysis following the system rules."""
     text = _call_ai(SYSTEM_PROMPT, user_prompt, max_tokens=750)
     parsed = _parse_json(text)
     if parsed:
-        # Verify the verdict text passes the Real Money Test before caching/returning
+        # Verify the verdict text passes the Real Money Test before caching/returning.
+        # company_name lets T4 recognise prose that says "Amazon" rather than "AMZN".
+        company_name = price_data.get("name") or None
         verdict_text = parsed.get("verdict", "")
-        approved, verified_text = verify_ai_text(ticker, verdict_text, "verdict")
+        approved, verified_text = verify_ai_text(ticker, verdict_text, "verdict",
+                                                 company_name=company_name)
         if not approved:
             parsed["verdict"] = verified_text   # replace with fallback message
         elif verified_text != verdict_text:
             parsed["verdict"] = verified_text   # use cleaned version
+
+        # full_analysis goes through the SAME gate. It was ungated until 2026-08-17,
+        # while this module's own header claimed "Every AI-generated text passes
+        # through verify_ai_text before being returned" — and it is the longer text
+        # the user actually reads, so it was the more consequential of the two.
+        # Gated independently: a weak full_analysis must not discard a good verdict,
+        # and vice versa.
+        analysis_text = parsed.get("full_analysis", "")
+        if analysis_text:
+            ok_analysis, checked_analysis = verify_ai_text(
+                ticker, analysis_text, "full_analysis", company_name=company_name)
+            if not ok_analysis or checked_analysis != analysis_text:
+                parsed["full_analysis"] = checked_analysis
         if clean not in _BLOCKED_VERDICTS:
             # Tag every cached verdict with the change_pct and UTC timestamp used
             # at generation time. The drift check above uses _change_pct_at_generation

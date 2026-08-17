@@ -39,6 +39,7 @@ exposes the last N entries so patterns of failure are visible.
 from __future__ import annotations
 
 import json
+import re
 import time
 import os
 from pathlib import Path
@@ -634,17 +635,26 @@ def verify_ai_text(
     ticker: str,
     text: str,
     output_type: str = "verdict",
+    company_name: str | None = None,
 ) -> tuple[bool, str]:
     """
     Verify AI-generated text is specific to the stock, not generic boilerplate.
     Returns (approved: bool, verified_text_or_fallback: str).
 
-    T1  Text must be >= 50 characters.
-    T2  Text must contain at least one number (price, %, year, score).
-    T3  Text must not be a known generic advisory phrase.
-    T4  Text should reference the ticker or contain a stock-specific fact.
+    T1  Text must be >= 50 characters.                       (suppresses)
+    T2  Text must contain at least one number.                (suppresses)
+    T3  Text must not be a known generic advisory phrase.     (warns)
+    T4  Text should name the stock — ticker, base symbol, or  (warns)
+        company name.
 
-    On failure, returns (False, fallback_message) rather than crashing.
+    T4 WARNS rather than suppresses, deliberately. The rule says "should", and
+    suppressing on it would destroy good output: measured 2026-08-17, real verdicts
+    open "Amazon shows…" and "Microsoft shows…" — correct, readable, and containing
+    neither "AMZN" nor "MSFT". `company_name` exists so those match instead of
+    generating noise; without it the check falls back to ticker and base symbol only.
+    Same shape as T3, which also passes text through with a logged warning.
+
+    On failure of T1/T2, returns (False, fallback_message) rather than crashing.
     """
     if not text or len(text.strip()) < 50:
         _write_log({"ts": time.time(), "ticker": ticker, "output_type": output_type,
@@ -678,6 +688,24 @@ def verify_ai_text(
                         "suppression_reason": None,
                         "warnings": [f"T3_generic_phrase_detected: '{marker[:40]}'"]})
             return True, text   # pass through — don't suppress
+
+    # T4 — does the text actually name this stock? Ticker, base symbol (TCS.NS -> TCS),
+    # or company name. Text that survives T2 by quoting a number but never says which
+    # company it is about is the boilerplate T2 cannot catch.
+    names = {ticker.lower(), ticker.split(".")[0].lower()}
+    if company_name:
+        cn = company_name.strip().lower()
+        names.add(cn)
+        # "Amazon.com Inc" -> "amazon": the first word is what prose actually uses.
+        first = re.split(r"[\s.,]+", cn)[0]
+        if len(first) >= 3:
+            names.add(first)
+    if not any(n and n in text_lower for n in names):
+        _write_log({"ts": time.time(), "ticker": ticker, "output_type": output_type,
+                    "confidence": "MEDIUM", "score": None,
+                    "suppression_reason": None,
+                    "warnings": ["T4_stock_not_named"]})
+        return True, text   # warn only — "should", not "must"
 
     return True, text
 
