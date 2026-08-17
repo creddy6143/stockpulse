@@ -2411,6 +2411,46 @@ def verification_summary():
         "suppressed": suppressed,
         "suppression_rate_pct": round(suppressed / total * 100, 1) if total else 0,
         "by_output_type": by_type,
+        # Why suppression happened, not just how often. T2 (verdict cites no
+        # figure) is the rule an AI model swap moves most, so its rate is the
+        # regression signal to watch after changing provider or prompt.
+        "by_suppression_reason": _by_reason(log),
+        "ai_text": _ai_text_pass_rate(log),
+    }
+
+
+def _by_reason(log: list) -> dict:
+    out: dict = {}
+    for e in log:
+        r = e.get("suppression_reason")
+        if r:
+            out[r] = out.get(r, 0) + 1
+    return out
+
+
+def _ai_text_pass_rate(log: list) -> dict:
+    """Pass rate for AI-written text (verdict / full_analysis / strategy).
+
+    This is the number that used to require hand-sampling a few tickers locally:
+    approvals were never logged, so the rate had no denominator. It is now
+    derived from real traffic since the last restart — check it after any model
+    or prompt change instead of re-running a local sample.
+    """
+    rows = [e for e in log if e.get("output_type") in
+            ("verdict", "full_analysis", "strategy", "watchlist_signal")]
+    total = len(rows)
+    if not total:
+        return {"total": 0, "note": "no AI text verified since restart"}
+    suppressed = sum(1 for e in rows if e.get("confidence") == "SUPPRESSED")
+    no_figure  = sum(1 for e in rows
+                     if e.get("suppression_reason") == "T2_no_numbers_no_specifics")
+    return {
+        "total": total,
+        "passed": total - suppressed,
+        "suppressed": suppressed,
+        "pass_rate_pct": round((total - suppressed) / total * 100, 1),
+        "t2_no_figure": no_figure,
+        "t2_failure_rate_pct": round(no_figure / total * 100, 1),
     }
 
 

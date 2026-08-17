@@ -210,6 +210,24 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str
     return _call_anthropic(system_prompt, user_prompt, max_tokens)
 
 
+# Appended verbatim on a retry when the verdict came back with no figure in it.
+_FIGURE_REMINDER = (
+    "\n\nIMPORTANT: your previous verdict contained no figure and was rejected. "
+    "Rewrite the verdict citing at least one specific number from the data above "
+    "in digits — the price, a percentage, or the trust score. Words like "
+    "'strong growth' are not a figure."
+)
+
+
+def _missing_figure(verdict: str) -> bool:
+    """True when a verdict would fail verification rule T2 (no digit present).
+
+    Mirrors T2 deliberately: this decides whether a retry is worth spending,
+    and only the same condition is worth retrying for.
+    """
+    return bool(verdict) and len(verdict.strip()) >= 50 and not any(c.isdigit() for c in verdict)
+
+
 def _strip_reasoning(text: str) -> str:
     """Remove <think> blocks a reasoning model may write into its content.
 
@@ -418,6 +436,21 @@ Write the verdict and full_analysis following the system rules."""
 
     text = _call_ai(SYSTEM_PROMPT, user_prompt, max_tokens=750)
     parsed = _parse_json(text)
+
+    # T2 asks the verdict to cite a figure; a model that forgets gets its whole
+    # verdict replaced by "Insufficient specific data…", which reads to the user
+    # like we have no data on the stock. One corrective retry recovers it —
+    # cheaper than a suppressed verdict and far more honest than loosening the
+    # gate. Only fires when the text is otherwise fine, so cost is near zero.
+    if parsed and _missing_figure(parsed.get("verdict", "")):
+        retry = _call_ai(SYSTEM_PROMPT, user_prompt + _FIGURE_REMINDER, max_tokens=750)
+        reparsed = _parse_json(retry)
+        if reparsed and not _missing_figure(reparsed.get("verdict", "")):
+            print(f"[ai] {ticker}: verdict retried for a cited figure — recovered", flush=True)
+            parsed = reparsed
+        else:
+            print(f"[ai] {ticker}: verdict retry still had no figure", flush=True)
+
     if parsed:
         # Verify the verdict text passes the Real Money Test before caching/returning.
         # company_name lets T4 recognise prose that says "Amazon" rather than "AMZN".

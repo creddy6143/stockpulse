@@ -707,6 +707,12 @@ def verify_ai_text(
                     "warnings": ["T4_stock_not_named"]})
         return True, text   # warn only — "should", not "must"
 
+    # Log the clean pass too. Only failures were recorded before, so the pass
+    # rate had no denominator and could not be measured from production at all —
+    # it had to be hand-sampled against a handful of tickers.
+    _write_log({"ts": time.time(), "ticker": ticker, "output_type": output_type,
+                "confidence": "HIGH", "score": None,
+                "suppression_reason": None, "warnings": []})
     return True, text
 
 
