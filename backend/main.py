@@ -21,7 +21,7 @@ from datetime import datetime
 
 from database.models import init_db
 from database import db
-from auth import get_current_user
+from auth import get_current_user, require_owner
 from data.fetcher import get_stock_price, get_market_data, get_fundamentals, get_analyst_data, get_stock_history, get_news, get_insider_data
 from data.india import get_india_signals, is_indian_stock
 from intelligence.trust_score import get_trust_score_with_fallback
@@ -226,7 +226,7 @@ def _frameworks_probe() -> dict:
 
 
 @app.get("/api/dip-status")
-def dip_status():
+def dip_status(_u: str = Depends(get_current_user)):
     """No-auth diagnostic endpoint — shows dip scan state for debugging prod."""
     if _time.monotonic() - _shock_scan_ts > _SHOCK_SCAN_TTL:
         threading.Thread(target=_refresh_shock_scan, daemon=True).start()
@@ -350,8 +350,8 @@ def auth_me(user_id: str = Depends(get_current_user)):
 
 
 @app.get("/api/admin/db-status")
-def db_status():
-    """Temporary diagnostic — shows row counts per user_id (no personal data)."""
+def db_status(_owner: str = Depends(require_owner)):
+    """Owner-only diagnostic — row counts per user_id (no personal data)."""
     import os
     from database.models import get_connection as _gc
     conn = _gc()
@@ -379,14 +379,20 @@ def ping():
 
 
 @app.delete("/api/reset")
-def reset_all_data():
-    """Clear all portfolio, watchlist, signals and alerts."""
-    db.clear_all_data()
+def reset_all_data(user_id: str = Depends(get_current_user)):
+    """Clear the CALLER'S portfolio, watchlist and alerts.
+
+    Never global. This endpoint was once unauthenticated and unscoped, which
+    let anyone who knew the URL erase every user's data — hence both the login
+    requirement and the user_id argument below.
+    """
+    db.clear_all_data(user_id=user_id)
+    _snapshot_invalidate(user_id)
     return {"status": "cleared"}
 
 
 @app.post("/api/cache/clear")
-def clear_data_cache():
+def clear_data_cache(user_id: str = Depends(get_current_user)):
     """Clear in-memory data cache — forces fresh data fetch for all stocks.
     Use this after deploying fixes to get updated trust scores immediately.
     """
@@ -398,14 +404,14 @@ def clear_data_cache():
 # ── SEARCH ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/rates")
-def exchange_rates():
+def exchange_rates(_u: str = Depends(get_current_user)):
     """Live exchange rates: SEK per 1 USD/EUR/INR. Cached 15 min."""
     from data.fetcher import get_exchange_rates
     return get_exchange_rates()
 
 
 @app.get("/api/search")
-def search_stocks(q: str = ""):
+def search_stocks(q: str = "", _u: str = Depends(get_current_user)):
     """Search tickers by name or symbol."""
     if len(q.strip()) < 2:
         return []
@@ -416,7 +422,7 @@ def search_stocks(q: str = ""):
 # ── MARKET ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/market")
-def market():
+def market(_u: str = Depends(get_current_user)):
     """VIX + 4 market indices + market status."""
     return get_market_data()
 
@@ -551,7 +557,7 @@ def remove_watchlist(ticker: str, user_id: str = Depends(get_current_user)):
 # ── STOCK ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/stock/{ticker}")
-def stock_full(ticker: str):
+def stock_full(ticker: str, _u: str = Depends(get_current_user)):
     """Full stock data: price + trust + signals + verdict."""
     ticker = ticker.upper()
     price_data = get_stock_price(ticker)
@@ -581,19 +587,19 @@ def stock_full(ticker: str):
 
 
 @app.get("/api/stock/{ticker}/trust")
-def stock_trust(ticker: str):
+def stock_trust(ticker: str, _u: str = Depends(get_current_user)):
     ticker = ticker.upper()
     price_data = get_stock_price(ticker)
     return get_trust_score_with_fallback(ticker, price_data)
 
 
 @app.get("/api/stock/{ticker}/signals")
-def stock_signals(ticker: str):
+def stock_signals(ticker: str, _u: str = Depends(get_current_user)):
     return db.get_signals(ticker.upper())
 
 
 @app.get("/api/stock/{ticker}/detail")
-def stock_detail_full(ticker: str):
+def stock_detail_full(ticker: str, _u: str = Depends(get_current_user)):
     """Fast detail — price, history, fundamentals, analyst, trust, news. No AI call."""
     ticker = ticker.upper()
     price_data = get_stock_price(ticker)
@@ -2033,7 +2039,7 @@ def _maybe_auto_scan():
 
 
 @app.get("/api/picks")
-def picks():
+def picks(_u: str = Depends(get_current_user)):
     """Return pre-computed smart picks from DB cache — always instant (<100ms).
     The heavy scan runs in background; see POST /api/picks/refresh to trigger manually.
     """
@@ -2157,7 +2163,7 @@ def picks():
 
 
 @app.post("/api/picks/refresh")
-def refresh_picks():
+def refresh_picks(_u: str = Depends(get_current_user)):
     """Trigger a background re-scan of the full universe. Non-blocking — returns immediately."""
     if _scan_running:
         return {"status": "already_running", "message": "Scan already in progress"}
@@ -2166,7 +2172,7 @@ def refresh_picks():
 
 
 @app.get("/api/picks/status")
-def picks_scan_status():
+def picks_scan_status(_u: str = Depends(get_current_user)):
     """Return current scan status (idle | running | complete | error) + metadata."""
     status = db.get_scan_status()
     return {
@@ -2183,7 +2189,7 @@ def picks_scan_status():
 
 
 @app.get("/api/picks/sector/{sector}")
-def picks_by_sector(sector: str):
+def picks_by_sector(sector: str, _u: str = Depends(get_current_user)):
     """Return top-10 picks for a specific GICS sector from cache."""
     cache = db.get_picks_cache()
     if not cache or not cache.get("sector_json") or cache["sector_json"] == "{}":
@@ -2199,7 +2205,7 @@ def picks_by_sector(sector: str):
 
 
 @app.get("/api/picks/disqualified")
-def picks_disqualified():
+def picks_disqualified(_u: str = Depends(get_current_user)):
     """Auto-disqualified stocks from portfolio + watchlist + picks universe + curated universe.
     Includes unblock_condition so users understand what needs to change.
     """
@@ -2245,12 +2251,12 @@ class PicksUniverseRequest(BaseModel):
 
 
 @app.get("/api/picks/universe")
-def get_picks_universe():
+def get_picks_universe(_u: str = Depends(get_current_user)):
     return db.get_picks_universe()
 
 
 @app.post("/api/picks/universe")
-def add_picks_universe(req: PicksUniverseRequest):
+def add_picks_universe(req: PicksUniverseRequest, _owner: str = Depends(require_owner)):
     ticker = req.ticker.upper()
     price_data = get_stock_price(ticker)
     market = _detect_market(ticker)
@@ -2265,7 +2271,7 @@ def add_picks_universe(req: PicksUniverseRequest):
 
 
 @app.delete("/api/picks/universe/{ticker}")
-def remove_picks_universe(ticker: str):
+def remove_picks_universe(ticker: str, _owner: str = Depends(require_owner)):
     db.remove_picks_universe(ticker.upper())
     from data.cache import cache_set as cs
     cs("picks:result", None)  # Invalidate picks cache
@@ -2376,14 +2382,14 @@ def _check_price_alerts(ticker: str, current_price: float,
 # ── ACCURACY ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/accuracy")
-def accuracy():
+def accuracy(_u: str = Depends(get_current_user)):
     return db.get_signal_accuracy(days=90)
 
 
 # ── VERIFICATION AUDIT LOG ─────────────────────────────────────────────────────
 
 @app.get("/api/verification/log")
-def verification_log(limit: int = 100):
+def verification_log(limit: int = 100, _u: str = Depends(get_current_user)):
     """
     Returns the most-recent verification decisions (newest first).
     Each entry shows which checks passed/failed and why an output was
@@ -2393,7 +2399,7 @@ def verification_log(limit: int = 100):
 
 
 @app.get("/api/verification/summary")
-def verification_summary():
+def verification_summary(_u: str = Depends(get_current_user)):
     """Aggregate stats on verification decisions since last restart."""
     log = get_verification_log(limit=500)
     total      = len(log)
@@ -2765,7 +2771,7 @@ class PlaybookRequest(BaseModel):
 
 
 @app.post("/api/strategy/{ticker}/playbook")
-def strategy_playbook(ticker: str, req: PlaybookRequest):
+def strategy_playbook(ticker: str, req: PlaybookRequest, _u: str = Depends(get_current_user)):
     """Generate AI playbook for a specific stock situation — on-demand, cached 2hrs.
     Called when user taps a Strategy card. Enriches AI with news, analyst,
     insider data, and fundamentals.

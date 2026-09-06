@@ -32,3 +32,16 @@ def get_current_user(
         return decoded["uid"]
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def require_owner(user_id: str = Security(get_current_user)) -> str:
+    """Admin guard: only the account named by OWNER_UID may proceed.
+
+    Used for destructive or diagnostic endpoints. If OWNER_UID is not set the
+    endpoint is closed to everyone rather than open to everyone — an unset env
+    var must never fail open.
+    """
+    owner_uid = os.getenv("OWNER_UID", "").strip()
+    if not owner_uid or user_id != owner_uid:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user_id

@@ -402,15 +402,23 @@ def get_market_value(key):
 
 
 def clear_all_data(user_id=None):
+    """Delete one user's data, or every user's when user_id is None.
+
+    user_id=None is for local maintenance only — no HTTP route may reach it.
+    When scoped, alerts are scoped too (they carry a user_id) and the shared
+    signals table is left alone: one user resetting must not blank the signal
+    history that every other user's screens read from.
+    """
     conn = get_connection()
     if user_id is not None:
         conn.execute("DELETE FROM portfolio WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM watchlist WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM alerts    WHERE user_id=?", (user_id,))
     else:
         conn.execute("DELETE FROM portfolio")
         conn.execute("DELETE FROM watchlist")
-    conn.execute("DELETE FROM signals")
-    conn.execute("DELETE FROM alerts")
+        conn.execute("DELETE FROM alerts")
+        conn.execute("DELETE FROM signals")
     conn.commit()
     conn.close()
 

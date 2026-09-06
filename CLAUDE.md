@@ -896,7 +896,9 @@ Verify the whole chain is alive after any provider change:
 
 ```bash
 curl -s $BACKEND/api/health          # reports commit + the live ai_chain list
-curl -s $BACKEND/api/stock/AMZN      # public; _generated_at set = AI answered,
+# Every route except /api/health and /api/ping now needs a Firebase ID token:
+curl -s -H "Authorization: Bearer $ID_TOKEN" $BACKEND/api/stock/AMZN
+                                     # _generated_at set = AI answered,
                                      # null = every provider failed
 ```
 
