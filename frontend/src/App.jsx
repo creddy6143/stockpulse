@@ -4112,14 +4112,14 @@ function AdminPanel({onClose}) {
           <div style={{marginTop:12,padding:"12px 14px",background:"var(--rose2)",border:"1.5px solid #fecdd3",borderRadius:12}}>
             <div style={{fontFamily:"var(--dm)",fontSize:12,fontWeight:600,color:"var(--rose)",marginBottom:4}}>
               {err.includes("403") ? "This account is not the owner"
-                : err.includes("500") ? "The server could not read the account list"
+                : (err.includes("503") || err.includes("500")) ? "Firebase would not return the account list"
                 : "Could not load accounts"}
             </div>
             <div style={{fontFamily:"var(--dm)",fontSize:11,color:"var(--t2)",lineHeight:1.5}}>
               {err.includes("403")
                 ? "OWNER_UID in Railway is either unset or set to a different account than the one you are signed in with. If you have signed in with both Google and email, they are separate accounts with separate UIDs."
-                : err.includes("500")
-                ? "The Firebase service account may not have permission to list users."
+                : (err.includes("503") || err.includes("500"))
+                ? "The service account needs the Firebase Authentication Admin role in Google Cloud IAM. The exact error is below."
                 : err}
             </div>
             <div style={{marginTop:8,fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{err}</div>

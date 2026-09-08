@@ -385,7 +385,16 @@ def admin_users(_owner: str = Depends(require_owner)):
     when the server restarts.
     """
     from auth import list_all_users
-    users = list_all_users()
+    try:
+        users = list_all_users()
+    except Exception as exc:
+        # Almost always the service account lacking firebaseauth.users.list.
+        # Say so, rather than letting it surface as an opaque 500.
+        raise HTTPException(
+            status_code=503,
+            detail=f"Firebase would not list accounts ({type(exc).__name__}: {exc}). "
+                   f"Grant the service account the Firebase Authentication Admin role.",
+        )
     return {
         "count": len(users),
         "active_since_restart": sum(1 for u in users if u["last_request"]),

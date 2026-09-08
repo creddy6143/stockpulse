@@ -24,7 +24,14 @@ async function request(path, options = {}) {
       await auth.signOut();
       return null;
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      // Keep the server's own explanation — a bare "HTTP 503" tells the user
+      // nothing they can act on. The "HTTP <status>" prefix is preserved
+      // because callers match on it.
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (_) {}
+      throw new Error(detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`);
+    }
     return res.json();
   } catch (err) {
     console.error(`API error: ${path}`, err);
