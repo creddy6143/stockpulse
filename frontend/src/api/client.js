@@ -137,3 +137,7 @@ export const getPriceAlerts = () => request('/api/price-alerts');
 export const createPriceAlert = (data) => request('/api/price-alerts', {method:'POST', body:JSON.stringify(data)});
 export const deletePriceAlert = (id) => request(`/api/price-alerts/${id}`, {method:'DELETE'});
 export const togglePriceAlert = (id, isActive) => request(`/api/price-alerts/${id}`, {method:'PUT', body:JSON.stringify({is_active:isActive})});
+
+// ── ADMIN (owner only) ───────────────────────────────────────────────────────
+
+export const getAdminUsers = () => request('/api/admin/users');

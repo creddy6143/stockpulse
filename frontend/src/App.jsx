@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite, getFrameworks, getFrameworksFor, getRotation, getContractedRevenue } from "./api/client";
+import { getMarket, getPortfolio, getWatchlist, getAlerts, getPicks, refreshPicksScan, getPicksStatus, getDisqualified, getAccuracy, getStrategy, getStrategyPlaybook, getEarnings, addPosition, addToWatchlist, deletePosition, removeFromWatchlist, updatePosition, searchTicker, getStockTrust, getStockDetail, getStockVerdict, addPicksUniverse, removePicksUniverse, getPicksUniverse, getPriceAlerts, createPriceAlert, deletePriceAlert, deleteAlert, deleteAllAlerts, getAnalogs, getElite, getFrameworks, getFrameworksFor, getRotation, getContractedRevenue, getAdminUsers } from "./api/client";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import AuthScreen from "./screens/AuthScreen";
@@ -4058,6 +4058,114 @@ function EliteScreen({eliteData, strategyData, onDetail}){
 }
 
 // ── APP ──────────────────────────────────────────────
+// ── ADMIN PANEL (owner only) ─────────────────────────────────────────────────
+
+// Firebase timestamps arrive as "2026-09-08T21:05:04+00:00". Do not reuse
+// fmtUpdatedAt here — it appends a "Z" that turns this offset form into an
+// Invalid Date.
+function adminAgo(iso) {
+  if (!iso) return null;
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return null;
+  const m = Math.floor((Date.now() - dt.getTime()) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return d < 30 ? `${d}d ago` : adminDate(iso);
+}
+function adminDate(iso) {
+  if (!iso) return "—";
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return "—";
+  return dt.toLocaleDateString(undefined, {day:"numeric", month:"short", year:"numeric"});
+}
+const PROVIDER_LABEL = {"password":"Email", "google.com":"Google"};
+
+function AdminPanel({onClose}) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    getAdminUsers()
+      .then(d => setData(d || {count:0, users:[]}))
+      .catch(e => setErr(String((e && e.message) || e)));
+  }, []);
+
+  const users = (data && data.users) || [];
+  const lbl = {fontFamily:"var(--mono)", fontSize:9, color:"var(--t3)", textTransform:"uppercase", letterSpacing:.5};
+
+  return (
+    <div className="alert-panel-overlay" onClick={onClose}>
+      <div className="alert-panel-box" onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 14px"}}/>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+          <div style={{fontFamily:"var(--syne)",fontWeight:700,fontSize:15,color:"var(--t1)"}}>Who's using StockPulse</div>
+          <button onClick={onClose} style={{background:"var(--card2)",border:"none",borderRadius:7,padding:"4px 8px",fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)",cursor:"pointer"}}>Close</button>
+        </div>
+
+        {!data && !err && (
+          <div style={{textAlign:"center",padding:"28px 0",fontFamily:"var(--mono)",fontSize:11,color:"var(--t3)"}}>Loading…</div>
+        )}
+
+        {err && (
+          <div style={{marginTop:12,padding:"12px 14px",background:"var(--rose2)",border:"1.5px solid #fecdd3",borderRadius:12}}>
+            <div style={{fontFamily:"var(--dm)",fontSize:12,fontWeight:600,color:"var(--rose)",marginBottom:4}}>
+              {err.includes("403") ? "This account is not the owner"
+                : err.includes("500") ? "The server could not read the account list"
+                : "Could not load accounts"}
+            </div>
+            <div style={{fontFamily:"var(--dm)",fontSize:11,color:"var(--t2)",lineHeight:1.5}}>
+              {err.includes("403")
+                ? "OWNER_UID in Railway is either unset or set to a different account than the one you are signed in with. If you have signed in with both Google and email, they are separate accounts with separate UIDs."
+                : err.includes("500")
+                ? "The Firebase service account may not have permission to list users."
+                : err}
+            </div>
+            <div style={{marginTop:8,fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>{err}</div>
+          </div>
+        )}
+
+        {data && (
+          <>
+            <div style={{...lbl, marginBottom:14}}>
+              {data.count} account{data.count===1?"":"s"} · {data.active_since_restart||0} active since last deploy
+            </div>
+            {users.map(u => {
+              const seen = adminAgo(u.last_request);
+              const signed = adminAgo(u.last_sign_in);
+              return (
+                <div key={u.uid} style={{background:"var(--white)",borderRadius:12,border:"1px solid rgba(15,23,42,.06)",padding:"10px 12px",marginBottom:8}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                    <div style={{fontFamily:"var(--dm)",fontSize:12,fontWeight:600,color:"var(--t1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {u.email || u.uid.slice(0,12)+"…"}
+                    </div>
+                    <div style={{display:"flex",gap:5,flexShrink:0}}>
+                      {u.is_owner && <span style={{fontFamily:"var(--mono)",fontSize:8,padding:"2px 6px",borderRadius:5,background:"var(--emerald2)",color:"var(--emerald)"}}>YOU</span>}
+                      {u.disabled && <span style={{fontFamily:"var(--mono)",fontSize:8,padding:"2px 6px",borderRadius:5,background:"var(--rose2)",color:"var(--rose)"}}>DISABLED</span>}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,marginTop:5}}>
+                    <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--t3)"}}>
+                      {(u.providers||[]).map(p=>PROVIDER_LABEL[p]||p).join(" · ") || "—"} · joined {adminDate(u.created_at)}
+                    </div>
+                    <div style={{fontFamily:"var(--mono)",fontSize:9,color:seen?"var(--emerald)":"var(--t3)",flexShrink:0}}>
+                      {seen ? `active ${seen}` : signed ? `signed in ${signed}` : "never signed in"}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{marginTop:10,fontFamily:"var(--dm)",fontSize:10,color:"var(--t3)",lineHeight:1.5}}>
+              "Active" is real API use and resets whenever the backend restarts, so it reads empty right after a deploy. "Signed in" comes from Firebase and only updates on a fresh sign-in — a returning user on a live session will not move it.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   // Auth state: undefined = loading, null = signed out, object = signed in
   const [user, setUser] = useState(undefined);
@@ -4067,8 +4175,12 @@ export default function App() {
       // Fire auth/me in background — triggers migration, does not block UI
       try {
         const token = await u.getIdToken();
-        await fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+        const r = await fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+        const d = await r.json();
+        setIsOwner(!!(d && d.is_owner));
       } catch (_) {}
+    } else {
+      setIsOwner(false);
     }
   }), []);
 
@@ -4078,6 +4190,8 @@ export default function App() {
   const [alertSubject,setAlertSubject] = useState(null); // {ticker,price,entryLow,entryHigh} or null
   const [showBellPanel,setShowBellPanel] = useState(false);
   const [showSignOutConfirm,setShowSignOutConfirm] = useState(false);
+  const [isOwner,setIsOwner] = useState(false);
+  const [showAdmin,setShowAdmin] = useState(false);
 
   // ── Real data state ──
   const [portfolio, setPortfolio] = useState({positions:[], summary:{}});
@@ -4331,12 +4445,16 @@ export default function App() {
           onSaved={loadPriceAlerts}
         />
       )}
+      {showAdmin&&<AdminPanel onClose={()=>setShowAdmin(false)}/>}
       {showSignOutConfirm&&(
         <div className="alert-panel-overlay" onClick={()=>setShowSignOutConfirm(false)}>
           <div className="alert-panel-box" onClick={e=>e.stopPropagation()} style={{maxHeight:"unset",paddingBottom:24}}>
             <div style={{width:36,height:4,background:"var(--t4)",borderRadius:2,margin:"0 auto 18px"}}/>
             <div style={{fontSize:16,fontFamily:"var(--syne)",fontWeight:700,color:"var(--t1)",marginBottom:6}}>Sign out?</div>
-            <div style={{fontSize:13,color:"var(--t2)",marginBottom:24,lineHeight:1.5}}>You'll need to sign in again to access your portfolio and watchlist.</div>
+            <div style={{fontSize:13,color:"var(--t2)",marginBottom:isOwner?16:24,lineHeight:1.5}}>You'll need to sign in again to access your portfolio and watchlist.</div>
+            {isOwner&&(
+              <button onClick={()=>{setShowSignOutConfirm(false);setShowAdmin(true);}} style={{width:"100%",padding:"11px 0",marginBottom:16,borderRadius:10,border:"1.5px solid var(--t4)",background:"var(--white)",fontFamily:"var(--dm)",fontSize:13,fontWeight:600,color:"var(--indigo)",cursor:"pointer"}}>👥  Who's using StockPulse</button>
+            )}
             <div style={{display:"flex",gap:10}}>
               <button onClick={()=>setShowSignOutConfirm(false)} style={{flex:1,padding:"11px 0",borderRadius:10,border:"1.5px solid var(--t4)",background:"#fff",fontFamily:"var(--dm)",fontSize:14,fontWeight:600,color:"var(--t2)",cursor:"pointer"}}>Cancel</button>
               <button onClick={()=>{setShowSignOutConfirm(false);signOut(auth);}} style={{flex:1,padding:"11px 0",borderRadius:10,border:"none",background:"var(--rose)",fontFamily:"var(--dm)",fontSize:14,fontWeight:700,color:"#fff",cursor:"pointer"}}>Sign Out</button>

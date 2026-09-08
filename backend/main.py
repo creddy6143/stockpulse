@@ -344,9 +344,16 @@ def dip_status(_u: str = Depends(get_current_user)):
 
 @app.get("/api/auth/me")
 def auth_me(user_id: str = Depends(get_current_user)):
-    """Called once on login. Triggers owner-data migration. Returns user UID."""
+    """Called once on login. Triggers owner-data migration. Returns user UID.
+
+    is_owner tells the frontend whether to offer the admin panel. It is a UI
+    hint only — every admin route re-checks with require_owner, so a client
+    that forges this flag still gets a 403.
+    """
     db.migrate_owner_data(user_id)
-    return {"uid": user_id, "status": "ok"}
+    owner_uid = os.getenv("OWNER_UID", "").strip()
+    return {"uid": user_id, "status": "ok",
+            "is_owner": bool(owner_uid) and user_id == owner_uid}
 
 
 @app.get("/api/admin/db-status")

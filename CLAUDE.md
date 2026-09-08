@@ -915,6 +915,11 @@ Firebase records the accounts; the backend records the use.
   authenticated request after 30 min of silence — roughly one line per person
   per session. Set `LOG_REQUESTS=1` to also print `[auth]` on every request;
   leave it off normally, since the picks scan polls status every 15s.
+- The owner sees a **Who's using StockPulse** button in the account sheet (the
+  👤 header button), which opens `AdminPanel` over that list — no DevTools
+  needed. `GET /api/auth/me` returns `is_owner` purely to decide whether to
+  show the button; every admin route still re-checks with `require_owner`, so
+  forging the flag client-side gains nothing.
 
 The Groq free tier meters tokens PER MODEL (200k/day), so the second Groq
 model is a second daily budget, not just a second opinion — when the primary
