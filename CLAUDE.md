@@ -902,6 +902,20 @@ curl -s -H "Authorization: Bearer $ID_TOKEN" $BACKEND/api/stock/AMZN
                                      # null = every provider failed
 ```
 
+### Knowing who uses the app
+
+Firebase records the accounts; the backend records the use.
+
+- `GET /api/admin/users` (owner-only) lists every registered account with its
+  provider, signup time, Firebase `last_sign_in`, and `last_request`. The last
+  two differ on purpose: `last_sign_in` moves only on a real sign-in, so a
+  returning user on a live session never bumps it. `last_request` is real API
+  traffic, held in process memory, and resets on every deploy or restart.
+- A `[visit] <email> (<uid8>) active — GET /path` line is printed on the first
+  authenticated request after 30 min of silence — roughly one line per person
+  per session. Set `LOG_REQUESTS=1` to also print `[auth]` on every request;
+  leave it off normally, since the picks scan polls status every 15s.
+
 The Groq free tier meters tokens PER MODEL (200k/day), so the second Groq
 model is a second daily budget, not just a second opinion — when the primary
 is rate-limited the chain stays on Groq instead of falling through to Gemini.

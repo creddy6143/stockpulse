@@ -368,6 +368,24 @@ def db_status(_owner: str = Depends(require_owner)):
     }
 
 
+@app.get("/api/admin/users")
+def admin_users(_owner: str = Depends(require_owner)):
+    """Owner-only: every registered account, newest sign-in first.
+
+    Answers "has anyone signed up / logged in" without opening the Firebase
+    console. last_sign_in is Firebase's own figure and only moves on a real
+    sign-in; last_request is this process's view of actual API use and resets
+    when the server restarts.
+    """
+    from auth import list_all_users
+    users = list_all_users()
+    return {
+        "count": len(users),
+        "active_since_restart": sum(1 for u in users if u["last_request"]),
+        "users": users,
+    }
+
+
 
 
 
