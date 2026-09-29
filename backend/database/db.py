@@ -615,7 +615,8 @@ def get_picks_cache():
 
 
 def save_picks_cache(all_picks_json: str, sector_json: str,
-                     tickers_scanned: int = 0, tickers_ok: int = 0):
+                     tickers_scanned: int = 0, tickers_ok: int = 0,
+                     disq_json: str = "[]"):
     """Upsert the smart picks result (always a single row — overwrite on each scan)."""
     conn = get_connection()
     now = datetime.utcnow().isoformat()
@@ -623,20 +624,21 @@ def save_picks_cache(all_picks_json: str, sector_json: str,
     if existing:
         conn.execute(
             """UPDATE smart_picks_cache SET
-               all_picks_json=?, sector_json=?,
+               all_picks_json=?, sector_json=?, disq_json=?,
                scan_status='complete', scan_completed_at=?,
                tickers_scanned=?, tickers_ok=?, updated_at=?
                WHERE id=?""",
-            (all_picks_json, sector_json, now, tickers_scanned, tickers_ok, now,
-             existing["id"]),
+            (all_picks_json, sector_json, disq_json, now, tickers_scanned, tickers_ok,
+             now, existing["id"]),
         )
     else:
         conn.execute(
             """INSERT INTO smart_picks_cache
-               (all_picks_json, sector_json, scan_status, scan_completed_at,
+               (all_picks_json, sector_json, disq_json, scan_status, scan_completed_at,
                 tickers_scanned, tickers_ok, updated_at)
-               VALUES (?, ?, 'complete', ?, ?, ?, ?)""",
-            (all_picks_json, sector_json, now, tickers_scanned, tickers_ok, now),
+               VALUES (?, ?, ?, 'complete', ?, ?, ?, ?)""",
+            (all_picks_json, sector_json, disq_json, now, tickers_scanned, tickers_ok,
+             now),
         )
     conn.commit()
     conn.close()

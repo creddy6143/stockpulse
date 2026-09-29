@@ -964,7 +964,9 @@ _UNBLOCK_CONDITIONS: dict[str, str] = {
     "reverse split":     "No reverse split for 12+ consecutive months",
     "going concern":     "Auditor removes going-concern warning from filings",
     "sec investigation": "SEC closes investigation or clears the company",
-    "board resignation": "30-day post-resignation window expires with stable leadership",
+    # "board resign" matches both "board resignation" and "board resigned" — the
+    # reasons actually stored say "Board resigned ...", which the longer key missed.
+    "board resign":      "30-day post-resignation window expires with stable leadership",
     "cash runway":       "Cash runway extended beyond 6 months via fundraising or revenue",
     "ceo":               "Stable leadership confirmed for 90+ days",
     "promoter pledge":   "Promoter pledge drops below 50% and is declining",
@@ -973,6 +975,34 @@ _UNBLOCK_CONDITIONS: dict[str, str] = {
 }
 
 from data.cache import cache_get as _cache_get, cache_set as _cache_set, TTL_STRATEGY
+
+
+def _unblock_condition_for(reason: str) -> str:
+    """Plain-English "what would have to change" for a disqualification reason."""
+    reason_lower = (reason or "").lower()
+    for kw, condition in _UNBLOCK_CONDITIONS.items():
+        if kw in reason_lower:
+            return condition
+    return "Disqualifying condition must be resolved and cleared from data sources"
+
+
+# Auto-disqualified stocks found while scoring, so /api/picks/disqualified can be
+# served from the last scan instead of re-scoring all ~480 tickers on every request.
+_disq_registry: dict[str, dict] = {}
+_disq_lock = threading.Lock()
+
+
+def _record_disqualified(ticker: str, price_data: dict, trust: dict) -> None:
+    reason = trust.get("disqualify_reason") or "Auto-disqualified by safety check."
+    with _disq_lock:
+        _disq_registry[ticker] = {
+            "ticker": ticker,
+            "name": price_data.get("name") or ticker,
+            "trust_score": trust.get("total_score"),
+            "reason": reason,
+            "unblock_condition": _unblock_condition_for(reason),
+        }
+
 
 def _score_one_ticker(ticker: str) -> dict | None:
     """Evaluate one ticker and return a picks entry if it qualifies.
@@ -983,7 +1013,12 @@ def _score_one_ticker(ticker: str) -> dict | None:
         if not price_data.get("price"):
             return None
         trust = get_trust_score_with_fallback(ticker, price_data)
-        if trust["auto_disqualified"] or trust["total_score"] is None:
+        if trust["auto_disqualified"]:
+            # Remember it — this is the only place the whole universe gets scored,
+            # so it is where the Blocked list is cheaply built.
+            _record_disqualified(ticker, price_data, trust)
+            return None
+        if trust["total_score"] is None:
             return None
         fundamentals = get_fundamentals(ticker)
         change_pct = float(price_data.get("change_pct", 0) or 0)
@@ -1072,8 +1107,62 @@ def _score_one_ticker(ticker: str) -> dict | None:
 # The scan takes 15-20 min on the free tier. It NEVER blocks an API request.
 # Results are stored in smart_picks_cache table and read back instantly.
 
-_scan_lock = threading.Lock()
+_scan_lock = threading.Lock()   # guards the flags below; held only for a moment
 _scan_running = False
+# A wedged worker used to pin _scan_running=True forever. That also made
+# /api/picks/refresh answer "already_running", so the only cure was a container
+# restart. These let a stalled scan be abandoned and replaced:
+#   _scan_generation — bumped on every start. A scan whose generation is stale has
+#                      been abandoned; it must not write progress or results, and
+#                      must not clear the flag belonging to the scan that replaced it.
+#   _scan_progress_at — monotonic clock of the last ticker actually scored.
+_scan_generation = 0
+_scan_progress_at = 0.0
+_SCAN_STALL_SECS = 900   # 15 min without a single ticker completing = wedged
+
+# Scan tunables. batch_timeout is a real bound now that the executor is no longer
+# used as a context manager, so a batch cannot run longer than this.
+_SCAN_BATCH_SIZE    = 30
+_SCAN_BATCH_PAUSE   = 12    # seconds between batches — keeps Finnhub free tier happy
+_SCAN_WORKERS       = 3
+_SCAN_BATCH_TIMEOUT = 120   # 3 workers x 30 tickers; past 2 min something is hung
+
+
+class _ScanAbandoned(Exception):
+    """Raised inside a scan whose generation the watchdog has retired."""
+
+
+def _scan_stalled_for() -> float:
+    """Seconds since the running scan last scored a ticker (0.0 if not stalled)."""
+    if not _scan_running or not _scan_progress_at:
+        return 0.0
+    idle = _time.monotonic() - _scan_progress_at
+    return idle if idle > _SCAN_STALL_SECS else 0.0
+
+
+def _clear_stalled_scan() -> bool:
+    """Retire a wedged scan so a new one can start. Returns True if it did.
+
+    Called from the status and refresh endpoints, so the app self-heals as soon as
+    anyone looks at Smart Picks — _maybe_auto_scan() only runs at startup and its
+    zombie check requires _scan_running to already be False, so neither could ever
+    recover a scan that hung while the container stayed up.
+    """
+    global _scan_running, _scan_generation
+    with _scan_lock:
+        idle = _scan_stalled_for()
+        if not idle:
+            return False
+        print(f"[PICKS BG] WATCHDOG: no ticker completed in {idle/60:.0f}m — "
+              f"abandoning scan gen {_scan_generation}", flush=True)
+        _scan_generation += 1    # retires the wedged thread
+        _scan_running = False
+        try:
+            db.set_scan_status("idle")
+        except Exception:
+            pass
+        return True
+
 
 # Live price overlay for picks — updated in parallel on each /api/picks call.
 # Scores and fundamentals stay in the scan cache (hours old is fine).
@@ -1884,12 +1973,23 @@ def _refresh_rotation_scan() -> None:
 
 def _run_picks_scan_background():
     """Full curated-universe scan — runs in a daemon thread, saves to DB when done."""
-    global _scan_running
-    if not _scan_lock.acquire(blocking=False):
-        print("[PICKS] Scan already running — skipping duplicate start", flush=True)
-        return
-    try:
+    global _scan_running, _scan_generation, _scan_progress_at
+    with _scan_lock:
+        if _scan_running:
+            print("[PICKS] Scan already running — skipping duplicate start", flush=True)
+            return
+        _scan_generation += 1
+        my_gen = _scan_generation
         _scan_running = True
+        _scan_progress_at = _time.monotonic()
+
+    # Start the Blocked list over, so a stock that is no longer disqualified drops
+    # off it. /api/picks/disqualified keeps serving the persisted previous scan
+    # until this one saves, so the list never goes blank mid-scan.
+    with _disq_lock:
+        _disq_registry.clear()
+
+    try:
         db.set_scan_status("running", started_at=datetime.utcnow().isoformat())
         print("[PICKS BG] Background scan started", flush=True)
 
@@ -1930,16 +2030,15 @@ def _run_picks_scan_background():
         all_tickers = list(dict.fromkeys(priority)) + _round1 + _round2
         portfolio_tickers = {p["ticker"] for p in portfolio}
 
-        from concurrent.futures import ThreadPoolExecutor, wait as _wait
+        from concurrent.futures import (ThreadPoolExecutor, wait as _wait,
+                                        FIRST_COMPLETED as _FIRST_COMPLETED)
         from data.cache import flush_disk_cache
 
         result = []
-        batch_size = 30   # smaller batches = finer progress granularity
-        batch_pause = 12  # reduced from 20s — still safe for Finnhub free tier
-        workers = 3       # increased from 2 — saturates free-tier budget faster
-        # Per-batch timeout: 3 workers × 30 tickers, each ticker up to ~25s max.
-        # 120s is generous; if a batch isn't done in 2 min something is hung.
-        batch_timeout = 120
+        batch_size    = _SCAN_BATCH_SIZE
+        batch_pause   = _SCAN_BATCH_PAUSE
+        workers       = _SCAN_WORKERS
+        batch_timeout = _SCAN_BATCH_TIMEOUT
         batches = [all_tickers[i:i + batch_size] for i in range(0, len(all_tickers), batch_size)]
         total_tickers = len(all_tickers)
         tickers_done = 0
@@ -1950,33 +2049,68 @@ def _run_picks_scan_background():
             f"+ {len(_round2)} round2, in {len(batches)} batches",
             flush=True,
         )
+        def _progress(done_n: int) -> None:
+            """Record progress, and bail out if the watchdog has retired this scan."""
+            global _scan_progress_at
+            if _scan_generation != my_gen:
+                raise _ScanAbandoned()
+            _scan_progress_at = _time.monotonic()
+            db.update_scan_progress(done_n, total_tickers)
+
         # Initialise progress counters so frontend can show X of Y immediately
-        db.update_scan_progress(0, total_tickers)
+        _progress(0)
 
         for batch_num, batch in enumerate(batches):
             if batch_num > 0:
                 _time.sleep(batch_pause)
-            with ThreadPoolExecutor(max_workers=workers) as ex:
+            # NOT `with ThreadPoolExecutor(...)`: the context manager calls
+            # shutdown(wait=True) on exit, which blocks until every RUNNING future
+            # returns. That made batch_timeout bound nothing — one stalled yfinance
+            # call (it holds the global _YF_LIB_LOCK) froze the whole scan, and with
+            # it the progress counter, which is why it sat at "60 of 481" until the
+            # container restarted. shutdown(wait=False) abandons stragglers instead.
+            ex = ThreadPoolExecutor(max_workers=workers)
+            try:
                 futures = {ex.submit(_score_one_ticker, t): t for t in batch}
-                # Use wait() with timeout — as_completed() blocks forever if a
-                # yfinance call hangs (e.g. Railway network stall holds _YF_LIB_LOCK).
-                done, pending = _wait(list(futures.keys()), timeout=batch_timeout)
-                for future in done:
-                    try:
-                        entry = future.result(timeout=1)
-                        if entry:
-                            result.append(entry)
-                    except Exception:
-                        pass
-                if pending:
-                    print(f"[PICKS BG] Batch {batch_num+1}: {len(pending)} tickers timed out — skipping", flush=True)
-                    for f in pending:
-                        f.cancel()
-                tickers_done += len(futures)
-            # Update progress after each batch completes
-            db.update_scan_progress(tickers_done, total_tickers)
+                # Drain as they finish so progress advances per TICKER, not per
+                # 30-ticker batch — the counter used to jump 0 → 30 → 60 and then
+                # look frozen for minutes even on a healthy scan.
+                deadline = _time.monotonic() + batch_timeout
+                remaining = set(futures)
+                while remaining:
+                    left = deadline - _time.monotonic()
+                    if left <= 0:
+                        break
+                    finished, remaining = _wait(remaining, timeout=min(left, 5),
+                                                return_when=_FIRST_COMPLETED)
+                    for future in finished:
+                        try:
+                            entry = future.result(timeout=1)
+                            if entry:
+                                result.append(entry)
+                        except Exception:
+                            pass
+                    if finished:
+                        tickers_done += len(finished)
+                        _progress(tickers_done)
+                if remaining:
+                    # cancel() only stops futures that never started; the ones already
+                    # running are abandoned and finish into the void. Either way they
+                    # were NOT scored, so they are not counted towards tickers_done —
+                    # the old code counted them, over-reporting progress.
+                    n_cancelled = sum(1 for f in remaining if f.cancel())
+                    print(f"[PICKS BG] Batch {batch_num+1}: {len(remaining)} unfinished "
+                          f"({n_cancelled} never started, "
+                          f"{len(remaining) - n_cancelled} abandoned mid-flight)", flush=True)
+            finally:
+                ex.shutdown(wait=False)
 
         flush_disk_cache()
+
+        # A scan the watchdog retired must not publish its half-finished universe
+        # over the results of the scan that replaced it.
+        if _scan_generation != my_gen:
+            raise _ScanAbandoned()
 
         # Exclude owned stocks; sort by trust score descending
         all_picks = [r for r in result if r["ticker"] not in portfolio_tickers]
@@ -2003,14 +2137,20 @@ def _run_picks_scan_background():
         if _old_n >= 100 and len(all_picks) < 0.5 * _old_n:
             print(f"[PICKS BG] GUARD: new={len(all_picks)} << existing={_old_n} — likely a "
                   f"throttled run; keeping the existing cache, NOT overwriting.", flush=True)
+            if _scan_generation != my_gen:
+                raise _ScanAbandoned()
             db.set_scan_status("complete")
             return
 
+        with _disq_lock:
+            disq_snapshot = sorted(_disq_registry.values(),
+                                   key=lambda d: (d.get("trust_score") or 0))
         db.save_picks_cache(
             all_picks_json=_json.dumps(all_picks),
             sector_json=_json.dumps(sector_data),
             tickers_scanned=len(all_tickers),
             tickers_ok=len(result),
+            disq_json=_json.dumps(disq_snapshot),
         )
         print(f"[PICKS BG] Done — {len(all_picks)} picks saved to DB", flush=True)
         # Refresh every dependent scan with the fresh universe so Strategy, Elite,
@@ -2019,12 +2159,20 @@ def _run_picks_scan_background():
                     _refresh_frameworks_scan):
             threading.Thread(target=_fn, daemon=True).start()
 
+    except _ScanAbandoned:
+        # The watchdog retired this scan and a replacement may already be running.
+        # Touch no shared state on the way out — least of all the status row.
+        print(f"[PICKS BG] gen {my_gen} abandoned — exiting without writing", flush=True)
     except Exception as e:
         print(f"[PICKS BG] Error: {e}", flush=True)
-        db.set_scan_status("error")
+        if _scan_generation == my_gen:
+            db.set_scan_status("error")
     finally:
-        _scan_running = False
-        _scan_lock.release()
+        # Only clear the flag if it is still OURS. A retired scan that cleared it
+        # here would hand a green light to a second concurrent scan.
+        with _scan_lock:
+            if _scan_generation == my_gen:
+                _scan_running = False
 
 
 def _maybe_auto_scan():
@@ -2199,6 +2347,7 @@ def picks(_u: str = Depends(get_current_user)):
 @app.post("/api/picks/refresh")
 def refresh_picks(_u: str = Depends(get_current_user)):
     """Trigger a background re-scan of the full universe. Non-blocking — returns immediately."""
+    _clear_stalled_scan()   # a wedged scan must not block a manual retry forever
     if _scan_running:
         return {"status": "already_running", "message": "Scan already in progress"}
     threading.Thread(target=_run_picks_scan_background, daemon=True).start()
@@ -2208,6 +2357,9 @@ def refresh_picks(_u: str = Depends(get_current_user)):
 @app.get("/api/picks/status")
 def picks_scan_status(_u: str = Depends(get_current_user)):
     """Return current scan status (idle | running | complete | error) + metadata."""
+    # The frontend polls this every 15s while Smart Picks is open, so a wedged scan
+    # is noticed and retired within a poll of crossing the stall threshold.
+    _clear_stalled_scan()
     status = db.get_scan_status()
     return {
         "scan_status": status.get("scan_status", "idle"),
@@ -2240,42 +2392,50 @@ def picks_by_sector(sector: str, _u: str = Depends(get_current_user)):
 
 @app.get("/api/picks/disqualified")
 def picks_disqualified(_u: str = Depends(get_current_user)):
-    """Auto-disqualified stocks from portfolio + watchlist + picks universe + curated universe.
-    Includes unblock_condition so users understand what needs to change.
-    """
-    portfolio = db.get_portfolio()
-    watchlist = db.get_watchlist()
-    user_universe = db.get_picks_universe()
-    priority = (
-        [p["ticker"] for p in portfolio]
-        + [w["ticker"] for w in watchlist]
-        + list(user_universe)
-    )
-    seen = set(priority)
-    curated_tail = [t for t in _CURATED_UNIVERSE if t not in seen]
-    all_tickers = list(dict.fromkeys(priority)) + curated_tail
+    """Auto-disqualified stocks, served from the last universe scan.
 
-    result = []
-    for ticker in all_tickers:
-        price_data = get_stock_price(ticker)
-        trust = get_trust_score_with_fallback(ticker, price_data)
-        if trust["auto_disqualified"]:
-            reason = trust.get("disqualify_reason") or ""
-            # Derive unblock condition from reason text
-            unblock = "Disqualifying condition must be resolved and cleared from data sources"
-            reason_lower = reason.lower()
-            for kw, condition in _UNBLOCK_CONDITIONS.items():
-                if kw in reason_lower:
-                    unblock = condition
-                    break
-            result.append({
-                "ticker": ticker,
-                "name": price_data.get("name", ticker),
-                "trust_score": trust["total_score"],
-                "reason": reason,
-                "unblock_condition": unblock,
-            })
-    return result
+    This used to re-score all ~480 tickers sequentially on every request — minutes
+    of work, and it ran on EVERY app load (App.jsx calls getDisqualified on mount).
+    The Yahoo 429s it provoked were competing with the background picks scan for the
+    same rate limit, so opening the app actively slowed the scan down.
+
+    The scan is the only pass that scores the whole universe, so it now records what
+    it disqualifies (_record_disqualified) and this just reads that back:
+      • disq_json  — the last completed scan, durable across restarts
+      • _disq_registry — this process's live finds, so a scan in flight shows up
+    The union keeps the previous scan's list visible while a new one is running.
+    """
+    merged: dict[str, dict] = {}
+    try:
+        cache = db.get_picks_cache()
+        for rec in _json.loads((cache or {}).get("disq_json") or "[]"):
+            merged[rec["ticker"]] = rec
+    except Exception:
+        pass
+    with _disq_lock:
+        merged.update(_disq_registry)
+
+    if not merged:
+        # Nothing scanned yet (fresh deploy, or the first scan is still running).
+        # Score the user's OWN stocks only — a couple of dozen, nearly all already
+        # in the price/trust cache — so the stocks they actually hold show up now
+        # instead of after a 20-minute scan. Never the full universe: that is the
+        # request-time rescan this endpoint was built to stop doing.
+        try:
+            own = list(dict.fromkeys(
+                [p["ticker"] for p in db.get_portfolio()]
+                + [w["ticker"] for w in db.get_watchlist()]
+            ))[:40]
+            for ticker in own:
+                price_data = get_stock_price(ticker)
+                trust = get_trust_score_with_fallback(ticker, price_data)
+                if trust.get("auto_disqualified"):
+                    _record_disqualified(ticker, price_data, trust)
+                    merged[ticker] = _disq_registry[ticker]
+        except Exception as e:
+            print(f"[picks] disqualified fallback failed: {e}", flush=True)
+
+    return sorted(merged.values(), key=lambda d: (d.get("trust_score") or 0))
 
 
 # ── PICKS UNIVERSE (user-curated) ─────────────────────────────────────────────

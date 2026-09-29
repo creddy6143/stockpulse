@@ -877,7 +877,7 @@ first success. Each provider swallows its own errors and returns None, so a
 dead provider degrades the chain silently rather than breaking the app.
 
 ```
-1. Groq       qwen/qwen3.6-27b        primary
+1. Groq       qwen/qwen3.8-27b        primary
 2. Groq       openai/gpt-oss-120b     second Groq model
 3. Gemini     gemini-3.7-flash        fallback
 4. Gemini     gemini-flash-latest     rolling alias — self-heals a retirement
@@ -925,11 +925,17 @@ The Groq free tier meters tokens PER MODEL (200k/day), so the second Groq
 model is a second daily budget, not just a second opinion — when the primary
 is rate-limited the chain stays on Groq instead of falling through to Gemini.
 
+There is also a PER-MINUTE ceiling that bites during a picks scan: 8,000 TPM
+and only **1,000 output tokens per minute** per model. A verdict costs ~330
+completion tokens, so a single model serves roughly 3 verdicts/minute before
+returning `429 Request too large` — and that error arrives as a normal provider
+failure, so the chain just falls through. When testing in a loop, pace calls
+~25s apart, and pace them on the failure path too or the 429s cascade.
+
 Both Groq models are reasoning models, and reasoning tokens are drawn from the
 same budget as the answer. Each therefore carries an explicit effort setting in
 `_GROQ_MODELS` — without it they spend the whole cap thinking and return empty
-content. `qwen3.6-27b` accepts only `none` or `default` for `reasoning_effort`
-(`low` is a 400); at `none` it returns clean JSON in ~287 completion tokens.
+content.
 
 All three must return JSON that `_parse_json()` can read. Validate before
 showing anything to the user.
@@ -947,10 +953,11 @@ verdict vs ~84 before, so expect roughly double the output tokens and a little
 more latency). Passing `reasoning_effort="low"` cuts that to ~144 and still
 returns valid JSON, if throughput ever matters more than depth.
 
-`qwen/qwen3.6-27b` was added as the primary on the same date. It writes its
-`<think>` reasoning into `content` at default effort and exhausts a 750-token
-budget before reaching the answer, so it runs at `reasoning_effort="none"` with
-the 1,200-token floor — clean JSON, ~287 completion tokens, no truncation.
+`qwen/qwen3.6-27b` was added as the primary on the same date (and itself retired
+on 2026-09-14 — see the next section). It wrote its `<think>` reasoning into
+`content` at default effort and exhausted a 750-token budget before reaching the
+answer, so it ran at `reasoning_effort="none"` with the 1,200-token floor —
+clean JSON, ~287 completion tokens, no truncation.
 
 Two guards came out of that behaviour and must stay:
 
@@ -965,6 +972,36 @@ Measured over six tickers (NVDA, GRRR, TSLA, MAERSK-A.CO, AMZN, TCS.NS) through
 the real `_call_groq` → `_parse_json` → `verify_ai_text` path: 6/6 parse, 6/6
 verify, 6/6 required keys, 6/6 jargon-free. Baseline for comparison: the retired
 llama scored 5/6 on verify, and gpt-oss-120b scored 2/6 before the prompt fix.
+
+### Migration: qwen/qwen3.6-27b → qwen/qwen3.8-27b (2026-09-30)
+
+Groq decommissioned `qwen/qwen3.6-27b` on 2026-09-14. It had been 404ing
+(`The model does not exist or you do not have access to it`) ever since, which
+means every verdict silently fell through to `gpt-oss-120b` — the chain ran one
+model short for a fortnight and nothing looked broken, because a verdict still
+came back. This is the third time a retired model has gone unnoticed this way:
+**list the models against the live key before trusting any id here.**
+
+```bash
+curl -s https://api.groq.com/openai/v1/models \
+  -H "Authorization: Bearer $GROQ_API_KEY" | python3 -m json.tool | grep '"id"'
+```
+
+`qwen/qwen3.8-27b` is the replacement and behaves *better* than 3.6:
+
+- Reasoning goes to a separate `reasoning` field, NOT into `content`. The
+  `<think>`-stripping in `_parse_json()` is no longer load-bearing for this
+  model, but it stays — it costs nothing and still guards the last-JSON rule.
+- Every `reasoning_effort` level is accepted (`low` was a 400 on 3.6). It runs
+  at `"none"` anyway: ~330 completion tokens, under a second per verdict.
+  Do NOT raise it — `medium` truncates at a 1,200-token ceiling and `high`
+  returns EMPTY content.
+
+Both guards listed above still apply unchanged. Re-measured over the same six tickers
+through the real `_call_groq` → `_parse_json` → `verify_ai_text` path:
+**6/6 parse, 6/6 verify, 6/6 required keys, 6/6 jargon-free**, 0.69–1.08s each —
+matching the 3.6 baseline. Confirmed live through `get_verdict` with the shipped
+config (`_generated_at` set on NVDA, TCS.NS and MAERSK-A.CO).
 
 ---
 

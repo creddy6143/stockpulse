@@ -192,6 +192,7 @@ def init_db():
     for col, typedef in [
         ("progress_current", "INTEGER DEFAULT 0"),
         ("progress_total",   "INTEGER DEFAULT 0"),
+        ("disq_json",        "TEXT DEFAULT '[]'"),
     ]:
         try:
             conn.execute(

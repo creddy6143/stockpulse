@@ -84,12 +84,14 @@ def _get_anthropic():
 # empty content, which is why each carries an explicit effort setting:
 #   gpt-oss-120b  reasoning goes to a separate `reasoning` field; "low" effort
 #                 costs ~144 completion tokens per verdict (vs ~207 default).
-#   qwen3.6-27b   writes <think> INTO content unless effort is "none"; with
-#                 "none" it returns clean JSON in ~287 tokens. It only accepts
-#                 "none" or "default" — "low" is a 400. Left at default it needs
-#                 3000+ tokens and still truncates on the fuller prompts.
+#   qwen3.8-27b   keeps reasoning in a separate `reasoning` field (unlike the
+#                 retired 3.6, which wrote <think> into content), so "none" is
+#                 about speed and budget, not parseability: ~330 completion
+#                 tokens and under a second per verdict. It accepts every effort
+#                 level, but "medium" and "high" blow past a 1200-token ceiling
+#                 and "high" returns EMPTY content — do not raise it.
 _GROQ_MODELS = (
-    ("qwen/qwen3.6-27b",    {"reasoning_effort": "none"}),   # primary
+    ("qwen/qwen3.8-27b",    {"reasoning_effort": "none"}),   # primary
     ("openai/gpt-oss-120b", {"reasoning_effort": "low"}),    # fallback
 )
 
@@ -101,8 +103,8 @@ _GROQ_MIN_TOKENS = 1200
 def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str | None:
     """Try each Groq model in turn. Returns the first non-empty response.
 
-    Groq decommissioned llama-3.3-70b-versatile on 2026-08-16; see the
-    migration note in CLAUDE.md.
+    Groq decommissioned llama-3.3-70b-versatile on 2026-08-16 and
+    qwen/qwen3.6-27b on 2026-09-14; see the migration notes in CLAUDE.md.
     """
     client = _get_groq()
     if not client:
